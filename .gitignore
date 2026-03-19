@@ -1,0 +1,10 @@
+# Zig
+.zig-cache/
+zig-out/
+
+# Rust
+target/
+Cargo.lock
+
+# OS
+.DS_Store
