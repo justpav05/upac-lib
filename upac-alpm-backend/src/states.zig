@@ -91,7 +91,7 @@ fn stateExtracting(machine: *Machine) anyerror!void {
     );
     _ = c_librarys.archive_write_disk_set_standard_lookup(aw);
 
-    const old_dir = try std.fs.openDirAbsolute(".", .{});
+    var old_dir = try std.fs.openDirAbsolute(".", .{});
     defer old_dir.close();
     try posix.chdir(out_path_c);
     defer old_dir.setAsCwd() catch {};
