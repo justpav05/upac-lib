@@ -15,19 +15,23 @@ jobs:
       # ── Подготовка окружения ──────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
-      
+
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
             git \
             base-devel \
-            zig \
             rust \
             ostree \
             glib2 \
             libarchive \
             zstd
+
+      - name: Install Zig 0.13
+        run: |
+          curl -L https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar -xJ
+          echo "$(pwd)/zig-linux-x86_64-0.13.0" >> $GITHUB_PATH
 
       # ── Сборка ───────────────────────────────────────────────────────────
       - name: Build all
@@ -36,9 +40,10 @@ jobs:
       # ── Arch пакет ───────────────────────────────────────────────────────
       - name: Build Arch package
         run: |
+          make pkg-arch
           useradd -m builder
-          chown -R builder pkg/
-          su builder -c "cd pkg/arch && makepkg --nodeps --noconfirm"
+          chown -R builder pkg/arch
+          su builder -c "cd /$(pwd)/pkg/arch && makepkg --nodeps --noconfirm"
 
       - name: Get version
         id: version
