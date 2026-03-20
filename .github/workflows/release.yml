@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      # ── Подготовка окружения ──────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm \
+            git \
+            base-devel \
+            zig \
+            rust \
+            ostree \
+            glib2 \
+            libarchive \
+            zstd
+
+      - name: Add musl target
+        run: rustup target add x86_64-unknown-linux-musl
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Сборка ───────────────────────────────────────────────────────────
+      - name: Build all
+        run: make build
+
+      # ── Arch пакет ───────────────────────────────────────────────────────
+      - name: Build Arch package
+        run: make pkg-arch
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '^version' upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "pkg=upac-${VERSION}-x86_64.pkg.tar.zst" >> $GITHUB_OUTPUT
+
+      # ── Релиз на GitHub ───────────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "upac v${{ steps.version.outputs.version }}"
+          body: |
+            ## Installation
+
+            ### Arch Linux
+            ```bash
+            pacman -U upac-${{ steps.version.outputs.version }}-x86_64.pkg.tar.zst
+            ```
+
+            ### Manual
+            Copy `libupac.so` and `libupac-backend-arch.so` to `/usr/lib/`,
+            `upac` binary to `/usr/bin/`, and create `/etc/upac/config.toml`
+            from the provided example.
+          files: |
+            pkg/arch/${{ steps.version.outputs.pkg }}
+            config.toml.example
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

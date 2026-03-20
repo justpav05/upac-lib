@@ -23,7 +23,7 @@ dist: all
 	@mkdir -p $(DIST_DIR)/bin
 	@cp -v $(ROOT_DIR)/upac-lib/zig-out/lib/libupac.so              $(DIST_DIR)/lib/
 	@cp -v $(ROOT_DIR)/upac-alpm-backend/zig-out/lib/libupac-backend-arch.so $(DIST_DIR)/lib/
-	@cp -v $(ROOT_DIR)/upac-cli/target/debug/upac-cli                   $(DIST_DIR)/bin/
+	@cp -v $(ROOT_DIR)/upac-cli/target/x86_64-unknown-linux-musl/debug/upac-cli                 $(DIST_DIR)/bin/
 	@echo "--- Done: $(DIST_DIR) ---"
 	@ls -lh $(DIST_DIR)/lib/ $(DIST_DIR)/bin/
 
