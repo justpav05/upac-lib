@@ -1,4 +1,4 @@
-ROOT_DIR  := $(CURDIR)
+ROOT_DIR  := $(shell pwd)
 DIST_DIR  := $(HOME)/Документы/upac
 PKG_DIR   := $(ROOT_DIR)/pkg
 
