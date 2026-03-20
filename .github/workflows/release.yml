@@ -49,11 +49,9 @@ jobs:
         id: version
         run: |
           VERSION=$(grep '^version' upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          PKGREL=$(grep '^pkgrel' PKGBUILD | head -1 | sed 's/pkgrel=//')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "pkg=upac-${VERSION}-x86_64.pkg.tar.zst" >> $GITHUB_OUTPUT
-
-      - name: Find package
-        run: find . -name "*.pkg.tar.zst"
+          echo "pkg=upac-${VERSION}-${PKGREL}-x86_64.pkg.tar.zst" >> $GITHUB_OUTPUT
 
       # ── Релиз на GitHub ───────────────────────────────────────────────────
       - name: Create GitHub Release
