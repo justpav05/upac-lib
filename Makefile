@@ -17,15 +17,15 @@ build: build-lib build-backends build-cli
 
 build-lib:
 	@echo "--- Building upac-lib ---"
-	cd ./upac-lib && zig build --prefix zig-out
+	cd $(ROOT_DIR)/upac-lib && zig build --prefix zig-out
 
 build-backends:
 	@echo "--- Building upac-alpm-backend ---"
-	cd ./upac-alpm-backend && zig build --prefix zig-out
+	cd $(ROOT_DIR)/upac-alpm-backend && zig build --prefix zig-out
 
 build-cli:
 	@echo "--- Building upac-cli (static musl) ---"
-	cd ./upac-cli && cargo build
+	cd $(ROOT_DIR)/upac-cli && cargo build
 
 # ── Копирование в ~/Documents/upac ───────────────────────────────────────────
 
