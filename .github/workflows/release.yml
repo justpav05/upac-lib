@@ -6,9 +6,13 @@ on:
       - 'v*'
   workflow_dispatch:
 
+
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    permissions:
+     contents: write
     container:
       image: archlinux:latest
 
@@ -47,6 +51,9 @@ jobs:
           VERSION=$(grep '^version' upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "pkg=upac-${VERSION}-x86_64.pkg.tar.zst" >> $GITHUB_OUTPUT
+
+      - name: Find package
+        run: find . -name "*.pkg.tar.zst"
 
       # ── Релиз на GitHub ───────────────────────────────────────────────────
       - name: Create GitHub Release
