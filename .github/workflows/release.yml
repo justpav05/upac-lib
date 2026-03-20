@@ -33,16 +33,12 @@ jobs:
           curl -L https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar -xJ
           echo "$(pwd)/zig-linux-x86_64-0.13.0" >> $GITHUB_PATH
 
-      # ── Сборка ───────────────────────────────────────────────────────────
-      - name: Build all
-        run: make build
-
       # ── Arch пакет ───────────────────────────────────────────────────────
       - name: Build Arch package
         run: |
           useradd -m builder
           chown -R builder .
-          su - builder -c "cd $(pwd) && make pkg-arch"
+          su - builder -c "export PATH=$PATH && cd $(pwd) && make pkg-arch"
 
       - name: Get version
         id: version
