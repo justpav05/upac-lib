@@ -13,4 +13,4 @@ Cargo.lock
 pkg/
 
 # CLion
-./idea
+.idea

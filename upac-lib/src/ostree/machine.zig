@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const types = @import("types.zig");
-const OstreeCommitRequest = types.OstreeCommitRequest;
+const ostree = @import("ostree.zig");
+const OstreeCommitRequest = ostree.OstreeCommitRequest;
 
 const c_librarys = @cImport({
     @cInclude("ostree.h");

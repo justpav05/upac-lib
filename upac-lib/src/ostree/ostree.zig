@@ -6,26 +6,49 @@ const fsm = @import("machine.zig");
 const StateId = fsm.StateId;
 const CommitMachine = fsm.CommitMachine;
 
-const types = @import("types.zig");
-const DiffEntry = types.DiffEntry;
-const OstreeError = types.OstreeError;
-pub const OstreeCommitRequest = types.OstreeCommitRequest;
+const db = @import("upac-database");
+const PackageMeta = db.PackageMeta;
 
-const c_librarys = @cImport({
+const c_libs = @cImport({
     @cInclude("ostree.h");
     @cInclude("glib.h");
     @cInclude("gio/gio.h");
     @cInclude("fcntl.h");
 });
 
-// ── Публичное API ─────────────────────────────────────────────────────────────
+// ── Публичные типы ────────────────────────────────────────────────────────────
+pub const OstreeCommitRequest = struct {
+    repo_path: []const u8,
+    content_path: []const u8,
+    branch: []const u8,
+    operation: []const u8,
+    packages: []const PackageMeta,
+    database_path: []const u8,
+};
 
+pub const DiffEntry = struct {
+    path: []const u8,
+    kind: DiffKind,
+};
+
+pub const DiffKind = enum { added, removed, modified };
+
+pub const OstreeError = error{
+    RepoOpenFailed,
+    CommitFailed,
+    DiffFailed,
+    RollbackFailed,
+    NoPreviousCommit,
+    Unexpected,
+};
+
+// ── Публичное API ─────────────────────────────────────────────────────────────
 pub fn commit(request: OstreeCommitRequest, allocator: std.mem.Allocator) !void {
     var machine = CommitMachine{
         .request = request,
         .stack = std.ArrayList(StateId).init(allocator),
         .retries = 0,
-        .max_retries = 3,
+        .max_retries = 2,
         .allocator = allocator,
         .repo = null,
         .subject = null,
@@ -37,218 +60,206 @@ pub fn commit(request: OstreeCommitRequest, allocator: std.mem.Allocator) !void 
 }
 
 // ── Вспомогательная: checkout коммита во временную директорию ─────────────────
+fn checkoutRef(c_ostree_repo: *c_libs.OstreeRepo, ref: [:0]const u8, destination_path: [:0]const u8) !void {
+    var global_struct_glib_err: ?*c_libs.GError = null;
 
-fn checkoutRef(
-    repo: *c_librarys.OstreeRepo,
-    ref: [:0]const u8,
-    out_path: [:0]const u8,
-) !void {
-    var err: ?*c_librarys.GError = null;
+    var commit_checksum: [*c]u8 = null;
+    defer if (commit_checksum) |checksum| c_libs.g_free(checksum);
 
-    var checksum: [*c]u8 = null;
-    defer if (checksum) |cs| c_librarys.g_free(cs);
-
-    if (c_librarys.ostree_repo_resolve_rev(repo, ref.ptr, 0, &checksum, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+    if (c_libs.ostree_repo_resolve_rev(c_ostree_repo, ref.ptr, 0, &commit_checksum, &global_struct_glib_err) == 0) {
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.DiffFailed;
     }
 
-    std.fs.makeDirAbsolute(out_path) catch |e| switch (e) {
+    std.fs.makeDirAbsolute(destination_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return e,
+        else => return err,
     };
 
-    var options = std.mem.zeroes(c_librarys.OstreeRepoCheckoutAtOptions);
-    options.mode = c_librarys.OSTREE_REPO_CHECKOUT_MODE_NONE;
-    options.overwrite_mode = c_librarys.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
+    var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
+    options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
+    options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_librarys.ostree_repo_checkout_at(
-        repo,
+    if (c_libs.ostree_repo_checkout_at(
+        c_ostree_repo,
         &options,
         std.c.AT.FDCWD,
-        out_path.ptr,
-        checksum,
+        destination_path.ptr,
+        commit_checksum,
         null,
-        &err,
+        &global_struct_glib_err,
     ) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.DiffFailed;
     }
 }
 
 // ── Прямые операции (без FSM) ─────────────────────────────────────────────────
-
-pub fn diff(
-    repo_path: []const u8,
-    from_ref: []const u8,
-    to_ref: []const u8,
-    allocator: std.mem.Allocator,
-) ![]DiffEntry {
+pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, allocator: std.mem.Allocator) ![]DiffEntry {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
 
-    const repo_file = c_librarys.g_file_new_for_path(repo_path_c.ptr);
-    defer c_librarys.g_object_unref(repo_file);
+    const g_repo_file = c_libs.g_file_new_for_path(repo_path_c.ptr);
+    defer c_libs.g_object_unref(g_repo_file);
 
-    var err: ?*c_librarys.GError = null;
-    const repo = c_librarys.ostree_repo_new(repo_file);
-    defer c_librarys.g_object_unref(repo);
+    var global_struct_glib_err: ?*c_libs.GError = null;
+    const c_ostree_repo = c_libs.ostree_repo_new(g_repo_file);
+    defer c_libs.g_object_unref(c_ostree_repo);
 
-    if (c_librarys.ostree_repo_open(repo, null, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+    if (c_libs.ostree_repo_open(c_ostree_repo, null, &global_struct_glib_err) == 0) {
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.RepoOpenFailed;
     }
 
     // Временные директории для checkout
-    const ts = std.time.milliTimestamp();
-    const tmp_a = try std.fmt.allocPrintZ(allocator, "/tmp/upac_diff_a_{d}", .{ts});
-    defer allocator.free(tmp_a);
-    const tmp_b = try std.fmt.allocPrintZ(allocator, "/tmp/upac_diff_b_{d}", .{ts + 1});
-    defer allocator.free(tmp_b);
-    defer std.fs.deleteTreeAbsolute(tmp_a) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_b) catch {};
+    const timestamp = std.time.milliTimestamp();
 
-    const from_c = try std.fmt.allocPrintZ(allocator, "{s}", .{from_ref});
-    defer allocator.free(from_c);
-    const to_c = try std.fmt.allocPrintZ(allocator, "{s}", .{to_ref});
-    defer allocator.free(to_c);
+    const from_checkout_path = try std.fmt.allocPrintZ(allocator, "/tmp/upac_diff_from_{d}", .{timestamp});
+    defer allocator.free(from_checkout_path);
+    defer std.fs.deleteTreeAbsolute(from_checkout_path) catch {};
 
-    try checkoutRef(repo.?, from_c, tmp_a);
-    try checkoutRef(repo.?, to_c, tmp_b);
+    const to_checkout_path = try std.fmt.allocPrintZ(allocator, "/tmp/upac_diff_to_{d}", .{timestamp + 1});
+    defer allocator.free(to_checkout_path);
+    defer std.fs.deleteTreeAbsolute(to_checkout_path) catch {};
 
-    const dir_a = c_librarys.g_file_new_for_path(tmp_a.ptr);
-    defer c_librarys.g_object_unref(dir_a);
-    const dir_b = c_librarys.g_file_new_for_path(tmp_b.ptr);
-    defer c_librarys.g_object_unref(dir_b);
+    const from_ref_c = try std.fmt.allocPrintZ(allocator, "{s}", .{from_ref});
+    defer allocator.free(from_ref_c);
+    const to_ref_c = try std.fmt.allocPrintZ(allocator, "{s}", .{to_ref});
+    defer allocator.free(to_ref_c);
 
-    const modified = c_librarys.g_ptr_array_new();
-    const removed = c_librarys.g_ptr_array_new();
-    const added = c_librarys.g_ptr_array_new();
-    defer c_librarys.g_ptr_array_unref(modified);
-    defer c_librarys.g_ptr_array_unref(removed);
-    defer c_librarys.g_ptr_array_unref(added);
+    try checkoutRef(c_ostree_repo.?, from_ref_c, from_checkout_path);
+    try checkoutRef(c_ostree_repo.?, to_ref_c, to_checkout_path);
 
-    if (c_librarys.ostree_diff_dirs(
-        c_librarys.OSTREE_DIFF_FLAGS_NONE,
-        dir_a,
-        dir_b,
-        modified,
-        removed,
-        added,
+    const from_checkout_file = c_libs.g_file_new_for_path(from_checkout_path.ptr);
+    defer c_libs.g_object_unref(from_checkout_file);
+    const to_checkout_file = c_libs.g_file_new_for_path(to_checkout_path.ptr);
+    defer c_libs.g_object_unref(to_checkout_file);
+
+    const modified_entries = c_libs.g_ptr_array_new();
+    const removed_entries = c_libs.g_ptr_array_new();
+    const added_entries = c_libs.g_ptr_array_new();
+    defer c_libs.g_ptr_array_unref(modified_entries);
+    defer c_libs.g_ptr_array_unref(removed_entries);
+    defer c_libs.g_ptr_array_unref(added_entries);
+
+    if (c_libs.ostree_diff_dirs(
+        c_libs.OSTREE_DIFF_FLAGS_NONE,
+        from_checkout_file,
+        to_checkout_file,
+        modified_entries,
+        removed_entries,
+        added_entries,
         null,
-        &err,
+        &global_struct_glib_err,
     ) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.DiffFailed;
     }
 
-    var entries = std.ArrayList(DiffEntry).init(allocator);
+    var diff_entries = std.ArrayList(DiffEntry).init(allocator);
     errdefer {
-        for (entries.items) |e| allocator.free(e.path);
-        entries.deinit();
+        for (diff_entries.items) |entry| allocator.free(entry.path);
+        diff_entries.deinit();
     }
 
-    var i: usize = 0;
-    while (i < added.*.len) : (i += 1) {
-        const item: *c_librarys.OstreeDiffItem = @ptrCast(@alignCast(added.*.pdata[i]));
-        const path = std.mem.span(@as([*:0]u8, @ptrCast(c_librarys.g_file_get_path(item.target))));
-        try entries.append(.{ .path = try allocator.dupe(u8, path), .kind = .added });
+    var index: usize = 0;
+    while (index < added_entries.*.len) : (index += 1) {
+        const diff_item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(added_entries.*.pdata[index]));
+        const file_path = std.mem.span(@as([*:0]u8, @ptrCast(c_libs.g_file_get_path(diff_item.target))));
+        try diff_entries.append(.{ .path = try allocator.dupe(u8, file_path), .kind = .added });
     }
 
-    i = 0;
-    while (i < removed.*.len) : (i += 1) {
-        const item: *c_librarys.OstreeDiffItem = @ptrCast(@alignCast(removed.*.pdata[i]));
-        const path = std.mem.span(@as([*:0]u8, @ptrCast(c_librarys.g_file_get_path(item.src))));
-        try entries.append(.{ .path = try allocator.dupe(u8, path), .kind = .removed });
+    index = 0;
+    while (index < removed_entries.*.len) : (index += 1) {
+        const diff_item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(removed_entries.*.pdata[index]));
+        const file_path = std.mem.span(@as([*:0]u8, @ptrCast(c_libs.g_file_get_path(diff_item.src))));
+        try diff_entries.append(.{ .path = try allocator.dupe(u8, file_path), .kind = .removed });
     }
 
-    i = 0;
-    while (i < modified.*.len) : (i += 1) {
-        const item: *c_librarys.OstreeDiffItem = @ptrCast(@alignCast(modified.*.pdata[i]));
-        const path = std.mem.span(@as([*:0]u8, @ptrCast(c_librarys.g_file_get_path(item.target))));
-        try entries.append(.{ .path = try allocator.dupe(u8, path), .kind = .modified });
+    index = 0;
+    while (index < modified_entries.*.len) : (index += 1) {
+        const diff_item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(modified_entries.*.pdata[index]));
+        const file_path = std.mem.span(@as([*:0]u8, @ptrCast(c_libs.g_file_get_path(diff_item.target))));
+        try diff_entries.append(.{ .path = try allocator.dupe(u8, file_path), .kind = .modified });
     }
 
-    return entries.toOwnedSlice();
+    return diff_entries.toOwnedSlice();
 }
 
-pub fn rollback(
-    repo_path: []const u8,
-    content_path: []const u8,
-    branch: []const u8,
-    allocator: std.mem.Allocator,
-) !void {
+pub fn rollback(repo_path: []const u8, content_path: []const u8, branch: []const u8, allocator: std.mem.Allocator) !void {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
+
     const content_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{content_path});
     defer allocator.free(content_path_c);
+
     const branch_c = try std.fmt.allocPrintZ(allocator, "{s}", .{branch});
     defer allocator.free(branch_c);
 
-    const file = c_librarys.g_file_new_for_path(repo_path_c.ptr);
-    defer c_librarys.g_object_unref(file);
+    const g_repo_file = c_libs.g_file_new_for_path(repo_path_c.ptr);
+    defer c_libs.g_object_unref(g_repo_file);
 
-    var err: ?*c_librarys.GError = null;
-    const repo = c_librarys.ostree_repo_new(file);
-    defer c_librarys.g_object_unref(repo);
+    var global_struct_glib_err: ?*c_libs.GError = null;
+    const struct_ostree_repo = c_libs.ostree_repo_new(g_repo_file);
+    defer c_libs.g_object_unref(struct_ostree_repo);
 
-    if (c_librarys.ostree_repo_open(repo, null, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+    if (c_libs.ostree_repo_open(struct_ostree_repo, null, &global_struct_glib_err) == 0) {
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.RepoOpenFailed;
     }
 
     var current_checksum: [*c]u8 = null;
-    defer if (current_checksum) |cs| c_librarys.g_free(cs);
+    defer if (current_checksum) |checksum| c_libs.g_free(checksum);
 
-    if (c_librarys.ostree_repo_resolve_rev(repo, branch_c.ptr, 0, &current_checksum, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+    if (c_libs.ostree_repo_resolve_rev(struct_ostree_repo, branch_c.ptr, 0, &current_checksum, &global_struct_glib_err) == 0) {
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.NoPreviousCommit;
     }
 
-    var commit_variant: ?*c_librarys.GVariant = null;
-    defer if (commit_variant) |v| c_librarys.g_variant_unref(v);
+    var commit_variant: ?*c_libs.GVariant = null;
+    defer if (commit_variant) |v| c_libs.g_variant_unref(v);
 
-    if (c_librarys.ostree_repo_load_variant(
-        repo,
-        c_librarys.OSTREE_OBJECT_TYPE_COMMIT,
+    if (c_libs.ostree_repo_load_variant(
+        struct_ostree_repo,
+        c_libs.OSTREE_OBJECT_TYPE_COMMIT,
         current_checksum,
         &commit_variant,
-        &err,
+        &global_struct_glib_err,
     ) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.RollbackFailed;
     }
 
-    const parent_checksum = c_librarys.ostree_commit_get_parent(commit_variant);
+    const parent_checksum = c_libs.ostree_commit_get_parent(commit_variant);
     if (parent_checksum == null) return OstreeError.NoPreviousCommit;
 
-    var options = std.mem.zeroes(c_librarys.OstreeRepoCheckoutAtOptions);
-    options.mode = c_librarys.OSTREE_REPO_CHECKOUT_MODE_NONE;
-    options.overwrite_mode = c_librarys.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
+    var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
+    options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
+    options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_librarys.ostree_repo_checkout_at(
-        repo,
+    if (c_libs.ostree_repo_checkout_at(
+        struct_ostree_repo,
         &options,
         std.c.AT.FDCWD,
         content_path_c.ptr,
         parent_checksum,
         null,
-        &err,
+        &global_struct_glib_err,
     ) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.RollbackFailed;
     }
 
-    if (c_librarys.ostree_repo_prepare_transaction(repo, null, null, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+    if (c_libs.ostree_repo_prepare_transaction(struct_ostree_repo, null, null, &global_struct_glib_err) == 0) {
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.RollbackFailed;
     }
 
-    c_librarys.ostree_repo_transaction_set_ref(repo, null, branch_c.ptr, parent_checksum);
+    c_libs.ostree_repo_transaction_set_ref(struct_ostree_repo, null, branch_c.ptr, parent_checksum);
 
-    if (c_librarys.ostree_repo_commit_transaction(repo, null, null, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
-        _ = c_librarys.ostree_repo_abort_transaction(repo, null, null);
+    if (c_libs.ostree_repo_commit_transaction(struct_ostree_repo, null, null, &global_struct_glib_err) == 0) {
+        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
+        _ = c_libs.ostree_repo_abort_transaction(struct_ostree_repo, null, null);
         return OstreeError.RollbackFailed;
     }
 

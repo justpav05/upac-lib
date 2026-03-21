@@ -1,18 +1,14 @@
 const std = @import("std");
 
-const alloc = @import("alloc.zig");
-
 const types = @import("types.zig");
 
-const errors = @import("errors.zig");
+const database = @import("upac-database");
 
-const db = @import("upac-database");
+const installer = @import("upac-installer");
 
-const inst = @import("upac-installer");
+const ostree = @import("upac-ostree");
 
-const ost = @import("upac-ostree");
-
-const init_mod = @import("upac-init");
+const init = @import("upac-init");
 
 const CSlice = types.CSlice;
 const CSliceArray = types.CSliceArray;
@@ -30,312 +26,271 @@ const CSystemPaths = types.CSystemPaths;
 
 const CRepoMode = types.CRepoMode;
 
-const ErrorCode = errors.ErrorCode;
+const ErrorCode = types.ErrorCode;
 
 // ── Конвертеры C → Zig ────────────────────────────────────────────────────────
-
-fn toMeta(c: CPackageMeta) db.PackageMeta {
+fn toMeta(c_package_metadata: CPackageMeta) database.PackageMeta {
     return .{
-        .name = c.name.toSlice(),
-        .version = c.version.toSlice(),
-        .author = c.author.toSlice(),
-        .description = c.description.toSlice(),
-        .license = c.license.toSlice(),
-        .url = c.url.toSlice(),
-        .installed_at = c.installed_at,
-        .checksum = c.checksum.toSlice(),
+        .name = c_package_metadata.name.toSlice(),
+        .version = c_package_metadata.version.toSlice(),
+        .author = c_package_metadata.author.toSlice(),
+        .description = c_package_metadata.description.toSlice(),
+        .license = c_package_metadata.license.toSlice(),
+        .url = c_package_metadata.url.toSlice(),
+        .installed_at = c_package_metadata.installed_at,
+        .checksum = c_package_metadata.checksum.toSlice(),
     };
 }
 
-fn toFiles(c: CPackageFiles) db.PackageFiles {
-    // Paths: [*]CSlice → [][]const u8 — живут в памяти вызывающего
-    const c_paths = c.paths.toSlice();
-    // Zig slice над C памятью — без копирования, lifetime у вызывающего
-    const paths = @as([*][]const u8, @ptrCast(c_paths.ptr))[0..c_paths.len];
+fn toFiles(c_package_files: CPackageFiles) database.PackageFiles {
+    const c_packages_paths = c_package_files.paths.toSlice();
+    const packages_paths = @as([*][]const u8, @ptrCast(c_packages_paths.ptr))[0..c_packages_paths.len];
+
     return .{
-        .name = c.name.toSlice(),
-        .paths = paths,
+        .name = c_package_files.name.toSlice(),
+        .paths = packages_paths,
     };
 }
 
 // ── Database API ──────────────────────────────────────────────────────────────
-pub export fn upac_db_add_package(
-    db_path: CSlice,
-    meta: CPackageMeta,
-    files: CPackageFiles,
-) callconv(.C) i32 {
-    const allocator = alloc.allocator();
+pub export fn upac_db_add_package(database_path: CSlice, c_package_meta: CPackageMeta, c_package_files: CPackageFiles) callconv(.C) i32 {
+    const allocator = types.allocator();
 
     // Конвертируем пути из CSlice в [][]const u8
-    const c_paths = files.paths.toSlice();
-    var paths = allocator.alloc([]const u8, c_paths.len) catch
-        return @intFromEnum(ErrorCode.out_of_memory);
-    defer allocator.free(paths);
+    const c_package_paths = c_package_files.paths.toSlice();
+    var package_paths = allocator.alloc([]const u8, c_package_paths.len) catch return @intFromEnum(ErrorCode.out_of_memory);
+    defer allocator.free(package_paths);
 
-    for (c_paths, 0..) |p, i| paths[i] = p.toSlice();
+    for (c_package_paths, 0..) |c_slice_path, index| package_paths[index] = c_slice_path.toSlice();
 
-    const zig_meta = toMeta(meta);
-    const zig_files = db.PackageFiles{
-        .name = files.name.toSlice(),
-        .paths = paths,
+    const zig_package_meta = toMeta(c_package_meta);
+    const zig_package_files = database.PackageFiles{
+        .name = c_package_files.name.toSlice(),
+        .paths = package_paths,
     };
 
-    db.addPackage(db_path.toSlice(), zig_meta, zig_files, allocator) catch |err|
-        return @intFromEnum(errors.fromError(err));
+    database.addPackage(database_path.toSlice(), zig_package_meta, zig_package_files, types.allocator()) catch |err| return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
 
 /// Удалить пакет из базы данных.
-pub export fn upac_db_remove_package(
-    db_path: CSlice,
-    name: CSlice,
-) callconv(.C) i32 {
-    db.removePackage(db_path.toSlice(), name.toSlice(), alloc.allocator()) catch |err|
-        return @intFromEnum(errors.fromError(err));
+pub export fn upac_db_remove_package(database_path: CSlice, package_name: CSlice) callconv(.C) i32 {
+    database.removePackage(database_path.toSlice(), package_name.toSlice(), types.allocator()) catch |err| return @intFromEnum(types.fromError(err));
     return @intFromEnum(ErrorCode.ok);
 }
 
-/// Получить метаданные пакета.
-/// Заполняет out_meta. Вызывающий освобождает через upac_meta_free.
-pub export fn upac_db_get_meta(
-    db_path: CSlice,
-    name: CSlice,
-    out_meta: *CPackageMeta,
-) callconv(.C) i32 {
-    const allocator = alloc.allocator();
+/// Получить метаданные пакета
+pub export fn upac_db_get_meta(c_database_path: CSlice, c_package_name: CSlice, c_package_meta: *CPackageMeta) callconv(.C) i32 {
+    const allocator = types.allocator();
 
-    const meta = db.getMeta(db_path.toSlice(), name.toSlice(), allocator) catch |err|
-        return @intFromEnum(errors.fromError(err));
+    const package_meta = database.getMeta(c_database_path.toSlice(), c_package_name.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
 
-    out_meta.* = .{
-        .name = CSlice.fromSlice(meta.name),
-        .version = CSlice.fromSlice(meta.version),
-        .author = CSlice.fromSlice(meta.author),
-        .description = CSlice.fromSlice(meta.description),
-        .license = CSlice.fromSlice(meta.license),
-        .url = CSlice.fromSlice(meta.url),
-        .installed_at = meta.installed_at,
-        .checksum = CSlice.fromSlice(meta.checksum),
+    c_package_meta.* = .{
+        .name = CSlice.fromSlice(package_meta.name),
+        .version = CSlice.fromSlice(package_meta.version),
+        .author = CSlice.fromSlice(package_meta.author),
+        .description = CSlice.fromSlice(package_meta.description),
+        .license = CSlice.fromSlice(package_meta.license),
+        .url = CSlice.fromSlice(package_meta.url),
+        .installed_at = package_meta.installed_at,
+        .checksum = CSlice.fromSlice(package_meta.checksum),
     };
 
     return @intFromEnum(ErrorCode.ok);
 }
 
-pub export fn upac_meta_free(meta: *CPackageMeta) callconv(.C) void {
-    const allocator = alloc.allocator();
-    allocator.free(meta.name.toSlice());
-    allocator.free(meta.version.toSlice());
-    allocator.free(meta.author.toSlice());
-    allocator.free(meta.description.toSlice());
-    allocator.free(meta.license.toSlice());
-    allocator.free(meta.url.toSlice());
-    allocator.free(meta.checksum.toSlice());
+pub export fn upac_meta_free(c_package_meta: *CPackageMeta) callconv(.C) void {
+    const allocator = types.allocator();
+
+    allocator.free(c_package_meta.name.toSlice());
+    allocator.free(c_package_meta.version.toSlice());
+    allocator.free(c_package_meta.author.toSlice());
+    allocator.free(c_package_meta.description.toSlice());
+    allocator.free(c_package_meta.license.toSlice());
+    allocator.free(c_package_meta.url.toSlice());
+    allocator.free(c_package_meta.checksum.toSlice());
 }
 
 /// Получить список файлов пакета.
 /// Вызывающий освобождает через upac_files_free.
-pub export fn upac_db_get_files(
-    db_path: CSlice,
-    name: CSlice,
-    out_files: *CPackageFiles,
-) callconv(.C) i32 {
-    const allocator = alloc.allocator();
+pub export fn upac_db_get_files(c_database_path: CSlice, c_name: CSlice, c_package_files: *CPackageFiles) callconv(.C) i32 {
+    const allocator = types.allocator();
 
-    const files = db.getFiles(db_path.toSlice(), name.toSlice(), allocator) catch |err|
-        return @intFromEnum(errors.fromError(err));
+    const package_files = database.getFiles(c_database_path.toSlice(), c_name.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
 
     // Конвертируем [][]const u8 → []CSlice
-    const c_paths = allocator.alloc(CSlice, files.paths.len) catch {
-        for (files.paths) |p| allocator.free(p);
-        allocator.free(files.paths);
+    const c_package_paths = allocator.alloc(CSlice, package_files.paths.len) catch {
+        for (package_files.paths) |package_file_path| allocator.free(package_file_path);
+        allocator.free(package_files.paths);
+
         return @intFromEnum(ErrorCode.out_of_memory);
     };
 
-    for (files.paths, 0..) |p, i| c_paths[i] = CSlice.fromSlice(p);
+    for (package_files.paths, 0..) |package_file_path, index| c_package_paths[index] = CSlice.fromSlice(package_file_path);
 
-    out_files.* = .{
-        .name = CSlice.fromSlice(files.name),
-        .paths = .{ .ptr = c_paths.ptr, .len = c_paths.len },
+    c_package_files.* = .{
+        .name = CSlice.fromSlice(package_files.name),
+        .paths = .{ .ptr = c_package_paths.ptr, .len = c_package_paths.len },
     };
 
     return @intFromEnum(ErrorCode.ok);
 }
 
 /// Освобождает память занятую CPackageFiles.
-pub export fn upac_files_free(files: *CPackageFiles) callconv(.C) void {
-    const allocator = alloc.allocator();
-    const paths = files.paths.toSlice();
-    for (paths) |p| allocator.free(p.toSlice());
-    allocator.free(paths);
-    allocator.free(files.name.toSlice());
+pub export fn upac_files_free(c_package_files: *CPackageFiles) callconv(.C) void {
+    const allocator = types.allocator();
+    const package_paths = c_package_files.paths.toSlice();
+
+    for (package_paths) |package_path| allocator.free(package_path.toSlice());
+    allocator.free(package_paths);
+    allocator.free(c_package_files.name.toSlice());
 }
 
 /// Получить список всех пакетов.
 /// Вызывающий освобождает через upac_list_free.
-pub export fn upac_db_list_packages(
-    db_path: CSlice,
-    out_list: *CSliceArray,
-) callconv(.C) i32 {
-    const allocator = alloc.allocator();
+pub export fn upac_db_list_packages(c_database_path: CSlice, c_packages_list: *CSliceArray) callconv(.C) i32 {
+    const allocator = types.allocator();
 
-    const names = db.listPackages(db_path.toSlice(), allocator) catch |err|
-        return @intFromEnum(errors.fromError(err));
+    const packages_name = database.listPackages(c_database_path.toSlice(), allocator) catch |err|
+        return @intFromEnum(types.fromError(err));
 
-    const c_names = allocator.alloc(CSlice, names.len) catch {
-        for (names) |n| allocator.free(n);
-        allocator.free(names);
+    const c_packages_names = allocator.alloc(CSlice, packages_name.len) catch {
+        for (packages_name) |package_name| allocator.free(package_name);
+        allocator.free(packages_name);
+
         return @intFromEnum(ErrorCode.out_of_memory);
     };
 
-    for (names, 0..) |n, i| c_names[i] = CSlice.fromSlice(n);
-    // Оригинальный [][]const u8 больше не нужен — данные живут в CSlice
-    allocator.free(names);
+    for (packages_name, 0..) |package_name, index| c_packages_names[index] = CSlice.fromSlice(package_name);
+    allocator.free(packages_name);
 
-    out_list.* = .{ .ptr = c_names.ptr, .len = c_names.len };
+    c_packages_list.* = .{ .ptr = c_packages_names.ptr, .len = c_packages_names.len };
     return @intFromEnum(ErrorCode.ok);
 }
 
 /// Освобождает список пакетов полученный из upac_db_list_packages.
-pub export fn upac_list_free(list: *CSliceArray) callconv(.C) void {
-    const allocator = alloc.allocator();
-    const slices = list.toSlice();
-    for (slices) |s| allocator.free(s.toSlice());
+pub export fn upac_list_free(c_list: *CSliceArray) callconv(.C) void {
+    const allocator = types.allocator();
+    const slices = c_list.toSlice();
+
+    for (slices) |slice| allocator.free(slice.toSlice());
     allocator.free(slices);
 }
 
 // ── Installer API ─────────────────────────────────────────────────────────────
-
 /// Установить пакет.
-pub export fn upac_install(request: CInstallRequest) callconv(.C) i32 {
-    const allocator = alloc.allocator();
+pub export fn upac_install(c_install_data: CInstallRequest) callconv(.C) i32 {
+    const allocator = types.allocator();
 
     // Конвертируем пути из CPackageMeta
-    const zig_request = inst.InstallRequest{
-        .meta = toMeta(request.meta),
-        .root_path = request.root_path.toSlice(),
-        .repo_path = request.repo_path.toSlice(),
-        .package_path = request.package_path.toSlice(),
-        .db_path = request.db_path.toSlice(),
-        .max_retries = request.max_retries,
+    const zig_installer_data = installer.InstallData{
+        .package_meta = toMeta(c_install_data.meta),
+        .root_path = c_install_data.root_path.toSlice(),
+        .repo_path = c_install_data.repo_path.toSlice(),
+        .package_path = c_install_data.package_path.toSlice(),
+        .database_path = c_install_data.db_path.toSlice(),
+        .max_retries = c_install_data.max_retries,
     };
 
-    inst.install(zig_request, allocator) catch |err|
-        return @intFromEnum(errors.fromError(err));
+    installer.install(zig_installer_data, allocator) catch |err| return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
 
 // ── OStree API ────────────────────────────────────────────────────────────────
-
 /// Создать коммит OStree.
-pub export fn upac_ostree_commit(request: CCommitRequest) callconv(.C) i32 {
-    const allocator = alloc.allocator();
+pub export fn upac_ostree_commit(c_commit_request: CCommitRequest) callconv(.C) i32 {
+    const allocator = types.allocator();
 
-    // Конвертируем массив пакетов
-    const c_pkgs = request.packages[0..request.packages_len];
-    var zig_pkgs = allocator.alloc(db.PackageMeta, c_pkgs.len) catch
-        return @intFromEnum(ErrorCode.out_of_memory);
-    defer allocator.free(zig_pkgs);
+    const c_packages_meta = c_commit_request.packages[0..c_commit_request.packages_len];
+    var zig_package_meta = allocator.alloc(database.PackageMeta, c_packages_meta.len) catch return @intFromEnum(ErrorCode.out_of_memory);
+    defer allocator.free(zig_package_meta);
 
-    for (c_pkgs, 0..) |p, i| zig_pkgs[i] = toMeta(p);
+    for (c_packages_meta, 0..) |c_packge_meta, index| zig_package_meta[index] = toMeta(c_packge_meta);
 
-    const zig_request = ost.OstreeCommitRequest{
-        .repo_path = request.repo_path.toSlice(),
-        .content_path = request.content_path.toSlice(),
-        .branch = request.branch.toSlice(),
-        .operation = request.operation.toSlice(),
-        .packages = zig_pkgs,
-        .db_path = request.db_path.toSlice(),
+    const zig_request = ostree.OstreeCommitRequest{
+        .repo_path = c_commit_request.repo_path.toSlice(),
+        .content_path = c_commit_request.content_path.toSlice(),
+        .branch = c_commit_request.branch.toSlice(),
+        .operation = c_commit_request.operation.toSlice(),
+        .packages = zig_package_meta,
+        .database_path = c_commit_request.db_path.toSlice(),
     };
 
-    ost.commit(zig_request, allocator) catch |err|
-        return @intFromEnum(errors.fromError(err));
+    ostree.commit(zig_request, allocator) catch |err| return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
 
 /// Получить diff между двумя коммитами.
 /// Вызывающий освобождает через upac_diff_free.
-pub export fn upac_ostree_diff(
-    repo_path: CSlice,
-    from_ref: CSlice,
-    to_ref: CSlice,
-    out_diff: *CDiffArray,
-) callconv(.C) i32 {
-    const allocator = alloc.allocator();
+pub export fn upac_ostree_diff(c_repo_path: CSlice, c_from_ref: CSlice, c_to_ref: CSlice, c_diff_out: *CDiffArray) callconv(.C) i32 {
+    const allocator = types.allocator();
 
-    const entries = ost.diff(
-        repo_path.toSlice(),
-        from_ref.toSlice(),
-        to_ref.toSlice(),
+    const diff_entries = ostree.diff(
+        c_repo_path.toSlice(),
+        c_from_ref.toSlice(),
+        c_to_ref.toSlice(),
         allocator,
-    ) catch |err| return @intFromEnum(errors.fromError(err));
+    ) catch |err| return @intFromEnum(types.fromError(err));
 
-    // Конвертируем []DiffEntry → []CDiffEntry
-    const c_entries = allocator.alloc(CDiffEntry, entries.len) catch {
-        for (entries) |e| allocator.free(e.path);
-        allocator.free(entries);
+    const c_entries = allocator.alloc(CDiffEntry, diff_entries.len) catch {
+        for (diff_entries) |diff_entry| allocator.free(diff_entry.path);
+        allocator.free(diff_entries);
+
         return @intFromEnum(ErrorCode.out_of_memory);
     };
 
-    for (entries, 0..) |e, i| {
-        c_entries[i] = .{
-            .path = CSlice.fromSlice(e.path),
-            .kind = @enumFromInt(@intFromEnum(e.kind)),
+    for (c_entries, 0..) |*package_meta, index| {
+        package_meta.* = .{
+            .path = CSlice.fromSlice(diff_entries[index].path),
+            .kind = @enumFromInt(@intFromEnum(diff_entries[index].kind)),
         };
     }
-    allocator.free(entries);
+    allocator.free(diff_entries);
 
-    out_diff.* = .{ .ptr = c_entries.ptr, .len = c_entries.len };
+    c_diff_out.* = .{ .ptr = c_entries.ptr, .len = c_entries.len };
     return @intFromEnum(ErrorCode.ok);
 }
 
 /// Освобождает CDiffArray полученный из upac_ostree_diff.
-pub export fn upac_diff_free(diff: *CDiffArray) callconv(.C) void {
-    const allocator = alloc.allocator();
-    const entries = diff.toSlice();
-    for (entries) |e| allocator.free(e.path.toSlice());
+pub export fn upac_diff_free(c_diff: *CDiffArray) callconv(.C) void {
+    const allocator = types.allocator();
+    const entries = c_diff.toSlice();
+
+    for (entries) |entry| allocator.free(entry.path.toSlice());
     allocator.free(entries);
 }
 
 /// Откатить на предыдущий коммит.
-pub export fn upac_ostree_rollback(
-    repo_path: CSlice,
-    content_path: CSlice,
-    branch: CSlice,
-) callconv(.C) i32 {
-    ost.rollback(
-        repo_path.toSlice(),
-        content_path.toSlice(),
-        branch.toSlice(),
-        alloc.allocator(),
-    ) catch |err| return @intFromEnum(errors.fromError(err));
+pub export fn upac_ostree_rollback(c_repo_path: CSlice, c_content_path: CSlice, c_branch: CSlice) callconv(.C) i32 {
+    ostree.rollback(
+        c_repo_path.toSlice(),
+        c_content_path.toSlice(),
+        c_branch.toSlice(),
+        types.allocator(),
+    ) catch |err| return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
 
 // ── Init API ──────────────────────────────────────────────────────────────────
-
 /// Инициализировать структуру директорий системы.
-pub export fn upac_init_system(
-    paths: CSystemPaths,
-    mode: CRepoMode,
-) callconv(.C) i32 {
-    const zig_paths = init_mod.SystemPaths{
-        .ostree_path = paths.ostree_path.toSlice(),
-        .repo_path = paths.repo_path.toSlice(),
-        .db_path = paths.db_path.toSlice(),
+pub export fn upac_init_system(c_system_paths: CSystemPaths, c_repo_mode: CRepoMode) callconv(.C) i32 {
+    const zig_system_paths = init.SystemPaths{
+        .ostree_path = c_system_paths.ostree_path.toSlice(),
+        .repo_path = c_system_paths.repo_path.toSlice(),
+        .db_path = c_system_paths.db_path.toSlice(),
     };
 
-    const zig_mode: init_mod.RepoMode = switch (mode) {
+    const zig_repo_mode: init.RepoMode = switch (c_repo_mode) {
         .archive => .archive,
         .bare => .bare,
         .bare_user => .bare_user,
     };
 
-    init_mod.initSystem(zig_paths, zig_mode, alloc.allocator()) catch |err|
-        return @intFromEnum(errors.fromError(err));
+    init.initSystem(zig_system_paths, zig_repo_mode, types.allocator()) catch |err| return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }

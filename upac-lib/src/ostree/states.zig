@@ -2,8 +2,8 @@ const std = @import("std");
 
 const database = @import("upac-database");
 
-const types = @import("types.zig");
-const OstreeError = types.OstreeError;
+const ostree = @import("ostree.zig");
+const OstreeError = ostree.OstreeError;
 
 const fsm = @import("machine.zig");
 const CommitMachine = fsm.CommitMachine;
@@ -64,7 +64,7 @@ fn stateBuildingMessage(machine: *CommitMachine) anyerror!void {
 
     try bw.writeAll("Installed packages:\n");
 
-    const names = database.listPackages(machine.request.db_path, machine.allocator) catch |err| {
+    const names = database.listPackages(machine.request.database_path, machine.allocator) catch |err| {
         stateFailed(machine);
         return err;
     };
@@ -74,7 +74,7 @@ fn stateBuildingMessage(machine: *CommitMachine) anyerror!void {
     }
 
     for (names) |name| {
-        const meta = database.getMeta(machine.request.db_path, name, machine.allocator) catch continue;
+        const meta = database.getMeta(machine.request.database_path, name, machine.allocator) catch continue;
         defer {
             machine.allocator.free(meta.name);
             machine.allocator.free(meta.version);

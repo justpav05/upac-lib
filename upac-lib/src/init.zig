@@ -1,7 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 
-const c = @cImport({
+const c_libs = @cImport({
     @cInclude("ostree.h");
     @cInclude("glib.h");
     @cInclude("gio/gio.h");
@@ -28,18 +28,16 @@ pub const InitError = error{
 };
 
 // ── Публичное API ─────────────────────────────────────────────────────────────
-pub fn initSystem(paths: SystemPaths, mode: RepoMode, allocator: std.mem.Allocator) !void {
-    try checkNotExists(paths.ostree_path);
-    try checkNotExists(paths.repo_path);
-    try checkNotExists(paths.db_path);
+pub fn initSystem(system_paths: SystemPaths, repo_mode: RepoMode, allocator: std.mem.Allocator) !void {
+    try checkNotExists(system_paths.ostree_path);
+    try checkNotExists(system_paths.repo_path);
+    try checkNotExists(system_paths.db_path);
 
-    std.fs.makeDirAbsolute(paths.repo_path) catch
-        return InitError.CreateDirFailed;
+    std.fs.makeDirAbsolute(system_paths.repo_path) catch return InitError.CreateDirFailed;
 
-    std.fs.makeDirAbsolute(paths.db_path) catch
-        return InitError.CreateDirFailed;
+    std.fs.makeDirAbsolute(system_paths.db_path) catch return InitError.CreateDirFailed;
 
-    try initOstreeRepo(paths.ostree_path, mode, allocator);
+    try initOstreeRepo(system_paths.ostree_path, repo_mode, allocator);
 }
 
 // ── Внутренние функции ────────────────────────────────────────────────────────
@@ -51,25 +49,25 @@ fn checkNotExists(path: []const u8) !void {
     return InitError.AlreadyInitialized;
 }
 
-fn initOstreeRepo(path: []const u8, mode: RepoMode, allocator: std.mem.Allocator) !void {
-    const path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{path});
-    defer allocator.free(path_c);
+fn initOstreeRepo(repo_path: []const u8, repo_mode: RepoMode, allocator: std.mem.Allocator) !void {
+    const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
+    defer allocator.free(repo_path_c);
 
-    const file = c.g_file_new_for_path(path_c.ptr);
-    defer c.g_object_unref(file);
+    const struct_g_file = c_libs.g_file_new_for_path(repo_path_c.ptr);
+    defer c_libs.g_object_unref(struct_g_file);
 
-    const repo = c.ostree_repo_new(file);
-    defer c.g_object_unref(repo);
+    const struct_ostree_repo = c_libs.ostree_repo_new(struct_g_file);
+    defer c_libs.g_object_unref(struct_ostree_repo);
 
-    const ostree_mode: c.OstreeRepoMode = switch (mode) {
-        .archive => c.OSTREE_REPO_MODE_ARCHIVE,
-        .bare => c.OSTREE_REPO_MODE_BARE,
-        .bare_user => c.OSTREE_REPO_MODE_BARE_USER,
+    const ostree_mode: c_libs.OstreeRepoMode = switch (repo_mode) {
+        .archive => c_libs.OSTREE_REPO_MODE_ARCHIVE,
+        .bare => c_libs.OSTREE_REPO_MODE_BARE,
+        .bare_user => c_libs.OSTREE_REPO_MODE_BARE_USER,
     };
 
-    var err: ?*c.GError = null;
-    if (c.ostree_repo_create(repo, ostree_mode, null, &err) == 0) {
-        if (err) |e| c.g_error_free(e);
+    var err: ?*c_libs.GError = null;
+    if (c_libs.ostree_repo_create(struct_ostree_repo, ostree_mode, null, &err) == 0) {
+        if (err) |struct_ge_error| c_libs.g_error_free(struct_ge_error);
         return InitError.OstreeInitFailed;
     }
 }

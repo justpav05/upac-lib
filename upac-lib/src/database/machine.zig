@@ -6,9 +6,9 @@ const states = @import("states.zig");
 const Lock = @import("upac-lock").Lock;
 const LockKind = @import("upac-lock").LockKind;
 
-const types = @import("types.zig");
-const PackageMeta = types.PackageMeta;
-const PackageFiles = types.PackageFiles;
+const database = @import("database.zig");
+const PackageMeta = database.PackageMeta;
+const PackageFiles = database.PackageFiles;
 
 // ── Внутренние типы FSM ───────────────────────────────────────────────────────
 pub const DbOperation = enum { add, remove, read_meta, read_files, list };

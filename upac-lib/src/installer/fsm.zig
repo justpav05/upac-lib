@@ -4,19 +4,21 @@ const posix = std.posix;
 const database = @import("upac-database");
 const PackageFiles = database.PackageFiles;
 
-const InstallerMachine = @import("machine.zig").InstallerMachine;
-const StateId = @import("machine.zig").StateId;
+const installer = @import("installer.zig");
+const InstallerMachine = installer.InstallerMachine;
+const StateId = installer.StateId;
+const InstallData = installer.InstallData;
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
 pub fn stateVerifying(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.verifying);
 
-    std.fs.accessAbsolute(machine.state.package_path, .{}) catch |err| {
+    std.fs.accessAbsolute(machine.data.package_path, .{}) catch |err| {
         stateFailed(machine);
         return err;
     };
 
-    std.fs.accessAbsolute(machine.state.repo_path, .{}) catch |err| {
+    std.fs.accessAbsolute(machine.data.repo_path, .{}) catch |err| {
         stateFailed(machine);
         return err;
     };
@@ -30,7 +32,7 @@ pub fn stateCopying(machine: *InstallerMachine) anyerror!void {
 
     const package_destination = try std.fs.path.join(
         machine.allocator,
-        &.{ machine.state.repo_path, machine.state.meta.name },
+        &.{ machine.data.repo_path, machine.data.package_meta.name },
     );
     defer machine.allocator.free(package_destination);
 
@@ -39,7 +41,7 @@ pub fn stateCopying(machine: *InstallerMachine) anyerror!void {
         else => return err,
     };
 
-    var package_dir = std.fs.openDirAbsolute(machine.state.package_path, .{ .iterate = true }) catch |err| {
+    var package_dir = std.fs.openDirAbsolute(machine.data.package_path, .{ .iterate = true }) catch |err| {
         if (machine.exhausted()) {
             stateFailed(machine);
             return err;
@@ -49,7 +51,7 @@ pub fn stateCopying(machine: *InstallerMachine) anyerror!void {
     };
     defer package_dir.close();
 
-    copyDir(machine.allocator, package_dir, machine.state.package_path, package_destination) catch |err| {
+    copyTree(machine.allocator, package_dir, machine.data.package_path, package_destination) catch |err| {
         if (machine.exhausted()) {
             stateFailed(machine);
             return err;
@@ -65,7 +67,7 @@ pub fn stateCopying(machine: *InstallerMachine) anyerror!void {
 pub fn stateLinking(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.linking);
 
-    var repo_dir = std.fs.openDirAbsolute(machine.state.repo_path, .{ .iterate = true }) catch |err| {
+    var repo_dir = std.fs.openDirAbsolute(machine.data.repo_path, .{ .iterate = true }) catch |err| {
         if (machine.exhausted()) {
             stateFailed(machine);
             return err;
@@ -75,19 +77,17 @@ pub fn stateLinking(machine: *InstallerMachine) anyerror!void {
     };
     defer repo_dir.close();
 
-    linkDir(machine.allocator, machine.state.repo_path, machine.state.root_path) catch |err| switch (err) {
-        error.FileNotFound => {
+    hardlinkTree(machine.allocator, machine.data.repo_path, machine.data.root_path) catch |err| {
+        if (err == error.FileNotFound) {
             machine.resetRetries();
             return stateCopying(machine);
-        },
-        else => {
-            if (machine.exhausted()) {
-                stateFailed(machine);
-                return err;
-            }
+        } else if (machine.exhausted()) {
+            stateFailed(machine);
+            return err;
+        } else {
             machine.retries += 1;
             return stateLinking(machine);
-        },
+        }
     };
 
     machine.resetRetries();
@@ -109,11 +109,11 @@ pub fn stateSettingPerms(machine: *InstallerMachine) anyerror!void {
 
     const pkg_path = try std.fs.path.join(
         machine.allocator,
-        &.{ machine.state.repo_path, machine.state.meta.name },
+        &.{ machine.data.repo_path, machine.data.package_meta.name },
     );
     defer machine.allocator.free(pkg_path);
 
-    setPermsDir(machine.allocator, pkg_path) catch |err| switch (err) {
+    setPermsTree(machine.allocator, pkg_path) catch |err| switch (err) {
         error.FileNotFound => {
             machine.resetRetries();
             return stateLinking(machine);
@@ -143,7 +143,7 @@ pub fn stateRegistering(machine: *InstallerMachine) anyerror!void {
 
     const package_root = try std.fs.path.join(
         machine.allocator,
-        &.{ machine.state.repo_path, machine.state.meta.name },
+        &.{ machine.data.repo_path, machine.data.package_meta.name },
     );
     defer machine.allocator.free(package_root);
 
@@ -156,17 +156,15 @@ pub fn stateRegistering(machine: *InstallerMachine) anyerror!void {
         return stateRegistering(machine);
     };
 
-    var arena_allocator = std.heap.ArenaAllocator.init(machine.allocator);
-    defer arena_allocator.deinit();
+    const paths_copy = try machine.allocator.dupe([]const u8, files_list.items);
+    defer machine.allocator.free(paths_copy);
 
-    const paths_copy = try arena_allocator.allocator().dupe([]const u8, files_list.items);
     const pkg_files = PackageFiles{
-        .name = machine.state.meta.name,
+        .name = machine.data.package_meta.name,
         .paths = paths_copy,
     };
 
-    const databaseb_allocator = arena_allocator.allocator();
-    database.addPackage(machine.state.db_path, machine.state.meta, pkg_files, databaseb_allocator) catch |err| {
+    database.addPackage(machine.data.database_path, machine.data.package_meta, pkg_files, machine.allocator) catch |err| {
         if (machine.exhausted()) {
             stateFailed(machine);
             return err;
@@ -179,102 +177,99 @@ pub fn stateRegistering(machine: *InstallerMachine) anyerror!void {
     return stateDone(machine);
 }
 
-pub fn stateDone(m: *InstallerMachine) anyerror!void {
-    try m.enter(.done);
+pub fn stateDone(machine: *InstallerMachine) anyerror!void {
+    try machine.enter(.done);
 }
 
-pub fn stateFailed(m: *InstallerMachine) void {
-    _ = m.enter(.failed) catch {};
-    std.debug.print("✗ install failed '{s}', path: ", .{m.state.meta.name});
-    for (m.stack.items) |s| std.debug.print("{s} ", .{@tagName(s)});
+pub fn stateFailed(machine: *InstallerMachine) void {
+    _ = machine.enter(.failed) catch {};
+    std.debug.print("✗ install failed '{s}', path: ", .{machine.data.package_meta.name});
+    for (machine.stack.items) |state| std.debug.print("{s} ", .{@tagName(state)});
     std.debug.print("\n", .{});
 }
 
 // ── Вспомогательные функции ───────────────────────────────────────────────────
-fn copyDir(
-    allocator: std.mem.Allocator,
-    src_dir: std.fs.Dir,
-    src_path: []const u8,
-    dst_path: []const u8,
-) !void {
-    var iter = src_dir.iterate();
-    while (try iter.next()) |entry| {
-        const src_entry = try std.fs.path.join(allocator, &.{ src_path, entry.name });
-        defer allocator.free(src_entry);
-        const dst_entry = try std.fs.path.join(allocator, &.{ dst_path, entry.name });
-        defer allocator.free(dst_entry);
+fn copyTree(allocator: std.mem.Allocator, source_dir: std.fs.Dir, source_path: []const u8, destination_path: []const u8) !void {
+    var source_dir_iter = source_dir.iterate();
+    while (try source_dir_iter.next()) |entry| {
+        const source_entry_with_name = try std.fs.path.join(allocator, &.{ source_path, entry.name });
+        defer allocator.free(source_entry_with_name);
+
+        const destination_entry_with_name = try std.fs.path.join(allocator, &.{ destination_path, entry.name });
+        defer allocator.free(destination_entry_with_name);
 
         switch (entry.kind) {
             .directory => {
-                std.fs.makeDirAbsolute(dst_entry) catch |err| switch (err) {
+                std.fs.makeDirAbsolute(destination_entry_with_name) catch |err| switch (err) {
                     error.PathAlreadyExists => {},
                     else => return err,
                 };
-                var sub_dir = try std.fs.openDirAbsolute(src_entry, .{ .iterate = true });
+
+                var sub_dir = try std.fs.openDirAbsolute(source_entry_with_name, .{ .iterate = true });
                 defer sub_dir.close();
-                try copyDir(allocator, sub_dir, src_entry, dst_entry);
+
+                try copyTree(allocator, sub_dir, source_entry_with_name, destination_entry_with_name);
             },
             .file => {
-                try std.fs.copyFileAbsolute(src_entry, dst_entry, .{});
+                try std.fs.copyFileAbsolute(source_entry_with_name, destination_entry_with_name, .{});
             },
             else => {},
         }
     }
 }
 
-fn linkDir(
-    allocator: std.mem.Allocator,
-    src_path: []const u8,
-    dst_path: []const u8,
-) !void {
-    var src_dir = try std.fs.openDirAbsolute(src_path, .{ .iterate = true });
-    defer src_dir.close();
+fn hardlinkTree(allocator: std.mem.Allocator, source_path: []const u8, destination_path: []const u8) !void {
+    var source_dir = try std.fs.openDirAbsolute(source_path, .{ .iterate = true });
+    defer source_dir.close();
 
-    var iter = src_dir.iterate();
-    while (try iter.next()) |entry| {
-        const src_entry = try std.fs.path.join(allocator, &.{ src_path, entry.name });
-        defer allocator.free(src_entry);
-        const dst_entry = try std.fs.path.join(allocator, &.{ dst_path, entry.name });
-        defer allocator.free(dst_entry);
+    var source_dir_iter = source_dir.iterate();
+    while (try source_dir_iter.next()) |entry| {
+        const source_path_with_name = try std.fs.path.join(allocator, &.{ source_path, entry.name });
+        defer allocator.free(source_path_with_name);
+
+        const destination_path_with_name = try std.fs.path.join(allocator, &.{ destination_path, entry.name });
+        defer allocator.free(destination_path_with_name);
 
         switch (entry.kind) {
             .directory => {
-                std.fs.makeDirAbsolute(dst_entry) catch |err| switch (err) {
+                std.fs.makeDirAbsolute(destination_path_with_name) catch |err| switch (err) {
                     error.PathAlreadyExists => {},
                     else => return err,
                 };
-                try linkDir(allocator, src_entry, dst_entry);
+                try hardlinkTree(allocator, source_path_with_name, destination_path_with_name);
             },
             .file => {
-                std.fs.deleteFileAbsolute(dst_entry) catch {};
-                try posix.link(src_entry, dst_entry, 0);
+                std.fs.deleteFileAbsolute(destination_path_with_name) catch {};
+                try posix.link(source_path_with_name, destination_path_with_name, 0);
             },
             else => {},
         }
     }
 }
 
-fn setPermsDir(allocator: std.mem.Allocator, path: []const u8) !void {
-    var dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
-    defer dir.close();
+fn setPermsTree(allocator: std.mem.Allocator, path: []const u8) !void {
+    var target_dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
+    defer target_dir.close();
 
-    try std.posix.fchmod(dir.fd, 0o755);
+    try std.posix.fchmod(target_dir.fd, 0o755);
 
-    var iter = dir.iterate();
-    while (try iter.next()) |entry| {
-        const entry_path = try std.fs.path.join(allocator, &.{ path, entry.name });
-        defer allocator.free(entry_path);
+    var target_dir_iter = target_dir.iterate();
+    while (try target_dir_iter.next()) |entry| {
+        const entry_path_with_name = try std.fs.path.join(allocator, &.{ path, entry.name });
+        defer allocator.free(entry_path_with_name);
 
         switch (entry.kind) {
             .directory => {
-                var sub_dir = try std.fs.openDirAbsolute(entry_path, .{ .iterate = true });
+                var sub_dir = try std.fs.openDirAbsolute(entry_path_with_name, .{ .iterate = true });
                 defer sub_dir.close();
+
                 try std.posix.fchmod(sub_dir.fd, 0o755);
-                try setPermsDir(allocator, entry_path);
+                try setPermsTree(allocator, entry_path_with_name);
             },
             .file, .sym_link => {
-                var file = try std.fs.openFileAbsolute(entry_path, .{ .mode = .read_write });
+                var file = try std.fs.openFileAbsolute(entry_path_with_name, .{ .mode = .read_write });
                 defer file.close();
+
                 try std.posix.fchmod(file.handle, 0o644);
             },
             else => {},
@@ -282,21 +277,19 @@ fn setPermsDir(allocator: std.mem.Allocator, path: []const u8) !void {
     }
 }
 
-fn collectFiles(
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    out: *std.ArrayList([]const u8),
-) !void {
+fn collectFiles(allocator: std.mem.Allocator, path: []const u8, files_path_list: *std.ArrayList([]const u8)) !void {
     var dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
     defer dir.close();
 
-    var iter = dir.iterate();
-    while (try iter.next()) |entry| {
-        const entry_path = try std.fs.path.join(allocator, &.{ path, entry.name });
+    var dir_iter = dir.iterate();
+    while (try dir_iter.next()) |entry| {
+        const entry_path_with_name = try std.fs.path.join(allocator, &.{ path, entry.name });
+        defer allocator.free(entry_path_with_name);
+
         switch (entry.kind) {
-            .directory => try collectFiles(allocator, entry_path, out),
-            .file, .sym_link => try out.append(entry_path),
-            else => allocator.free(entry_path),
+            .directory => try collectFiles(allocator, entry_path_with_name, files_path_list),
+            .file, .sym_link => try files_path_list.append(entry_path_with_name),
+            else => allocator.free(entry_path_with_name),
         }
     }
 }

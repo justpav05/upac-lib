@@ -7,14 +7,13 @@ const LockKind = @import("upac-lock").LockKind;
 
 const DbMachine = @import("machine.zig").DbMachine;
 
-const types = @import("types.zig");
-const PackageMeta = types.PackageMeta;
-const PackageFiles = types.PackageFiles;
+const database = @import("database.zig");
+const PackageMeta = database.PackageMeta;
+const PackageFiles = database.PackageFiles;
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
 pub fn stateAcquiringLock(machine: *DbMachine) anyerror!void {
     try machine.enter(.acquiring_lock);
-    std.debug.print("[acquiringLock] start, dir: '{s}'\n", .{machine.dir_path});
 
     const lock_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, ".lock" });
     defer machine.allocator.free(lock_path);
@@ -41,7 +40,6 @@ pub fn stateAcquiringLock(machine: *DbMachine) anyerror!void {
 fn stateReadingIndex(machine: *DbMachine) anyerror!void {
     try machine.enter(.reading_index);
     std.debug.print("[readingIndex] start\n", .{});
-
 
     const index_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, "index.toml" });
     defer machine.allocator.free(index_path);
