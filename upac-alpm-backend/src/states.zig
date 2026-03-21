@@ -17,7 +17,10 @@ const c_librarys = @cImport({
 pub fn stateVerifying(machine: *Machine) anyerror!void {
     try machine.enter(.verifying);
 
-    const file = std.fs.openFileAbsolute(machine.request.pkg_path, .{}) catch |err| {
+    const path_z = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.pkg_path});
+    defer machine.allocator.free(path_z);
+
+    const file = std.fs.openFileAbsolute(path_z, .{}) catch |err| {
         stateFailed(machine);
         return err;
     };
@@ -91,8 +94,12 @@ fn stateExtracting(machine: *Machine) anyerror!void {
     );
     _ = c_librarys.archive_write_disk_set_standard_lookup(aw);
 
-    var old_dir = try std.fs.openDirAbsolute(".", .{});
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const cwd_path = try std.posix.getcwd(&buf);
+
+    var old_dir = try std.fs.openDirAbsolute(cwd_path, .{});
     defer old_dir.close();
+
     try posix.chdir(out_path_c);
     defer old_dir.setAsCwd() catch {};
 

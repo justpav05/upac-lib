@@ -1,7 +1,9 @@
 const std = @import("std");
 
 /// Глобальный аллокатор для .so — инициализируется один раз.
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var gpa = std.heap.GeneralPurposeAllocator(.{
+    .safety = true,
+}){};
 
 pub fn allocator() std.mem.Allocator {
     return gpa.allocator();

@@ -12,7 +12,7 @@ use crate::config::Config;
 
 use crate::ffi::{CInstallRequest, CSlice, CSliceArray, UpacLib};
 
-const MAX_RETRIES: u8 = 10;
+const MAX_RETRIES: u8 = 2;
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -104,8 +104,15 @@ fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 
     let backend = Backend::load(machine.kind.as_ref().unwrap())?;
 
+    let abs_file = std::fs::canonicalize(&machine.file)
+        .map_err(|err| anyhow::anyhow!("cannot resolve path '{}': {err}", machine.file))?;
+    let abs_file_str = abs_file
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("invalid path encoding"))?
+        .to_owned();
+
     let meta = backend
-        .prepare(&machine.file, &tmp, &machine.checksum)
+        .prepare(&abs_file_str, &tmp, &machine.checksum)
         .map_err(|err| {
             pb.finish_and_clear();
             err

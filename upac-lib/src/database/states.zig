@@ -14,6 +14,7 @@ const PackageFiles = types.PackageFiles;
 // ── Состояния ─────────────────────────────────────────────────────────────────
 pub fn stateAcquiringLock(machine: *DbMachine) anyerror!void {
     try machine.enter(.acquiring_lock);
+    std.debug.print("[acquiringLock] start, dir: '{s}'\n", .{machine.dir_path});
 
     const lock_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, ".lock" });
     defer machine.allocator.free(lock_path);
@@ -39,6 +40,8 @@ pub fn stateAcquiringLock(machine: *DbMachine) anyerror!void {
 
 fn stateReadingIndex(machine: *DbMachine) anyerror!void {
     try machine.enter(.reading_index);
+    std.debug.print("[readingIndex] start\n", .{});
+
 
     const index_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, "index.toml" });
     defer machine.allocator.free(index_path);
@@ -63,10 +66,14 @@ fn stateReadingIndex(machine: *DbMachine) anyerror!void {
     };
     defer machine.allocator.free(file_content);
 
+    std.debug.print("[readingIndex] content read ok\n", .{});
+
     machine.index = parseIndex(machine.allocator, file_content) catch |err| {
         stateFailed(machine);
         return err;
     };
+
+    std.debug.print("[readingIndex] parse ok, index len: {}\n", .{machine.index.?.len});
 
     return switch (machine.input) {
         .list => {
@@ -123,10 +130,15 @@ fn stateReadingPackage(machine: *DbMachine) anyerror!void {
 
 fn stateWritingPackage(machine: *DbMachine) anyerror!void {
     try machine.enter(.writing_package);
+    std.debug.print("[writingPackage] start\n", .{});
 
     switch (machine.input) {
         .add => |d| {
+            std.debug.print("[writingPackage] name: '{s}'\n", .{d.meta.name});
+            std.debug.print("[writingPackage] files count: {}\n", .{d.files.paths.len});
+
             const content = serializePackage(machine.allocator, d.meta, d.files) catch |err| {
+                std.debug.print("[writingPackage] serializePackage error: {}\n", .{err});
                 stateFailed(machine);
                 return err;
             };
@@ -244,6 +256,7 @@ fn writeAtomic(allocator: std.mem.Allocator, path: []const u8, content: []const 
 
 fn parseIndex(allocator: std.mem.Allocator, content: []const u8) ![][]const u8 {
     var table = try tomlz.parse(allocator, content);
+    std.debug.print("[parseIndex] parsed ok\n", .{});
     defer table.deinit(allocator);
 
     const arr = table.getArray("packages") orelse
@@ -266,14 +279,14 @@ fn parseIndex(allocator: std.mem.Allocator, content: []const u8) ![][]const u8 {
 fn serializeIndex(allocator: std.mem.Allocator, names: []const []const u8) ![]u8 {
     var buf = std.ArrayList(u8).init(allocator);
     errdefer buf.deinit();
-    const w = buf.writer();
+    const writer = buf.writer();
 
-    try w.writeAll("packages = [");
+    try writer.writeAll("packages = [");
     for (names, 0..) |name, i| {
-        if (i > 0) try w.writeAll(", ");
-        try w.print("\"{s}\"", .{name});
+        if (i > 0) try writer.writeAll(", ");
+        try writer.print("\"{s}\"", .{name});
     }
-    try w.writeAll("]\n");
+    try writer.writeAll("]\n");
 
     return buf.toOwnedSlice();
 }
