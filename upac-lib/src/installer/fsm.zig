@@ -278,16 +278,18 @@ fn setPermsTree(allocator: std.mem.Allocator, path: []const u8) !void {
 }
 
 fn collectFiles(allocator: std.mem.Allocator, path: []const u8, files_path_list: *std.ArrayList([]const u8)) !void {
-    var dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
-    defer dir.close();
+    var directory = try std.fs.openDirAbsolute(path, .{ .iterate = true });
+    defer directory.close();
 
-    var dir_iter = dir.iterate();
-    while (try dir_iter.next()) |entry| {
+    var directory_iterator = directory.iterate();
+    while (try directory_iterator.next()) |entry| {
         const entry_path_with_name = try std.fs.path.join(allocator, &.{ path, entry.name });
-        defer allocator.free(entry_path_with_name);
 
         switch (entry.kind) {
-            .directory => try collectFiles(allocator, entry_path_with_name, files_path_list),
+            .directory => {
+                defer allocator.free(entry_path_with_name);
+                try collectFiles(allocator, entry_path_with_name, files_path_list);
+            },
             .file, .sym_link => try files_path_list.append(entry_path_with_name),
             else => allocator.free(entry_path_with_name),
         }

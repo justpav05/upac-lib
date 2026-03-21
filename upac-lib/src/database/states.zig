@@ -1,13 +1,12 @@
 const std = @import("std");
 const posix = std.posix;
-const tomlz = @import("tomlz");
+const toml = @import("upac-toml");
 
 const Lock = @import("upac-lock").Lock;
 const LockKind = @import("upac-lock").LockKind;
 
-const DbMachine = @import("machine.zig").DbMachine;
-
 const database = @import("database.zig");
+const DbMachine = database.DbMachine;
 const PackageMeta = database.PackageMeta;
 const PackageFiles = database.PackageFiles;
 
@@ -39,7 +38,6 @@ pub fn stateAcquiringLock(machine: *DbMachine) anyerror!void {
 
 fn stateReadingIndex(machine: *DbMachine) anyerror!void {
     try machine.enter(.reading_index);
-    std.debug.print("[readingIndex] start\n", .{});
 
     const index_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, "index.toml" });
     defer machine.allocator.free(index_path);
@@ -64,14 +62,10 @@ fn stateReadingIndex(machine: *DbMachine) anyerror!void {
     };
     defer machine.allocator.free(file_content);
 
-    std.debug.print("[readingIndex] content read ok\n", .{});
-
     machine.index = parseIndex(machine.allocator, file_content) catch |err| {
         stateFailed(machine);
         return err;
     };
-
-    std.debug.print("[readingIndex] parse ok, index len: {}\n", .{machine.index.?.len});
 
     return switch (machine.input) {
         .list => {
@@ -128,15 +122,10 @@ fn stateReadingPackage(machine: *DbMachine) anyerror!void {
 
 fn stateWritingPackage(machine: *DbMachine) anyerror!void {
     try machine.enter(.writing_package);
-    std.debug.print("[writingPackage] start\n", .{});
 
     switch (machine.input) {
         .add => |d| {
-            std.debug.print("[writingPackage] name: '{s}'\n", .{d.meta.name});
-            std.debug.print("[writingPackage] files count: {}\n", .{d.files.paths.len});
-
             const content = serializePackage(machine.allocator, d.meta, d.files) catch |err| {
-                std.debug.print("[writingPackage] serializePackage error: {}\n", .{err});
                 stateFailed(machine);
                 return err;
             };
@@ -253,25 +242,22 @@ fn writeAtomic(allocator: std.mem.Allocator, path: []const u8, content: []const 
 }
 
 fn parseIndex(allocator: std.mem.Allocator, content: []const u8) ![][]const u8 {
-    var table = try tomlz.parse(allocator, content);
-    std.debug.print("[parseIndex] parsed ok\n", .{});
-    defer table.deinit(allocator);
+    var document = try toml.parse(allocator, content);
+    defer document.deinit();
 
-    const arr = table.getArray("packages") orelse
-        return allocator.alloc([]const u8, 0);
+    const packages_array = document.getArray("", "packages") orelse return allocator.alloc([]const u8, 0);
 
-    var names = std.ArrayList([]const u8).init(allocator);
+    var package_names = std.ArrayList([]const u8).init(allocator);
     errdefer {
-        for (names.items) |n| allocator.free(n);
-        names.deinit();
+        for (package_names.items) |package_name| allocator.free(package_name);
+        package_names.deinit();
     }
 
-    for (0..arr.items().len) |index| {
-        const string = arr.getString(index) orelse return error.InvalidIndexEntry;
-        try names.append(try allocator.dupe(u8, string));
+    for (packages_array) |package_name| {
+        try package_names.append(try allocator.dupe(u8, package_name));
     }
 
-    return names.toOwnedSlice();
+    return package_names.toOwnedSlice();
 }
 
 fn serializeIndex(allocator: std.mem.Allocator, names: []const []const u8) ![]u8 {
@@ -290,44 +276,40 @@ fn serializeIndex(allocator: std.mem.Allocator, names: []const []const u8) ![]u8
 }
 
 fn parseMeta(allocator: std.mem.Allocator, content: []const u8) !PackageMeta {
-    var table = try tomlz.parse(allocator, content);
-    defer table.deinit(allocator);
-
-    const package_metadata = table.getTable("meta") orelse return error.MissingMetaSection;
+    var document = try toml.parse(allocator, content);
+    defer document.deinit();
 
     return PackageMeta{
-        .name = try allocator.dupe(u8, package_metadata.getString("name") orelse return error.MissingField),
-        .version = try allocator.dupe(u8, package_metadata.getString("version") orelse return error.MissingField),
-        .author = try allocator.dupe(u8, package_metadata.getString("author") orelse return error.MissingField),
-        .description = try allocator.dupe(u8, package_metadata.getString("description") orelse ""),
-        .license = try allocator.dupe(u8, package_metadata.getString("license") orelse ""),
-        .url = try allocator.dupe(u8, package_metadata.getString("url") orelse ""),
-        .installed_at = package_metadata.getInteger("installed_at") orelse 0,
-        .checksum = try allocator.dupe(u8, package_metadata.getString("checksum") orelse ""),
+        .name = try allocator.dupe(u8, document.getString("meta", "name") orelse return error.MissingField),
+        .version = try allocator.dupe(u8, document.getString("meta", "version") orelse return error.MissingField),
+        .author = try allocator.dupe(u8, document.getString("meta", "author") orelse return error.MissingField),
+        .description = try allocator.dupe(u8, document.getString("meta", "description") orelse ""),
+        .license = try allocator.dupe(u8, document.getString("meta", "license") orelse ""),
+        .url = try allocator.dupe(u8, document.getString("meta", "url") orelse ""),
+        .installed_at = document.getInteger("meta", "installed_at") orelse 0,
+        .checksum = try allocator.dupe(u8, document.getString("meta", "checksum") orelse ""),
     };
 }
 
-fn parseFiles(allocator: std.mem.Allocator, name: []const u8, content: []const u8) !PackageFiles {
-    var table = try tomlz.parse(allocator, content);
-    defer table.deinit(allocator);
+fn parseFiles(allocator: std.mem.Allocator, package_name: []const u8, content: []const u8) !PackageFiles {
+    var document = try toml.parse(allocator, content);
+    defer document.deinit();
 
-    const section = table.getTable("files") orelse return error.MissingFilesSection;
-    const arr = section.getArray("paths") orelse return error.MissingPathsField;
+    const file_paths_array = document.getArray("files", "paths") orelse return error.MissingPathsField;
 
-    var paths = std.ArrayList([]const u8).init(allocator);
+    var file_paths = std.ArrayList([]const u8).init(allocator);
     errdefer {
-        for (paths.items) |p| allocator.free(p);
-        paths.deinit();
+        for (file_paths.items) |file_path| allocator.free(file_path);
+        file_paths.deinit();
     }
 
-    for (0..arr.items().len) |index| {
-        const string = arr.getString(index) orelse return error.InvalidFilePath;
-        try paths.append(try allocator.dupe(u8, string));
+    for (file_paths_array) |file_path| {
+        try file_paths.append(try allocator.dupe(u8, file_path));
     }
 
     return PackageFiles{
-        .name = try allocator.dupe(u8, name),
-        .paths = try paths.toOwnedSlice(),
+        .name = try allocator.dupe(u8, package_name),
+        .paths = try file_paths.toOwnedSlice(),
     };
 }
 

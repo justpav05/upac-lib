@@ -4,21 +4,20 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const tomlz_dep = b.dependency("tomlz", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
     // ── Модули ────────────────────────────────────────────────────────────────
 
     const upac_lock = b.addModule("upac-lock", .{
         .root_source_file = b.path("src/lock/lock.zig"),
     });
 
+    const upac_toml = b.addModule("upac-toml", .{
+        .root_source_file = b.path("src/parser/parser.zig"),
+    });
+
     const upac_database = b.addModule("upac-database", .{
         .root_source_file = b.path("src/database/database.zig"),
     });
-    upac_database.addImport("tomlz", tomlz_dep.module("tomlz"));
+    upac_database.addImport("upac-toml", upac_toml);
     upac_database.addImport("upac-lock", upac_lock);
 
     const upac_installer = b.addModule("upac-installer", .{
