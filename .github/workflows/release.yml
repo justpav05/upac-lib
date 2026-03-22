@@ -27,10 +27,10 @@ jobs:
       - name: Install Zig 0.13.0
         run: |
           curl -L https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar -xJ
-          # Добавляем в PATH именно путь к бинарнику внутри распакованной папки
-          echo "$(pwd)/zig-linux-x86_64-0.13.0" >> $GITHUB_PATH
-          # Проверка версии для логов
-          ./zig-linux-x86_64-0.13.0/zig version
+          # Переносим содержимое в /usr/local, чтобы оно было в системном PATH
+          mv zig-linux-x86_64-0.13.0/* /usr/local/bin/
+          # Проверка
+          zig version
 
       # Исправляем права доступа сразу для всего проекта
       - name: Setup builder user
