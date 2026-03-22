@@ -67,17 +67,13 @@ pub fn stateCopying(machine: *InstallerMachine) anyerror!void {
 pub fn stateLinking(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.linking);
 
-    var repo_dir = std.fs.openDirAbsolute(machine.data.repo_path, .{ .iterate = true }) catch |err| {
-        if (machine.exhausted()) {
-            stateFailed(machine);
-            return err;
-        }
-        machine.retries += 1;
-        return stateCopying(machine);
-    };
-    defer repo_dir.close();
+    const package_repo_path = try std.fs.path.join(
+        machine.allocator,
+        &.{ machine.data.repo_path, machine.data.package_meta.name },
+    );
+    defer machine.allocator.free(package_repo_path);
 
-    hardlinkTree(machine.allocator, machine.data.repo_path, machine.data.root_path) catch |err| {
+    hardlinkTree(machine.allocator, package_repo_path, machine.data.root_path) catch |err| {
         if (err == error.FileNotFound) {
             machine.resetRetries();
             return stateCopying(machine);
@@ -248,29 +244,31 @@ fn hardlinkTree(allocator: std.mem.Allocator, source_path: []const u8, destinati
 }
 
 fn setPermsTree(allocator: std.mem.Allocator, path: []const u8) !void {
-    var target_dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
-    defer target_dir.close();
+    var current_directory = try std.fs.openDirAbsolute(path, .{ .iterate = true });
+    defer current_directory.close();
 
-    try std.posix.fchmod(target_dir.fd, 0o755);
+    try std.posix.fchmod(current_directory.fd, 0o755);
 
-    var target_dir_iter = target_dir.iterate();
-    while (try target_dir_iter.next()) |entry| {
+    var current_directory_iterator = current_directory.iterate();
+    while (try current_directory_iterator.next()) |entry| {
         const entry_path_with_name = try std.fs.path.join(allocator, &.{ path, entry.name });
         defer allocator.free(entry_path_with_name);
 
         switch (entry.kind) {
             .directory => {
-                var sub_dir = try std.fs.openDirAbsolute(entry_path_with_name, .{ .iterate = true });
-                defer sub_dir.close();
+                var child_directory = try std.fs.openDirAbsolute(entry_path_with_name, .{ .iterate = true });
+                defer child_directory.close();
 
-                try std.posix.fchmod(sub_dir.fd, 0o755);
+                try std.posix.fchmod(child_directory.fd, 0o755);
                 try setPermsTree(allocator, entry_path_with_name);
             },
             .file, .sym_link => {
+                const file_stat = try std.fs.cwd().statFile(entry_path_with_name);
+
                 var file = try std.fs.openFileAbsolute(entry_path_with_name, .{ .mode = .read_write });
                 defer file.close();
 
-                try std.posix.fchmod(file.handle, 0o644);
+                try std.posix.fchmod(file.handle, file_stat.mode & 0o777);
             },
             else => {},
         }

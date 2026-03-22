@@ -84,17 +84,31 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !TomlDocument {
     });
 
     var current_table = &document.tables.items[0];
-    var lines = std.mem.splitScalar(u8, content, '\n');
+    var current_position: usize = 0;
 
-    while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \t\r");
+    while (current_position < content.len) {
+        // Пропускаем пробелы и переносы строк
+        while (current_position < content.len and
+            (content[current_position] == ' ' or
+            content[current_position] == '\t' or
+            content[current_position] == '\n' or
+            content[current_position] == '\r')) : (current_position += 1)
+        {}
 
-        if (line.len == 0 or line[0] == '#') continue;
+        if (current_position >= content.len) break;
+
+        // Комментарий
+        if (content[current_position] == '#') {
+            while (current_position < content.len and content[current_position] != '\n') : (current_position += 1) {}
+            continue;
+        }
 
         // Секция [name]
-        if (line[0] == '[') {
-            const closing = std.mem.indexOfScalar(u8, line, ']') orelse return error.InvalidSectionHeader;
-            const section_name = std.mem.trim(u8, line[1..closing], " \t");
+        if (content[current_position] == '[') {
+            current_position += 1;
+            const closing_bracket_position = std.mem.indexOfScalarPos(u8, content, current_position, ']') orelse return error.InvalidSectionHeader;
+            const section_name = std.mem.trim(u8, content[current_position..closing_bracket_position], " \t");
+            current_position = closing_bracket_position + 1;
 
             try document.tables.append(TomlTable{
                 .name = section_name,
@@ -104,56 +118,78 @@ pub fn parse(allocator: std.mem.Allocator, content: []const u8) !TomlDocument {
             continue;
         }
 
-        // key = value
-        const equals_pos = std.mem.indexOfScalar(u8, line, '=') orelse return error.InvalidKeyValue;
-        const key = std.mem.trim(u8, line[0..equals_pos], " \t");
-        const raw_value = std.mem.trim(u8, line[equals_pos + 1 ..], " \t");
+        // Ищем конец строки для key = value
+        const line_end = std.mem.indexOfScalarPos(u8, content, current_position, '\n') orelse content.len;
+        const line = std.mem.trim(u8, content[current_position..line_end], " \t\r");
 
-        const value = try parseValue(allocator, raw_value);
-        try current_table.entries.put(key, value);
+        if (line.len == 0) {
+            current_position = line_end + 1;
+            continue;
+        }
+
+        const equals_position = std.mem.indexOfScalar(u8, line, '=') orelse {
+            current_position = line_end + 1;
+            continue;
+        };
+
+        const key = std.mem.trim(u8, line[0..equals_position], " \t");
+        const raw_value = std.mem.trim(u8, line[equals_position + 1 ..], " \t");
+
+        // Многострочный массив — ищем ] в полном тексте
+        if (raw_value.len > 0 and raw_value[0] == '[') {
+            const array_start = @intFromPtr(raw_value.ptr) - @intFromPtr(content.ptr);
+            const parse_result = try parseStringArray(allocator, content, array_start);
+
+            try current_table.entries.put(key, .{ .string_array = parse_result.value });
+            current_position = parse_result.end_position;
+            continue;
+        }
+
+        const parsed_value = try parseValue(allocator, raw_value);
+        try current_table.entries.put(key, parsed_value);
+        current_position = line_end + 1;
     }
 
     return document;
 }
 
-fn parseValue(allocator: std.mem.Allocator, raw: []const u8) !TomlValue {
-    // Массив ["a", "b"]
-    if (raw.len > 0 and raw[0] == '[') {
-        return .{ .string_array = try parseStringArray(allocator, raw) };
-    }
-
+fn parseValue(allocator: std.mem.Allocator, raw_value: []const u8) !TomlValue {
     // Строка "value"
-    if (raw.len >= 2 and raw[0] == '"') {
-        const closing = std.mem.lastIndexOfScalar(u8, raw, '"') orelse return error.UnterminatedString;
-        if (closing == 0) return error.UnterminatedString;
-        return .{ .string = try allocator.dupe(u8, raw[1..closing]) };
+    if (raw_value.len >= 2 and raw_value[0] == '"') {
+        const closing_quote_position = std.mem.lastIndexOfScalar(u8, raw_value, '"') orelse return error.UnterminatedString;
+        if (closing_quote_position == 0) return error.UnterminatedString;
+        return .{ .string = try allocator.dupe(u8, raw_value[1..closing_quote_position]) };
     }
 
     // Целое число
-    const integer = std.fmt.parseInt(i64, raw, 10) catch return error.InvalidValue;
-    return .{ .integer = integer };
+    const integer_value = std.fmt.parseInt(i64, raw_value, 10) catch return error.InvalidValue;
+    return .{ .integer = integer_value };
 }
 
-fn parseStringArray(allocator: std.mem.Allocator, raw: []const u8) ![][]const u8 {
+fn parseStringArray(allocator: std.mem.Allocator, content: []const u8, start_position: usize) !struct { value: [][]const u8, end_position: usize } {
     var result = std.ArrayList([]const u8).init(allocator);
     errdefer {
-        for (result.items) |s| allocator.free(s);
+        for (result.items) |string_value| allocator.free(string_value);
         result.deinit();
     }
 
-    // Убираем [ и ]
-    const inner = std.mem.trim(u8, raw[1 .. raw.len - 1], " \t");
-    if (inner.len == 0) return result.toOwnedSlice();
+    var current_position = start_position + 1;
+    while (current_position < content.len) {
+        const current_char = content[current_position];
 
-    var position: usize = 0;
-    while (position < inner.len) {
-        // Ищем открывающую кавычку
-        const open_quote = std.mem.indexOfScalarPos(u8, inner, position, '"') orelse break;
-        const close_quote = std.mem.indexOfScalarPos(u8, inner, open_quote + 1, '"') orelse return error.UnterminatedString;
+        if (current_char == ']') {
+            return .{ .value = try result.toOwnedSlice(), .end_position = current_position + 1 };
+        }
 
-        try result.append(try allocator.dupe(u8, inner[open_quote + 1 .. close_quote]));
-        position = close_quote + 1;
+        if (current_char == '"') {
+            const close_quote_position = std.mem.indexOfScalarPos(u8, content, current_position + 1, '"') orelse return error.UnterminatedString;
+            try result.append(try allocator.dupe(u8, content[current_position + 1 .. close_quote_position]));
+            current_position = close_quote_position + 1;
+            continue;
+        }
+
+        current_position += 1;
     }
 
-    return result.toOwnedSlice();
+    return error.UnterminatedArray;
 }

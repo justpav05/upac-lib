@@ -1,15 +1,60 @@
 const std = @import("std");
 
-const fsm = @import("machine.zig");
-const Machine = fsm.Machine;
-const StateId = fsm.StateId;
-
 const states = @import("states.zig");
 
-pub const types = @import("types.zig");
-pub const PackageMeta = types.PackageMeta;
-pub const PrepareRequest = types.PrepareRequest;
-pub const BackendError = types.BackendError;
+// ── Публичные типы ────────────────────────────────────────────────────────────
+pub const PackageMeta = struct {
+    name: []const u8,
+    version: []const u8,
+    author: []const u8,
+    description: []const u8,
+    license: []const u8,
+    url: []const u8,
+    installed_at: i64,
+    checksum: []const u8,
+};
+
+pub const PrepareRequest = struct {
+    pkg_path: []const u8,
+    out_path: []const u8,
+    checksum: []const u8,
+};
+
+pub const BackendError = error{
+    ChecksumMismatch,
+    ExtractionFailed,
+    MetadataNotFound,
+    InvalidPackage,
+    ReadFailed,
+    ArchiveOpenFailed,
+    ArchiveReadFailed,
+    ArchiveExtractFailed,
+};
+
+// ── Внутренние типы FSM ───────────────────────────────────────────────────────
+pub const StateId = enum {
+    verifying,
+    extracting,
+    reading_meta,
+    done,
+    failed,
+};
+
+pub const Machine = struct {
+    request: PrepareRequest,
+    stack: std.ArrayList(StateId),
+    allocator: std.mem.Allocator,
+    meta: ?PackageMeta,
+
+    pub fn enter(self: *Machine, id: StateId) !void {
+        try self.stack.append(id);
+        std.debug.print("[arch → {s}]\n", .{@tagName(id)});
+    }
+
+    pub fn deinit(self: *Machine) void {
+        self.stack.deinit();
+    }
+};
 
 // ── Публичное API ─────────────────────────────────────────────────────────────
 pub fn prepare(request: PrepareRequest, allocator: std.mem.Allocator) !PackageMeta {

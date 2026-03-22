@@ -1,14 +1,12 @@
 const std = @import("std");
 const posix = std.posix;
 
-const types = @import("types.zig");
-const PackageMeta = types.PackageMeta;
-const BackendError = types.BackendError;
+const backend = @import("backend.zig");
+const Machine = backend.Machine;
+const PackageMeta = backend.PackageMeta;
+const BackendError = backend.BackendError;
 
-const fsm = @import("machine.zig");
-const Machine = fsm.Machine;
-
-const c_librarys = @cImport({
+const c_libs = @cImport({
     @cInclude("archive.h");
     @cInclude("archive_entry.h");
 });
@@ -64,35 +62,35 @@ fn stateExtracting(machine: *Machine) anyerror!void {
     const out_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.out_path});
     defer machine.allocator.free(out_path_c);
 
-    const ar = c_librarys.archive_read_new() orelse {
+    const ar = c_libs.archive_read_new() orelse {
         stateFailed(machine);
         return BackendError.ArchiveOpenFailed;
     };
-    defer _ = c_librarys.archive_read_free(ar);
+    defer _ = c_libs.archive_read_free(ar);
 
-    _ = c_librarys.archive_read_support_format_tar(ar);
-    _ = c_librarys.archive_read_support_filter_zstd(ar);
-    _ = c_librarys.archive_read_support_filter_xz(ar);
-    _ = c_librarys.archive_read_support_filter_gzip(ar);
+    _ = c_libs.archive_read_support_format_tar(ar);
+    _ = c_libs.archive_read_support_filter_zstd(ar);
+    _ = c_libs.archive_read_support_filter_xz(ar);
+    _ = c_libs.archive_read_support_filter_gzip(ar);
 
-    if (c_librarys.archive_read_open_filename(ar, pkg_path_c.ptr, 16384) != c_librarys.ARCHIVE_OK) {
+    if (c_libs.archive_read_open_filename(ar, pkg_path_c.ptr, 16384) != c_libs.ARCHIVE_OK) {
         stateFailed(machine);
         return BackendError.ArchiveOpenFailed;
     }
 
-    const aw = c_librarys.archive_write_disk_new() orelse {
+    const aw = c_libs.archive_write_disk_new() orelse {
         stateFailed(machine);
         return BackendError.ArchiveOpenFailed;
     };
-    defer _ = c_librarys.archive_write_free(aw);
+    defer _ = c_libs.archive_write_free(aw);
 
-    _ = c_librarys.archive_write_disk_set_options(
+    _ = c_libs.archive_write_disk_set_options(
         aw,
-        c_librarys.ARCHIVE_EXTRACT_TIME |
-            c_librarys.ARCHIVE_EXTRACT_PERM |
-            c_librarys.ARCHIVE_EXTRACT_FFLAGS,
+        c_libs.ARCHIVE_EXTRACT_TIME |
+            c_libs.ARCHIVE_EXTRACT_PERM |
+            c_libs.ARCHIVE_EXTRACT_FFLAGS,
     );
-    _ = c_librarys.archive_write_disk_set_standard_lookup(aw);
+    _ = c_libs.archive_write_disk_set_standard_lookup(aw);
 
     var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const cwd_path = try std.posix.getcwd(&buf);
@@ -104,15 +102,15 @@ fn stateExtracting(machine: *Machine) anyerror!void {
     defer old_dir.setAsCwd() catch {};
 
     while (true) {
-        var entry: ?*c_librarys.archive_entry = null;
-        const r = c_librarys.archive_read_next_header(ar, &entry);
-        if (r == c_librarys.ARCHIVE_EOF) break;
-        if (r != c_librarys.ARCHIVE_OK) {
+        var entry: ?*c_libs.archive_entry = null;
+        const r = c_libs.archive_read_next_header(ar, &entry);
+        if (r == c_libs.ARCHIVE_EOF) break;
+        if (r != c_libs.ARCHIVE_OK) {
             stateFailed(machine);
             return BackendError.ArchiveReadFailed;
         }
 
-        if (c_librarys.archive_write_header(aw, entry) != c_librarys.ARCHIVE_OK) {
+        if (c_libs.archive_write_header(aw, entry) != c_libs.ARCHIVE_OK) {
             stateFailed(machine);
             return BackendError.ArchiveExtractFailed;
         }
@@ -122,20 +120,20 @@ fn stateExtracting(machine: *Machine) anyerror!void {
             var size: usize = 0;
             var offset: i64 = 0;
 
-            const rd = c_librarys.archive_read_data_block(ar, &block, &size, &offset);
-            if (rd == c_librarys.ARCHIVE_EOF) break;
-            if (rd != c_librarys.ARCHIVE_OK) {
+            const rd = c_libs.archive_read_data_block(ar, &block, &size, &offset);
+            if (rd == c_libs.ARCHIVE_EOF) break;
+            if (rd != c_libs.ARCHIVE_OK) {
                 stateFailed(machine);
                 return BackendError.ArchiveReadFailed;
             }
 
-            if (c_librarys.archive_write_data_block(aw, block, size, offset) != c_librarys.ARCHIVE_OK) {
+            if (c_libs.archive_write_data_block(aw, block, size, offset) != c_libs.ARCHIVE_OK) {
                 stateFailed(machine);
                 return BackendError.ArchiveExtractFailed;
             }
         }
 
-        if (c_librarys.archive_write_finish_entry(aw) != c_librarys.ARCHIVE_OK) {
+        if (c_libs.archive_write_finish_entry(aw) != c_libs.ARCHIVE_OK) {
             stateFailed(machine);
             return BackendError.ArchiveExtractFailed;
         }
@@ -222,10 +220,6 @@ fn stateReadingMeta(machine: *Machine) anyerror!void {
 
 fn stateDone(machine: *Machine) anyerror!void {
     try machine.enter(.done);
-    std.debug.print("✓ prepared '{s}' {s}\n", .{
-        machine.meta.?.name,
-        machine.meta.?.version,
-    });
 }
 
 fn stateFailed(machine: *Machine) void {
