@@ -72,7 +72,7 @@ fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
 
     let repo_path = CSlice::from_str(&machine.config.paths.ostree_path);
     let content_path = CSlice::from_str(&machine.config.paths.repo_path);
-    let branch = CSlice::from_str(&machine.config.ostree.branch);
+    let _branch = CSlice::from_str(&machine.config.ostree.branch);
 
     let commit = CSlice::from_str(&machine.commit);
 

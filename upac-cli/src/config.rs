@@ -3,18 +3,23 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use std::fs;
-
-const CONFIG_PATH: &str = "/etc/upac/config.toml";
+use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub verbose: bool,
+    #[serde(alias = "paths")]
     pub paths: Paths,
     pub ostree: OstreeConfig,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Paths {
-    pub db_path: String,
+    #[serde(alias = "db_path")]
+    pub database_path: String,
+    #[serde(default = "default_config_path")]
+    pub config_path: String,
     pub repo_path: String,
     pub root_path: String,
     pub ostree_path: String,
@@ -27,12 +32,16 @@ pub struct OstreeConfig {
 }
 
 impl Config {
-    pub fn load() -> Result<Self> {
-        let content = fs::read_to_string(CONFIG_PATH)
-            .with_context(|| format!("failed to read config file: {CONFIG_PATH}"))?;
+    pub fn load(config_path: &Path) -> Result<Self> {
+        let config_file_content = fs::read_to_string(config_path)
+            .with_context(|| format!("failed to read config file: {config_path:?}"))?;
 
-        let config: Config = toml::from_str(&content)
-            .with_context(|| format!("failed to parse config file: {CONFIG_PATH}"))?;
+        let config: Config = toml::from_str(&config_file_content).map_err(|err| {
+            anyhow::anyhow!(
+                "failed to parse config file {}: {err}",
+                config_path.display()
+            )
+        })?;
 
         config.validate()?;
 
@@ -40,7 +49,7 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.paths.db_path.is_empty() {
+        if self.paths.database_path.is_empty() {
             anyhow::bail!("config: paths.db_path is empty");
         }
         if self.paths.repo_path.is_empty() {
@@ -58,4 +67,8 @@ impl Config {
 
         Ok(())
     }
+}
+
+fn default_config_path() -> String {
+    "/etc/upac/config.toml".to_owned()
 }

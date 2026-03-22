@@ -4,6 +4,8 @@ use clap::{Parser, Subcommand};
 
 use colored::Colorize;
 
+use std::path::Path;
+
 mod backends;
 mod config;
 mod ffi;
@@ -14,6 +16,8 @@ mod commands {
     pub mod remove;
     pub mod rollback;
 }
+
+const CONFIG_PATH: &str = "/etc/upac/config.toml";
 
 // ── CLI аргументы ─────────────────────────────────────────────────────────────
 #[derive(Parser)]
@@ -68,10 +72,8 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    let config = match &cli.command {
-        Command::Init { .. } => None,
-        _ => Some(config::Config::load()?),
-    };
+    let default_config_path = Path::new(CONFIG_PATH);
+    let config = config::Config::load(&default_config_path)?;
 
     match cli.command {
         Command::Install {
@@ -79,19 +81,19 @@ fn run() -> Result<()> {
             backend,
             checksum,
         } => {
-            commands::install::run(config.unwrap(), file, backend, checksum)?;
+            commands::install::run(config, file, backend, checksum)?;
         }
         Command::Remove { name } => {
-            commands::remove::run(config.unwrap(), name)?;
+            commands::remove::run(config, name)?;
         }
         Command::List { versions, full } => {
-            commands::list::run(config.unwrap(), versions, full)?;
+            commands::list::run(config, versions, full)?;
         }
         Command::Rollback { commit } => {
-            commands::rollback::run(config.unwrap(), commit)?;
+            commands::rollback::run(config, commit)?;
         }
         Command::Init { mode } => {
-            commands::init::run(mode)?;
+            commands::init::run(config, mode)?;
         }
     }
 

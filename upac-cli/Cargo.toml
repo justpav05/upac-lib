@@ -1,6 +1,6 @@
 [package]
 name = "upac"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -11,3 +11,4 @@ libloading = { version = "0.8" }
 toml       = { version = "0.8" }
 colored    = { version = "2" }
 anyhow     = { version = "1" }
+chrono = { version = "0.4" }

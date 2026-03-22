@@ -154,7 +154,7 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         root_path: CSlice::from_str(&machine.config.paths.root_path),
         repo_path: CSlice::from_str(&machine.config.paths.repo_path),
         package_path: CSlice::from_str(tmp_dir),
-        db_path: CSlice::from_str(&machine.config.paths.db_path),
+        db_path: CSlice::from_str(&machine.config.paths.database_path),
         max_retries: 3,
     };
 
@@ -179,7 +179,7 @@ fn state_rolling_back(machine: &mut InstallMachine, reason: String) -> Result<()
         std::fs::remove_dir_all(&repo_pkg).ok();
 
         if let Ok(lib) = UpacLib::load() {
-            let db_path = CSlice::from_str(&machine.config.paths.db_path);
+            let db_path = CSlice::from_str(&machine.config.paths.database_path);
             let name = CSlice::from_str(&meta.name);
 
             let mut list = CSliceArray {
@@ -244,11 +244,13 @@ pub fn run(
         if !matches!(machine.stack.last(), Some(State::Failed(_))) {
             machine.enter(State::Failed(err.to_string()));
         }
-        eprintln!(
-            "{} failed at state {:?}",
-            "✗".red().bold(),
-            machine.stack.last()
-        );
+        if machine.config.verbose {
+            eprintln!(
+                "{} failed at state {:?}",
+                "✗".red().bold(),
+                machine.stack.last()
+            );
+        }
         err
     })
 }

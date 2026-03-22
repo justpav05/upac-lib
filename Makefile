@@ -21,6 +21,8 @@ build-lib:
 build-backends:
 	@echo "--- Building upac-alpm-backend ---"
 	cd $(ROOT_DIR)/upac-alpm-backend && zig build --prefix zig-out
+	@echo "--- Building upac-rpm-backend ---"
+	cd $(ROOT_DIR)/upac-rpm-backend && zig build --prefix zig-out
 
 build-cli:
 	@echo "--- Building upac-cli ---"
@@ -32,10 +34,13 @@ debug-build:
 
 	cd $(ROOT_DIR)/upac-alpm-backend && zig build --prefix zig-out
 
+	cd $(ROOT_DIR)/upac-rpm-backend && zig build --prefix zig-out
+
 	cd $(ROOT_DIR)/upac-cli && \
     	RUSTFLAGS="-C prefer-dynamic=false \
     	-C link-arg=-Wl,-rpath,$(ROOT_DIR)/upac-lib/zig-out/lib \
-    	-C link-arg=-Wl,-rpath,$(ROOT_DIR)/upac-alpm-backend/zig-out/lib" \
+    	-C link-arg=-Wl,-rpath,$(ROOT_DIR)/upac-alpm-backend/zig-out/lib \
+    	-C link-arg=-Wl,-rpath,$(ROOT_DIR)/upac-rpm-backend/zig-out/lib" \
     	cargo build
 
 # ── Arch пакет ────────────────────────────────────────────────────────────────
@@ -55,6 +60,8 @@ pkg-arch: build
 	    $(PKG_DIR)/arch/root/usr/lib/
 	@cp $(ROOT_DIR)/upac-alpm-backend/zig-out/lib/libupac-backend-arch.so \
 	    $(PKG_DIR)/arch/root/usr/lib/
+	@cp $(ROOT_DIR)/upac-rpm-backend/zig-out/lib/libupac-backend-rpm.so \
+        $(PKG_DIR)/arch/root/usr/lib/
 	@cp $(ROOT_DIR)/config.toml.example \
 	    $(PKG_DIR)/arch/root/etc/upac/
 	@cd $(PKG_DIR)/arch && makepkg --nodeps --noconfirm -f
@@ -66,5 +73,7 @@ clean:
 	rm -rf $(ROOT_DIR)/upac-lib/zig-out
 	rm -rf $(ROOT_DIR)/upac-lib/.zig-cache
 	rm -rf $(ROOT_DIR)/upac-alpm-backend/zig-out
+	rm -rf $(ROOT_DIR)/upac-rpm-backend/zig-out
 	rm -rf $(ROOT_DIR)/upac-alpm-backend/.zig-cache
+	rm -rf $(ROOT_DIR)/upac-rpm-backend/.zig-cache
 	cd $(ROOT_DIR)/upac-cli && cargo clean

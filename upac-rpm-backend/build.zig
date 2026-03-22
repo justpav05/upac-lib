@@ -12,13 +12,14 @@ pub fn build(b: *std.Build) void {
         }
     }.call;
 
-    // ── .so ───────────────────────────────────────────────────────────────────
-    const lib = b.addSharedLibrary(.{
-        .name = "upac-backend-arch",
+    const shared_library = b.addSharedLibrary(.{
+        .name = "upac-backend-rpm",
         .root_source_file = b.path("src/backend.zig"),
         .target = target,
         .optimize = optimize,
     });
-    linkSysLibs(lib);
-    b.installArtifact(lib);
+
+    linkSysLibs(shared_library);
+
+    b.installArtifact(shared_library);
 }

@@ -2,6 +2,8 @@ use anyhow::Result;
 
 use colored::Colorize;
 
+use chrono::{LocalResult, TimeZone, Utc};
+
 use crate::config::Config;
 
 use crate::ffi::{CPackageMeta, CSlice, CSliceArray, UpacLib};
@@ -58,7 +60,7 @@ fn state_fetching_list(machine: &mut ListMachine) -> Result<()> {
     machine.enter(State::FetchingList);
 
     let lib = UpacLib::load()?;
-    let db_path = CSlice::from_str(&machine.config.paths.db_path);
+    let db_path = CSlice::from_str(&machine.config.paths.database_path);
 
     let mut list = CSliceArray {
         ptr: std::ptr::null_mut(),
@@ -91,7 +93,7 @@ fn state_fetching_details(machine: &mut ListMachine) -> Result<()> {
     machine.enter(State::FetchingDetails);
 
     let lib = UpacLib::load()?;
-    let db_path = CSlice::from_str(&machine.config.paths.db_path);
+    let db_path = CSlice::from_str(&machine.config.paths.database_path);
 
     for name in &machine.names {
         let mut c_meta = std::mem::MaybeUninit::<CPackageMeta>::uninit();
@@ -170,11 +172,13 @@ pub fn run(config: Config, versions: bool, full: bool) -> Result<()> {
         if !matches!(machine.stack.last(), Some(State::Failed(_))) {
             machine.enter(State::Failed(err.to_string()));
         }
-        eprintln!(
-            "{} failed at state {:?}",
-            "✗".red().bold(),
-            machine.stack.last()
-        );
+        if machine.config.verbose {
+            eprintln!(
+                "{} failed at state {:?}",
+                "✗".red().bold(),
+                machine.stack.last()
+            );
+        }
         err
     })
 }
@@ -184,5 +188,9 @@ fn format_timestamp(ts: i64) -> String {
     if ts == 0 {
         return "unknown".to_owned();
     }
-    format!("unix:{ts}")
+
+    match Utc.timestamp_opt(ts, 0) {
+        LocalResult::Single(datetime) => datetime.format("%H:%M %d-%m-%Y ").to_string(),
+        _ => format!("unix:{ts}"),
+    }
 }

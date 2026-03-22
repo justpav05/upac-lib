@@ -4,8 +4,10 @@ use colored::Colorize;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
+use std::path::Path;
 use std::time::Duration;
 
+use crate::config::Config;
 use crate::ffi::{CRepoMode, CSlice, CSystemPaths, UpacLib};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
@@ -18,14 +20,16 @@ enum State {
 }
 
 struct InitMachine {
-    mode: CRepoMode,
+    c_repo_mode: CRepoMode,
+    config: Config,
     stack: Vec<State>,
 }
 
 impl InitMachine {
-    fn new(mode: CRepoMode) -> Self {
+    fn new(c_repo_mode: CRepoMode, config: Config) -> Self {
         Self {
-            mode,
+            c_repo_mode,
+            config,
             stack: Vec::new(),
         }
     }
@@ -36,13 +40,13 @@ impl InitMachine {
 }
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_validating(machine: &mut InitMachine) -> Result<()> {
-    machine.enter(State::Validating);
+fn state_validating(init_machine: &mut InitMachine) -> Result<()> {
+    init_machine.enter(State::Validating);
 
-    let config_path = std::path::Path::new("/etc/upac/config.toml");
+    let config_path = Path::new(&init_machine.config.paths.config_path);
     if !config_path.exists() {
         anyhow::bail!(
-            "config file not found: /etc/upac/config.toml\n\
+            "config file not found: {}\n\
              Create it before running init. Example:\n\
              \n\
              [paths]\n\
@@ -53,38 +57,37 @@ fn state_validating(machine: &mut InitMachine) -> Result<()> {
              \n\
              [ostree]\n\
              enabled = false\n\
-             branch  = \"packages\""
+             branch  = \"packages\"",
+            init_machine.config.paths.config_path
         );
     }
 
-    state_initializing(machine)
+    state_initializing(init_machine)
 }
 
-fn state_initializing(machine: &mut InitMachine) -> Result<()> {
-    machine.enter(State::Initializing);
+fn state_initializing(init_machine: &mut InitMachine) -> Result<()> {
+    init_machine.enter(State::Initializing);
 
-    let config = crate::config::Config::load()?;
+    let progress_bar = spinner("Initializing system directories...");
 
-    let pb = spinner("Initializing system directories...");
+    let upac_lib = UpacLib::load()?;
 
-    let lib = UpacLib::load()?;
-
-    let paths = CSystemPaths {
-        ostree_path: CSlice::from_str(&config.paths.ostree_path),
-        repo_path: CSlice::from_str(&config.paths.repo_path),
-        db_path: CSlice::from_str(&config.paths.db_path),
+    let c_system_paths = CSystemPaths {
+        ostree_path: CSlice::from_str(&init_machine.config.paths.ostree_path),
+        repo_path: CSlice::from_str(&init_machine.config.paths.repo_path),
+        db_path: CSlice::from_str(&init_machine.config.paths.database_path),
     };
 
-    let code = unsafe { (lib.init_system)(paths, machine.mode) };
+    let code = unsafe { (upac_lib.init_system)(c_system_paths, init_machine.c_repo_mode) };
 
-    pb.finish_and_clear();
+    progress_bar.finish_and_clear();
     UpacLib::check(code, "init")?;
 
-    state_done(machine)
+    state_done(init_machine)
 }
 
-fn state_done(machine: &mut InitMachine) -> Result<()> {
-    machine.enter(State::Done);
+fn state_done(init_machine: &mut InitMachine) -> Result<()> {
+    init_machine.enter(State::Done);
 
     println!("{} system initialized", "✓".green().bold());
     println!(
@@ -96,39 +99,41 @@ fn state_done(machine: &mut InitMachine) -> Result<()> {
 }
 
 // ── Публичное API ─────────────────────────────────────────────────────────────
-pub fn run(mode: String) -> Result<()> {
-    let repo_mode = match mode.as_str() {
+pub fn run(config: Config, repo_mode: String) -> Result<()> {
+    let c_repo_mode = match repo_mode.as_str() {
         "archive" => CRepoMode::Archive,
         "bare" => CRepoMode::Bare,
         "bare-user" => CRepoMode::BareUser,
-        _ => anyhow::bail!("unknown mode '{mode}'. Available: archive, bare, bare-user"),
+        _ => anyhow::bail!("unknown mode '{repo_mode}'. Available: archive, bare, bare-user"),
     };
 
-    let mut machine = InitMachine::new(repo_mode);
+    let mut init_machine = InitMachine::new(c_repo_mode, config);
 
-    state_validating(&mut machine).map_err(|err| {
-        if !matches!(machine.stack.last(), Some(State::Failed(_))) {
-            machine.enter(State::Failed(err.to_string()));
+    state_validating(&mut init_machine).map_err(|err| {
+        if !matches!(init_machine.stack.last(), Some(State::Failed(_))) {
+            init_machine.enter(State::Failed(err.to_string()));
         }
-        eprintln!(
-            "{} failed at state {:?}",
-            "✗".red().bold(),
-            machine.stack.last()
-        );
+        if init_machine.config.verbose {
+            eprintln!(
+                "{} failed at state {:?}",
+                "✗".red().bold(),
+                init_machine.stack.last()
+            );
+        }
         err
     })
 }
 
 // ── Хелперы ───────────────────────────────────────────────────────────────────
 fn spinner(msg: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
+    let progress_bar = ProgressBar::new_spinner();
+    progress_bar.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
             .template("{spinner:.cyan} {msg}")
             .unwrap(),
     );
-    pb.set_message(msg.to_owned());
-    pb.enable_steady_tick(Duration::from_millis(80));
-    pb
+    progress_bar.set_message(msg.to_owned());
+    progress_bar.enable_steady_tick(Duration::from_millis(80));
+    progress_bar
 }

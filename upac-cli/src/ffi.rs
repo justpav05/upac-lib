@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
 use libloading::{Library, Symbol};
 
@@ -146,6 +146,7 @@ impl UpacLib {
             2 => "out of memory",
             3 => "invalid path",
             4 => "file not found",
+            5 => "access denied",
             10 => "lock would block — another process is running",
             20 => "database: missing field",
             21 => "database: missing section",

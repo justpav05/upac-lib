@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
 use libloading::{Library, Symbol};
 
@@ -36,6 +36,7 @@ impl PackageMeta {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackendKind {
     Alpm,
+    Rpm,
 }
 
 impl BackendKind {
@@ -46,19 +47,24 @@ impl BackendKind {
         {
             return Some(Self::Alpm);
         }
+        if path.ends_with(".rpm") {
+            return Some(Self::Rpm);
+        }
         None
     }
 
     pub fn from_flag(string: &str) -> Result<Self> {
         match string {
             "arch" | "alpm" => Ok(Self::Alpm),
-            _ => bail!("unknown backend: '{string}'. Available: arch, alpm"),
+            "rpm" | "fedora" | "opensuse" => Ok(Self::Rpm),
+            _ => bail!("unknown backend: '{string}'. Available: arch, alpm, rpm"),
         }
     }
 
     pub fn so_name(&self) -> &'static str {
         match self {
             Self::Alpm => "libupac-backend-arch.so",
+            Self::Rpm => "libupac-backend-rpm.so",
         }
     }
 }
