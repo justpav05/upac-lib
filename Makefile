@@ -54,6 +54,7 @@ pkg-arch: build
 	@mkdir -p $(PKG_DIR)/arch/root/usr/bin
 	@mkdir -p $(PKG_DIR)/arch/root/usr/lib
 	@mkdir -p $(PKG_DIR)/arch/root/etc/upac
+	@cp $(ROOT_DIR)/pkg-specs/arch/PKGBUILD $(PKG_DIR)/arch/
 	@cp $(ROOT_DIR)/upac-cli/target/x86_64-unknown-linux-gnu/debug/upac \
 	    $(PKG_DIR)/arch/root/usr/bin/
 	@cp $(ROOT_DIR)/upac-lib/zig-out/lib/libupac.so \
@@ -66,6 +67,39 @@ pkg-arch: build
 	    $(PKG_DIR)/arch/root/etc/upac/
 	@cd $(PKG_DIR)/arch && makepkg --nodeps --noconfirm -f
 	@echo "--- Package built: $(PKG_DIR)/arch/$(PKG_NAME).pkg.tar.zst ---"
+
+# ── RPM пакет ─────────────────────────────────────────────────────────────────
+pkg-rpm: build
+	@# Проверяем что есть rpmbuild
+	@if ! command -v rpmbuild &> /dev/null; then \
+		echo "error: pkg-rpm requires rpmbuild (install rpm-build)"; \
+		exit 1; \
+	fi
+	@echo "--- Building RPM package v$(VERSION) ---"
+	@mkdir -p $(PKG_DIR)/rpm/BUILD
+	@mkdir -p $(PKG_DIR)/rpm/RPMS
+	@mkdir -p $(PKG_DIR)/rpm/SOURCES
+	@mkdir -p $(PKG_DIR)/rpm/SPECS
+	@mkdir -p $(PKG_DIR)/rpm/root/usr/bin
+	@mkdir -p $(PKG_DIR)/rpm/root/usr/lib
+	@mkdir -p $(PKG_DIR)/rpm/root/etc/upac
+	@cp $(ROOT_DIR)/pkg-specs/rpm/upac.spec $(PKG_DIR)/rpm/SPECS/
+	@cp $(ROOT_DIR)/upac-cli/target/x86_64-unknown-linux-gnu/debug/upac \
+	    $(PKG_DIR)/rpm/root/usr/bin/
+	@cp $(ROOT_DIR)/upac-lib/zig-out/lib/libupac.so \
+	    $(PKG_DIR)/rpm/root/usr/lib/
+	@cp $(ROOT_DIR)/upac-alpm-backend/zig-out/lib/libupac-backend-arch.so \
+	    $(PKG_DIR)/rpm/root/usr/lib/
+	@cp $(ROOT_DIR)/upac-rpm-backend/zig-out/lib/libupac-backend-rpm.so \
+	    $(PKG_DIR)/rpm/root/usr/lib/
+	@cp $(ROOT_DIR)/config.toml.example \
+	    $(PKG_DIR)/rpm/root/etc/upac/
+	@rpmbuild -bb \
+		--define "_topdir $(PKG_DIR)/rpm" \
+		--define "_rpmdir $(PKG_DIR)/rpm/RPMS" \
+		--define "version $(VERSION)" \
+		$(PKG_DIR)/rpm/SPECS/upac.spec
+	@echo "--- Package built: $(PKG_DIR)/rpm/RPMS/x86_64/upac-$(VERSION)-1.x86_64.rpm ---"
 
 # ── Очистка ───────────────────────────────────────────────────────────────────
 clean:
