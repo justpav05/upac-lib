@@ -6,54 +6,59 @@ on:
       - 'v*'
   workflow_dispatch:
 
-
-
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
-     contents: write
+      contents: write
     container:
       image: archlinux:latest
 
     steps:
-      # ── Подготовка окружения ──────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install dependencies without Zig
         run: |
+          # В контейнере Arch нужно сначала обновить ключи и базу
           pacman -Syu --noconfirm
-          pacman -S --noconfirm \
-            git \
-            base-devel \
-            rust \
-            ostree \
-            glib2 \
-            libarchive \
-            zstd
+          pacman -S --noconfirm git base-devel rust ostree glib2 libarchive zstd rpm-tools
 
-      - name: Install Zig 0.13
+      - name: Install Zig 0.13.0
         run: |
           curl -L https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar -xJ
+          # Добавляем в PATH именно путь к бинарнику внутри распакованной папки
           echo "$(pwd)/zig-linux-x86_64-0.13.0" >> $GITHUB_PATH
+          # Проверка версии для логов
+          ./zig-linux-x86_64-0.13.0/zig version
 
-      # ── Arch пакет ───────────────────────────────────────────────────────
-      - name: Build Arch package
+      # Исправляем права доступа сразу для всего проекта
+      - name: Setup builder user
         run: |
           useradd -m builder
-          chown -R builder .
-          su - builder -c "make -C $(pwd) pkg-arch"
+          chown -R builder:builder .
 
-      - name: Get version
+      - name: Build all packages
+        run: |
+          # Убеждаемся, что у пользователя есть права на папку проекта
+          chown -R builder .
+
+          # Запускаем сборку.
+          # 1. Используем обычный su (сохраняем PATH для Zig).
+          # 2. Добавляем -C $(pwd), чтобы make точно знал, где искать Makefile.
+          # 3. Лучше вызывать 'make build' перед пакетниками, если они не в зависимостях.
+          su builder -c "make build pkg-arch pkg-rpm"
+
+      - name: Get version metadata
         id: version
         run: |
           VERSION=$(grep '^version' upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          PKGREL=$(grep '^pkgrel' PKGBUILD | head -1 | sed 's/pkgrel=//')
+          # Читаем PKGBUILD из правильного места
+          PKGREL=$(grep '^pkgrel' pkg-specs/arch/PKGBUILD | head -1 | sed 's/pkgrel=//')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          # Имя файла должно совпадать с тем, что генерирует makepkg
           echo "pkg=upac-${VERSION}-${PKGREL}-x86_64.pkg.tar.zst" >> $GITHUB_OUTPUT
 
-      # ── Релиз на GitHub ───────────────────────────────────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -61,18 +66,19 @@ jobs:
           name: "upac v${{ steps.version.outputs.version }}"
           body: |
             ## Installation
-
             ### Arch Linux
             ```bash
-            pacman -U upac-${{ steps.version.outputs.version }}-x86_64.pkg.tar.zst
+            pacman -U ${{ steps.version.outputs.pkg }}
             ```
 
-            ### Manual
-            Copy `libupac.so` and `libupac-backend-arch.so` to `/usr/lib/`,
-            `upac` binary to `/usr/bin/`, and create `/etc/upac/config.toml`
-            from the provided example.
-          files: |
-            pkg/arch/${{ steps.version.outputs.pkg }}
-            config.toml.example
+            ### RPM
+            ```bash
+            rpm -Uvh pkg/rpm/RPMS/x86_64/upac-${{ steps.version.outputs.version }}-1.x86_64.rpm
+            ```
+
+            files: |
+              pkg/arch/${{ steps.version.outputs.pkg }}
+              pkg/rpm/RPMS/x86_64/upac-${{ steps.version.outputs.version }}-1.x86_64.rpm
+              config.toml.example
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
