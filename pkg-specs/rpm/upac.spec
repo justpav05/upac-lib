@@ -38,5 +38,5 @@ ldconfig
 ldconfig
 
 %changelog
-* %(date "+%a %b %d %Y") upac maintainer <maintainer@example.com> - %{version}-1
+* %(date "+%a %b %d %Y") upac maintainer <aksenovpaveldmitrievich@gmail.com> - %{version}-1
 - Initial package
