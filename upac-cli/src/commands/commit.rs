@@ -37,60 +37,62 @@ impl CommitMachine {
 }
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_validating(machine: &mut CommitMachine) -> Result<()> {
-    machine.enter(State::Validating);
+fn state_validating(commit_machine: &mut CommitMachine) -> Result<()> {
+    commit_machine.enter(State::Validating);
 
-    if !machine.config.ostree.enabled {
+    if !commit_machine.config.ostree.enabled {
         anyhow::bail!("OStree is disabled in config. Set ostree.enabled = true to use commit");
     }
 
-    state_committing(machine)
+    state_committing(commit_machine)
 }
 
-fn state_committing(machine: &mut CommitMachine) -> Result<()> {
-    machine.enter(State::Committing);
+fn state_committing(commit_machine: &mut CommitMachine) -> Result<()> {
+    commit_machine.enter(State::Committing);
 
     let progress_bar = spinner("Creating OStree snapshot...");
 
     let upac_lib = UpacLib::load()?;
 
-    let request = CCommitRequest {
-        repo_path: CSlice::from_str(&machine.config.paths.ostree_path),
-        content_path: CSlice::from_str(&machine.config.paths.repo_path),
-        branch: CSlice::from_str(&machine.config.ostree.branch),
+    let c_commit_request = CCommitRequest {
+        repo_path: CSlice::from_str(&commit_machine.config.paths.ostree_path),
+        content_path: CSlice::from_str(&commit_machine.config.paths.repo_path),
+        branch: CSlice::from_str(&commit_machine.config.ostree.branch),
         operation: COstreeOperation::Manual,
         packages: std::ptr::null(),
         packages_len: 0,
-        db_path: CSlice::from_str(&machine.config.paths.database_path),
+        db_path: CSlice::from_str(&commit_machine.config.paths.database_path),
     };
 
-    let code = unsafe { (upac_lib.ostree_commit)(request) };
+    let return_code = unsafe { (upac_lib.ostree_commit)(c_commit_request) };
 
     progress_bar.finish_and_clear();
-    UpacLib::check(code, "commit")?;
+    UpacLib::check(return_code, "commit")?;
 
-    state_done(machine)
+    state_done(commit_machine)
 }
 
-fn state_done(machine: &mut CommitMachine) -> Result<()> {
-    machine.enter(State::Done);
+fn state_done(commit_machine: &mut CommitMachine) -> Result<()> {
+    commit_machine.enter(State::Done);
+
     println!("{} snapshot created", "✓".green().bold());
+
     Ok(())
 }
 
 // ── Публичное API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config) -> Result<()> {
-    let mut machine = CommitMachine::new(config);
+    let mut commit_machine = CommitMachine::new(config);
 
-    state_validating(&mut machine).map_err(|err| {
-        if !matches!(machine.stack.last(), Some(State::Failed(_))) {
-            machine.enter(State::Failed(err.to_string()));
+    state_validating(&mut commit_machine).map_err(|err| {
+        if !matches!(commit_machine.stack.last(), Some(State::Failed(_))) {
+            commit_machine.enter(State::Failed(err.to_string()));
         }
-        if machine.config.verbose {
+        if commit_machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
                 "✗".red().bold(),
-                machine.stack.last()
+                commit_machine.stack.last()
             );
         }
         err

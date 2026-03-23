@@ -44,6 +44,7 @@ fn state_validating(init_machine: &mut InitMachine) -> Result<()> {
     init_machine.enter(State::Validating);
 
     let config_path = Path::new(&init_machine.config.paths.config_path);
+
     if !config_path.exists() {
         anyhow::bail!(
             "config file not found: {}\n\
@@ -59,7 +60,7 @@ fn state_validating(init_machine: &mut InitMachine) -> Result<()> {
              enabled = false\n\
              branch  = \"packages\"",
             init_machine.config.paths.config_path
-        );
+        ); //TODO: Вынести это в отдельный код
     }
 
     state_initializing(init_machine)
@@ -78,10 +79,10 @@ fn state_initializing(init_machine: &mut InitMachine) -> Result<()> {
         db_path: CSlice::from_str(&init_machine.config.paths.database_path),
     };
 
-    let code = unsafe { (upac_lib.init_system)(c_system_paths, init_machine.c_repo_mode) };
+    let return_code = unsafe { (upac_lib.init_system)(c_system_paths, init_machine.c_repo_mode) };
 
     progress_bar.finish_and_clear();
-    UpacLib::check(code, "init")?;
+    UpacLib::check(return_code, "init")?;
 
     state_done(init_machine)
 }
@@ -125,7 +126,7 @@ pub fn run(config: Config, repo_mode: String) -> Result<()> {
 }
 
 // ── Хелперы ───────────────────────────────────────────────────────────────────
-fn spinner(msg: &str) -> ProgressBar {
+fn spinner(message: &str) -> ProgressBar {
     let progress_bar = ProgressBar::new_spinner();
     progress_bar.set_style(
         ProgressStyle::default_spinner()
@@ -133,7 +134,7 @@ fn spinner(msg: &str) -> ProgressBar {
             .template("{spinner:.cyan} {msg}")
             .unwrap(),
     );
-    progress_bar.set_message(msg.to_owned());
+    progress_bar.set_message(message.to_owned());
     progress_bar.enable_steady_tick(Duration::from_millis(80));
     progress_bar
 }

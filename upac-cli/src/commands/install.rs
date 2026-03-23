@@ -4,12 +4,13 @@ use colored::Colorize;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
+use std::fs;
+use std::process;
 use std::time::Duration;
 
 use crate::backends::{Backend, BackendKind, PackageMeta};
 
 use crate::config::Config;
-
 use crate::ffi::{CCommitRequest, CInstallRequest, COstreeOperation, CSlice, CSliceArray, UpacLib};
 
 const MAX_RETRIES: u8 = 2;
@@ -35,7 +36,7 @@ struct InstallMachine {
 
     kind: Option<BackendKind>,
     tmp_dir: Option<String>,
-    meta: Option<PackageMeta>,
+    package_meta: Option<PackageMeta>,
 
     stack: Vec<State>,
 }
@@ -50,7 +51,7 @@ impl InstallMachine {
             retries: 0,
             kind: None,
             tmp_dir: None,
-            meta: None,
+            package_meta: None,
             stack: Vec::new(),
         }
     }
@@ -73,194 +74,201 @@ impl Drop for InstallMachine {
 }
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_detecting_backend(machine: &mut InstallMachine) -> Result<()> {
-    machine.enter(State::DetectingBackend);
+fn state_detecting_backend(install_machine: &mut InstallMachine) -> Result<()> {
+    install_machine.enter(State::DetectingBackend);
 
-    let kind = if let Some(flag) = &machine.backend.clone() {
+    let kind = if let Some(flag) = &install_machine.backend.clone() {
         BackendKind::from_flag(flag)?
     } else {
-        BackendKind::detect(&machine.file).ok_or_else(|| {
+        BackendKind::detect(&install_machine.file).ok_or_else(|| {
             anyhow::anyhow!(
                 "cannot detect backend for '{}'. Use --backend to specify one",
-                machine.file
+                install_machine.file
             )
         })?
     };
 
     println!("{} backend: {:?}", "→".cyan(), kind);
-    machine.kind = Some(kind);
+    install_machine.kind = Some(kind);
 
-    state_preparing_package(machine)
+    state_preparing_package(install_machine)
 }
 
-fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
-    machine.enter(State::PreparingPackage);
+fn state_preparing_package(install_machine: &mut InstallMachine) -> Result<()> {
+    install_machine.enter(State::PreparingPackage);
 
-    let pb = spinner("Verifying and extracting package...");
+    let progress_bar = spinner("Verifying and extracting package...");
 
-    let tmp = format!("/tmp/upac_install_{}", std::process::id());
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp)?;
-    machine.tmp_dir = Some(tmp.clone());
+    let tmp_string_path = format!("/tmp/upac_install_{}", process::id());
 
-    let backend = Backend::load(machine.kind.as_ref().unwrap())?;
+    fs::remove_dir_all(&tmp_string_path).ok();
+    fs::create_dir_all(&tmp_string_path)?;
 
-    let abs_file = std::fs::canonicalize(&machine.file)
-        .map_err(|err| anyhow::anyhow!("cannot resolve path '{}': {err}", machine.file))?;
+    install_machine.tmp_dir = Some(tmp_string_path.clone());
+
+    let backend = Backend::load(install_machine.kind.as_ref().unwrap())?;
+
+    let abs_file = std::fs::canonicalize(&install_machine.file)
+        .map_err(|err| anyhow::anyhow!("cannot resolve path '{}': {err}", install_machine.file))?;
     let abs_file_str = abs_file
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("invalid path encoding"))?
         .to_owned();
 
-    let meta = backend
-        .prepare(&abs_file_str, &tmp, &machine.checksum)
+    let package_meta = backend
+        .prepare(&abs_file_str, &tmp_string_path, &install_machine.checksum)
         .map_err(|err| {
-            pb.finish_and_clear();
+            progress_bar.finish_and_clear();
             err
         })?;
 
-    pb.finish_and_clear();
+    progress_bar.finish_and_clear();
     println!(
         "{} {} {}",
         "✓".green().bold(),
-        meta.name.bold(),
-        meta.version.dimmed()
+        package_meta.name.bold(),
+        package_meta.version.dimmed()
     );
 
-    machine.meta = Some(meta);
+    install_machine.package_meta = Some(package_meta);
 
-    state_installing(machine)
+    state_installing(install_machine)
 }
 
-fn state_installing(machine: &mut InstallMachine) -> Result<()> {
-    machine.enter(State::Installing);
+fn state_installing(install_machine: &mut InstallMachine) -> Result<()> {
+    install_machine.enter(State::Installing);
 
-    let pb = spinner(&format!(
+    let progress_bar = spinner(&format!(
         "Installing{}...",
-        if machine.retries > 0 {
-            format!(" (retry {}/{})", machine.retries, MAX_RETRIES)
+        if install_machine.retries > 0 {
+            format!(" (retry {}/{})", install_machine.retries, MAX_RETRIES)
         } else {
             String::new()
         }
     ));
 
-    let lib = UpacLib::load()?;
+    let upac_lib = UpacLib::load()?;
 
-    let meta = machine.meta.as_ref().unwrap();
-    let tmp_dir = machine.tmp_dir.as_ref().unwrap();
-    let c_meta = meta.as_c();
+    let package_meta = install_machine.package_meta.as_ref().unwrap();
 
-    let request = CInstallRequest {
-        meta: c_meta,
-        root_path: CSlice::from_str(&machine.config.paths.root_path),
-        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
-        package_path: CSlice::from_str(tmp_dir),
-        db_path: CSlice::from_str(&machine.config.paths.database_path),
+    let tmp_dir_string_path = install_machine.tmp_dir.as_ref().unwrap();
+
+    let c_package_meta = package_meta.as_c();
+
+    let c_install_request = CInstallRequest {
+        meta: c_package_meta,
+        root_path: CSlice::from_str(&install_machine.config.paths.root_path),
+        repo_path: CSlice::from_str(&install_machine.config.paths.repo_path),
+        package_path: CSlice::from_str(tmp_dir_string_path),
+        db_path: CSlice::from_str(&install_machine.config.paths.database_path),
         max_retries: 3,
     };
 
-    let code = unsafe { (lib.install)(request) };
+    let return_code = unsafe { (upac_lib.install)(c_install_request) };
 
-    pb.finish_and_clear();
+    progress_bar.finish_and_clear();
 
-    if let Err(err) = UpacLib::check(code, "install") {
-        return state_rolling_back(machine, err.to_string());
+    if let Err(err) = UpacLib::check(return_code, "install") {
+        return state_rolling_back(install_machine, err.to_string());
     }
 
-    if machine.config.ostree.enabled {
-        return state_committing(machine);
+    if install_machine.config.ostree.enabled {
+        return state_committing(install_machine);
     }
 
-    state_done(machine)
+    state_done(install_machine)
 }
 
-fn state_committing(machine: &mut InstallMachine) -> Result<()> {
-    machine.enter(State::Committing);
+fn state_committing(install_machine: &mut InstallMachine) -> Result<()> {
+    install_machine.enter(State::Committing);
 
     let progress_bar = spinner("Creating OStree snapshot...");
 
     let upac_lib = UpacLib::load()?;
-    let meta = machine.meta.as_ref().unwrap();
-    let c_package_meta = meta.as_c();
+    let package_meta = install_machine.package_meta.as_ref().unwrap();
+    let c_package_meta = package_meta.as_c();
 
-    let request = CCommitRequest {
-        repo_path: CSlice::from_str(&machine.config.paths.ostree_path),
-        content_path: CSlice::from_str(&machine.config.paths.repo_path),
-        branch: CSlice::from_str(&machine.config.ostree.branch),
+    let c_commit_request = CCommitRequest {
+        repo_path: CSlice::from_str(&install_machine.config.paths.ostree_path),
+        content_path: CSlice::from_str(&install_machine.config.paths.repo_path),
+        branch: CSlice::from_str(&install_machine.config.ostree.branch),
         operation: COstreeOperation::Install,
         packages: &c_package_meta as *const _,
         packages_len: 1,
-        db_path: CSlice::from_str(&machine.config.paths.database_path),
+        db_path: CSlice::from_str(&install_machine.config.paths.database_path),
     };
 
-    let code = unsafe { (upac_lib.ostree_commit)(request) };
+    let return_code = unsafe { (upac_lib.ostree_commit)(c_commit_request) };
 
     progress_bar.finish_and_clear();
 
-    if let Err(err) = UpacLib::check(code, "ostree commit") {
+    if let Err(err) = UpacLib::check(return_code, "ostree commit") {
         eprintln!("{} ostree snapshot failed: {err}", "⚠".yellow().bold());
 
-        return state_rolling_back(machine, err.to_string());
+        return state_rolling_back(install_machine, err.to_string());
     }
 
     println!("{} snapshot created", "✓".green().bold());
 
-    state_done(machine)
+    state_done(install_machine)
 }
 
-fn state_rolling_back(machine: &mut InstallMachine, reason: String) -> Result<()> {
-    machine.enter(State::RollingBack);
+fn state_rolling_back(install_machine: &mut InstallMachine, reason: String) -> Result<()> {
+    install_machine.enter(State::RollingBack);
 
-    let pb = spinner("Rolling back...");
+    let progress_bar = spinner("Rolling back...");
 
-    if let Some(meta) = machine.meta.as_ref() {
-        let repo_pkg = format!("{}/{}", machine.config.paths.repo_path, meta.name);
-        std::fs::remove_dir_all(&repo_pkg).ok();
+    if let Some(package_meta) = install_machine.package_meta.as_ref() {
+        let repo_package_string_path = format!(
+            "{}/{}",
+            install_machine.config.paths.repo_path, package_meta.name
+        );
+        std::fs::remove_dir_all(&repo_package_string_path).ok();
 
-        if let Ok(lib) = UpacLib::load() {
-            let db_path = CSlice::from_str(&machine.config.paths.database_path);
-            let name = CSlice::from_str(&meta.name);
+        if let Ok(upac_lib) = UpacLib::load() {
+            let c_database_path = CSlice::from_str(&install_machine.config.paths.database_path);
+            let c_package_name = CSlice::from_str(&package_meta.name);
 
-            let mut list = CSliceArray {
+            let mut c_list = CSliceArray {
                 ptr: std::ptr::null_mut(),
                 len: 0,
             };
-            let list_code = unsafe { (lib.db_list_packages)(db_path, &mut list) };
-            if list_code == 0 {
-                unsafe { (lib.list_free)(&mut list) };
-                let _ = unsafe { (lib.db_remove_package)(db_path, name) };
+            let return_code = unsafe { (upac_lib.db_list_packages)(c_database_path, &mut c_list) };
+            if return_code == 0 {
+                unsafe { (upac_lib.list_free)(&mut c_list) };
+                let _ = unsafe { (upac_lib.db_remove_package)(c_database_path, c_package_name) };
             }
         }
     }
 
-    pb.finish_and_clear();
+    progress_bar.finish_and_clear();
 
-    if machine.exhausted() {
-        let msg = format!("install failed after {} retries: {reason}", MAX_RETRIES);
-        machine.enter(State::Failed(msg.clone()));
-        anyhow::bail!("{msg}");
+    if install_machine.exhausted() {
+        let message = format!("install failed after {} retries: {reason}", MAX_RETRIES);
+        install_machine.enter(State::Failed(message.clone()));
+        anyhow::bail!("{message}");
     }
 
-    machine.retries += 1;
+    install_machine.retries += 1;
     eprintln!(
         "{} retry {}/{}: {reason}",
         "⚠".yellow().bold(),
-        machine.retries,
+        install_machine.retries,
         MAX_RETRIES
     );
 
-    state_preparing_package(machine)
+    state_preparing_package(install_machine)
 }
 
-fn state_done(machine: &mut InstallMachine) -> Result<()> {
-    machine.enter(State::Done);
+fn state_done(install_machine: &mut InstallMachine) -> Result<()> {
+    install_machine.enter(State::Done);
 
-    let meta = machine.meta.as_ref().unwrap();
+    let package_meta = install_machine.package_meta.as_ref().unwrap();
     println!(
         "{} installed {} {}",
         "✓".green().bold(),
-        meta.name.bold(),
-        meta.version.dimmed()
+        package_meta.name.bold(),
+        package_meta.version.dimmed()
     );
 
     Ok(())
@@ -273,21 +281,21 @@ pub fn run(
     backend: Option<String>,
     checksum: Option<String>,
 ) -> Result<()> {
-    let checksum = checksum.ok_or_else(|| {
+    let package_checksum = checksum.ok_or_else(|| {
         anyhow::anyhow!("--checksum is required. Provide the SHA-256 hash of the package file")
     })?;
 
-    let mut machine = InstallMachine::new(config, file, backend, checksum);
+    let mut install_machine = InstallMachine::new(config, file, backend, package_checksum);
 
-    state_detecting_backend(&mut machine).map_err(|err| {
-        if !matches!(machine.stack.last(), Some(State::Failed(_))) {
-            machine.enter(State::Failed(err.to_string()));
+    state_detecting_backend(&mut install_machine).map_err(|err| {
+        if !matches!(install_machine.stack.last(), Some(State::Failed(_))) {
+            install_machine.enter(State::Failed(err.to_string()));
         }
-        if machine.config.verbose {
+        if install_machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
                 "✗".red().bold(),
-                machine.stack.last()
+                install_machine.stack.last()
             );
         }
         err
@@ -295,16 +303,15 @@ pub fn run(
 }
 
 // ── Хелперы ───────────────────────────────────────────────────────────────────
-
-fn spinner(msg: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
+fn spinner(message: &str) -> ProgressBar {
+    let progress_bar = ProgressBar::new_spinner();
+    progress_bar.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
             .template("{spinner:.cyan} {msg}")
             .unwrap(),
     );
-    pb.set_message(msg.to_owned());
-    pb.enable_steady_tick(Duration::from_millis(80));
-    pb
+    progress_bar.set_message(message.to_owned());
+    progress_bar.enable_steady_tick(Duration::from_millis(80));
+    progress_bar
 }
