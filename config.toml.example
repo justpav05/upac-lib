@@ -1,5 +1,7 @@
 # upac configuration file
 # Copy to /etc/upac/config.toml and adjust paths as needed
+step_retries = 3
+verbose = false
 
 [paths]
 # Directory where package metadata is stored
