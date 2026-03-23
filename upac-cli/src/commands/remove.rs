@@ -4,45 +4,36 @@ use colored::Colorize;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
+use std::mem::MaybeUninit;
 use std::time::Duration;
 
+use crate::backends::PackageMeta;
 use crate::config::Config;
-
-use crate::ffi::{CSlice, CSliceArray, UpacLib};
-
-const MAX_RETRIES: u8 = 10;
+use crate::ffi::{CPackageMeta, CSlice, CUninstallRequest, UpacLib};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, PartialEq)]
 enum State {
-    ReadingMeta,
-    RemovingLinks,
-    RemovingFiles,
-    UnregisteringPackage,
-    RollingBack,
+    Validating,
+    Uninstalling,
+    Committing,
     Done,
     Failed(String),
 }
 
 struct RemoveMachine {
     config: Config,
-    name: String,
-    retries: u8,
-
-    // Заполняется в ReadingMeta
-    files: Vec<String>,
-
+    package_name: String,
+    package_meta: Option<PackageMeta>,
     stack: Vec<State>,
 }
 
 impl RemoveMachine {
-    fn new(config: Config, name: String) -> Self {
+    fn new(config: Config, package_name: String) -> Self {
         Self {
             config,
-            name,
-            retries: 0,
-            files: Vec::new(),
+            package_name,
+            package_meta: None,
             stack: Vec::new(),
         }
     }
@@ -50,190 +41,112 @@ impl RemoveMachine {
     fn enter(&mut self, state: State) {
         self.stack.push(state);
     }
-
-    fn exhausted(&self) -> bool {
-        self.retries >= MAX_RETRIES
-    }
 }
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_reading_meta(machine: &mut RemoveMachine) -> Result<()> {
-    machine.enter(State::ReadingMeta);
+fn state_validating(machine: &mut RemoveMachine) -> Result<()> {
+    machine.enter(State::Validating);
 
-    let lib = UpacLib::load()?;
+    let upac_lib = UpacLib::load()?;
+    let database_path = CSlice::from_str(&machine.config.paths.database_path);
+    let name = CSlice::from_str(&machine.package_name);
 
-    let db_path = CSlice::from_str(&machine.config.paths.database_path);
-    let name = CSlice::from_str(&machine.name);
+    let mut c_test_package_meta = MaybeUninit::uninit();
+    let code =
+        unsafe { (upac_lib.db_get_meta)(database_path, name, c_test_package_meta.as_mut_ptr()) };
 
-    // Читаем список файлов пакета из БД
-    let mut c_files = crate::ffi::CPackageFiles {
-        name: CSlice::empty(),
-        paths: CSliceArray {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-        },
+    if code != 0 {
+        anyhow::bail!("package '{}' is not installed", machine.package_name);
+    }
+
+    let c_package_meta = unsafe { c_test_package_meta.assume_init() };
+    let package_meta = unsafe {
+        PackageMeta {
+            name: c_package_meta.name.as_str().to_owned(),
+            version: c_package_meta.version.as_str().to_owned(),
+            author: c_package_meta.author.as_str().to_owned(),
+            description: c_package_meta.description.as_str().to_owned(),
+            license: c_package_meta.license.as_str().to_owned(),
+            url: c_package_meta.url.as_str().to_owned(),
+            installed_at: c_package_meta.installed_at,
+            checksum: c_package_meta.checksum.as_str().to_owned(),
+        }
     };
 
-    let code = unsafe { (lib.db_get_files)(db_path, name, &mut c_files) };
-    UpacLib::check(code, "get files")?;
+    let mut package_meta_owned = c_package_meta;
+    unsafe { (upac_lib.meta_free)(&mut package_meta_owned) };
 
-    // Копируем пути в Rust память
-    let paths = unsafe { std::slice::from_raw_parts(c_files.paths.ptr, c_files.paths.len) };
+    machine.package_meta = Some(package_meta);
 
-    machine.files = paths
-        .iter()
-        .map(|s| unsafe { s.as_str().to_owned() })
-        .collect();
-    unsafe { (lib.files_free)(&mut c_files) };
+    println!("{} removing {}", "→".cyan(), machine.package_name.bold());
 
-    println!(
-        "{} removing {} ({} files)",
-        "→".cyan(),
-        machine.name.bold(),
-        machine.files.len()
-    );
-
-    state_removing_links(machine)
+    state_uninstalling(machine)
 }
 
-fn state_removing_links(machine: &mut RemoveMachine) -> Result<()> {
-    machine.enter(State::RemovingLinks);
+fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
+    machine.enter(State::Uninstalling);
 
-    let pb = spinner(&format!(
-        "Removing links{}...",
-        if machine.retries > 0 {
-            format!(" (retry {}/{})", machine.retries, MAX_RETRIES)
-        } else {
-            String::new()
-        }
-    ));
+    let progress_bar = spinner("Removing package...");
 
-    for file in &machine.files {
-        // Строим путь в root_path
-        // file уже абсолютный путь типа /usr/bin/foo
-        let root_file = format!(
-            "{}{}",
-            machine.config.paths.root_path.trim_end_matches('/'),
-            file
-        );
+    let upac_lib = UpacLib::load()?;
 
-        match std::fs::remove_file(&root_file) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // пропускаем
-            Err(e) => {
-                pb.finish_and_clear();
-                return state_rolling_back(
-                    machine,
-                    format!("failed to remove link {root_file}: {e}"),
-                );
-            }
-        }
+    let request = CUninstallRequest {
+        package_name: CSlice::from_str(&machine.package_name),
+        root_path: CSlice::from_str(&machine.config.paths.root_path),
+        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
+        db_path: CSlice::from_str(&machine.config.paths.database_path),
+        max_retries: 3,
+    };
+
+    let code = unsafe { (upac_lib.uninstall)(request) };
+
+    progress_bar.finish_and_clear();
+    UpacLib::check(code, "uninstall")?;
+
+    if machine.config.ostree.enabled {
+        return state_committing(machine);
     }
-
-    pb.finish_and_clear();
-    state_removing_files(machine)
-}
-
-fn state_removing_files(machine: &mut RemoveMachine) -> Result<()> {
-    machine.enter(State::RemovingFiles);
-
-    let pb = spinner("Removing files from repo...");
-
-    for file in &machine.files {
-        let repo_file = format!(
-            "{}{}",
-            machine.config.paths.repo_path.trim_end_matches('/'),
-            file
-        );
-
-        match std::fs::remove_file(&repo_file) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // пропускаем
-            Err(e) => {
-                pb.finish_and_clear();
-                return state_rolling_back(
-                    machine,
-                    format!("failed to remove file {repo_file}: {e}"),
-                );
-            }
-        }
-    }
-
-    pb.finish_and_clear();
-    state_unregistering_package(machine)
-}
-
-fn state_unregistering_package(machine: &mut RemoveMachine) -> Result<()> {
-    machine.enter(State::UnregisteringPackage);
-
-    let pb = spinner("Updating database...");
-
-    let lib = UpacLib::load()?;
-    let db = CSlice::from_str(&machine.config.paths.database_path);
-    let name = CSlice::from_str(&machine.name);
-
-    let code = unsafe { (lib.db_remove_package)(db, name) };
-
-    pb.finish_and_clear();
-    UpacLib::check(code, "unregister package")?;
 
     state_done(machine)
 }
 
-fn state_rolling_back(machine: &mut RemoveMachine, reason: String) -> Result<()> {
-    machine.enter(State::RollingBack);
+fn state_committing(machine: &mut RemoveMachine) -> Result<()> {
+    machine.enter(State::Committing);
 
-    let pb = spinner("Rolling back — restoring links...");
+    let progress_bar = spinner("Creating OStree snapshot...");
 
-    // Восстанавливаем хардлинки из repo_path обратно в root_path
-    for file in &machine.files {
-        let repo_file = format!(
-            "{}{}",
-            machine.config.paths.repo_path.trim_end_matches('/'),
-            file
-        );
-        let root_file = format!(
-            "{}{}",
-            machine.config.paths.root_path.trim_end_matches('/'),
-            file
-        );
+    let upac_lib = UpacLib::load()?;
 
-        // Создаём промежуточные директории если нужно
-        if let Some(parent) = std::path::Path::new(&root_file).parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
+    let request = crate::ffi::CCommitRequest {
+        repo_path: CSlice::from_str(&machine.config.paths.ostree_path),
+        content_path: CSlice::from_str(&machine.config.paths.repo_path),
+        branch: CSlice::from_str(&machine.config.ostree.branch),
+        operation: crate::ffi::COstreeOperation::Remove,
+        packages: std::ptr::null(),
+        packages_len: 0,
+        db_path: CSlice::from_str(&machine.config.paths.database_path),
+    };
 
-        // Восстанавливаем хардлинк если файл в репо ещё есть
-        if std::path::Path::new(&repo_file).exists() {
-            std::fs::hard_link(&repo_file, &root_file).ok();
-        }
+    let code = unsafe { (upac_lib.ostree_commit)(request) };
+
+    progress_bar.finish_and_clear();
+
+    if let Err(err) = UpacLib::check(code, "ostree commit") {
+        eprintln!("{} ostree snapshot failed: {err}", "⚠".yellow().bold());
+        return Ok(());
     }
 
-    pb.finish_and_clear();
-
-    if machine.exhausted() {
-        let msg = format!("remove failed after {} retries: {reason}", MAX_RETRIES);
-        machine.enter(State::Failed(msg.clone()));
-        anyhow::bail!("{msg}");
-    }
-
-    machine.retries += 1;
-    if machine.config.verbose {
-        eprintln!(
-            "{} retry {}/{}: {reason}",
-            "⚠".yellow().bold(),
-            machine.retries,
-            MAX_RETRIES
-        );
-    }
-
-    // Retry — заново с удаления линков
-    state_removing_links(machine)
+    println!("{} snapshot created", "✓".green().bold());
+    state_done(machine)
 }
 
 fn state_done(machine: &mut RemoveMachine) -> Result<()> {
     machine.enter(State::Done);
-    println!("{} removed {}", "✓".green().bold(), machine.name.bold());
+    println!(
+        "{} removed {}",
+        "✓".green().bold(),
+        machine.package_name.bold()
+    );
     Ok(())
 }
 
@@ -241,7 +154,7 @@ fn state_done(machine: &mut RemoveMachine) -> Result<()> {
 pub fn run(config: Config, package_name: String) -> Result<()> {
     let mut machine = RemoveMachine::new(config, package_name);
 
-    state_reading_meta(&mut machine).map_err(|err| {
+    state_validating(&mut machine).map_err(|err| {
         if !matches!(machine.stack.last(), Some(State::Failed(_))) {
             machine.enter(State::Failed(err.to_string()));
         }

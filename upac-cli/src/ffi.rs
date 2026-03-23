@@ -71,6 +71,46 @@ pub struct CInstallRequest {
 }
 
 #[repr(C)]
+pub struct CUninstallRequest {
+    pub package_name: CSlice,
+    pub root_path: CSlice,
+    pub repo_path: CSlice,
+    pub db_path: CSlice,
+    pub max_retries: u8,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy)]
+pub enum COstreeOperation {
+    Install = 0,
+    Remove = 1,
+    Manual = 2,
+}
+
+#[repr(C)]
+pub struct CCommitEntry {
+    pub checksum: CSlice,
+    pub subject: CSlice,
+}
+
+#[repr(C)]
+pub struct CCommitArray {
+    pub ptr: *mut CCommitEntry,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct CCommitRequest {
+    pub repo_path: CSlice,
+    pub content_path: CSlice,
+    pub branch: CSlice,
+    pub operation: COstreeOperation,
+    pub packages: *const CPackageMeta,
+    pub packages_len: usize,
+    pub db_path: CSlice,
+}
+
+#[repr(C)]
 pub struct CSystemPaths {
     pub ostree_path: CSlice,
     pub repo_path: CSlice,
@@ -94,12 +134,17 @@ pub struct UpacLib {
     pub db_get_meta: unsafe extern "C" fn(CSlice, CSlice, *mut CPackageMeta) -> i32,
     pub db_get_files: unsafe extern "C" fn(CSlice, CSlice, *mut CPackageFiles) -> i32,
     pub db_list_packages: unsafe extern "C" fn(CSlice, *mut CSliceArray) -> i32,
+
     pub meta_free: unsafe extern "C" fn(*mut CPackageMeta),
     pub list_free: unsafe extern "C" fn(*mut CSliceArray),
     pub files_free: unsafe extern "C" fn(*mut CPackageFiles),
 
     pub install: unsafe extern "C" fn(CInstallRequest) -> i32,
+    pub uninstall: unsafe extern "C" fn(CUninstallRequest) -> i32,
 
+    pub ostree_commit: unsafe extern "C" fn(CCommitRequest) -> i32,
+    pub ostree_list_commits: unsafe extern "C" fn(CSlice, CSlice, *mut CCommitArray) -> i32,
+    pub commits_free: unsafe extern "C" fn(*mut CCommitArray),
     pub ostree_rollback: unsafe extern "C" fn(CSlice, CSlice, CSlice) -> i32,
 
     pub init_system: unsafe extern "C" fn(CSystemPaths, CRepoMode) -> i32,
@@ -127,11 +172,19 @@ impl UpacLib {
             db_get_meta: sym!(b"upac_db_get_meta"),
             db_get_files: sym!(b"upac_db_get_files"),
             db_list_packages: sym!(b"upac_db_list_packages"),
+
             meta_free: sym!(b"upac_meta_free"),
             list_free: sym!(b"upac_list_free"),
             files_free: sym!(b"upac_files_free"),
+
             install: sym!(b"upac_install"),
+            uninstall: sym!(b"upac_uninstall"),
+
+            ostree_commit: sym!(b"upac_ostree_commit"),
+            ostree_list_commits: sym!(b"upac_ostree_list_commits"),
+            commits_free: sym!(b"upac_commits_free"),
             ostree_rollback: sym!(b"upac_ostree_rollback"),
+
             init_system: sym!(b"upac_init_system"),
             _lib: lib,
         })

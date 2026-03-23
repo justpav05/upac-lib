@@ -10,7 +10,7 @@ use crate::backends::{Backend, BackendKind, PackageMeta};
 
 use crate::config::Config;
 
-use crate::ffi::{CInstallRequest, CSlice, CSliceArray, UpacLib};
+use crate::ffi::{CCommitRequest, CInstallRequest, COstreeOperation, CSlice, CSliceArray, UpacLib};
 
 const MAX_RETRIES: u8 = 2;
 
@@ -20,6 +20,7 @@ enum State {
     DetectingBackend,
     PreparingPackage,
     Installing,
+    Committing,
     RollingBack,
     Done,
     Failed(String),
@@ -165,6 +166,44 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
     if let Err(err) = UpacLib::check(code, "install") {
         return state_rolling_back(machine, err.to_string());
     }
+
+    if machine.config.ostree.enabled {
+        return state_committing(machine);
+    }
+
+    state_done(machine)
+}
+
+fn state_committing(machine: &mut InstallMachine) -> Result<()> {
+    machine.enter(State::Committing);
+
+    let progress_bar = spinner("Creating OStree snapshot...");
+
+    let upac_lib = UpacLib::load()?;
+    let meta = machine.meta.as_ref().unwrap();
+    let c_package_meta = meta.as_c();
+
+    let request = CCommitRequest {
+        repo_path: CSlice::from_str(&machine.config.paths.ostree_path),
+        content_path: CSlice::from_str(&machine.config.paths.repo_path),
+        branch: CSlice::from_str(&machine.config.ostree.branch),
+        operation: COstreeOperation::Install,
+        packages: &c_package_meta as *const _,
+        packages_len: 1,
+        db_path: CSlice::from_str(&machine.config.paths.database_path),
+    };
+
+    let code = unsafe { (upac_lib.ostree_commit)(request) };
+
+    progress_bar.finish_and_clear();
+
+    if let Err(err) = UpacLib::check(code, "ostree commit") {
+        eprintln!("{} ostree snapshot failed: {err}", "⚠".yellow().bold());
+
+        return state_rolling_back(machine, err.to_string());
+    }
+
+    println!("{} snapshot created", "✓".green().bold());
 
     state_done(machine)
 }

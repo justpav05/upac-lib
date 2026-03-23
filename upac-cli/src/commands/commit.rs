@@ -7,29 +7,26 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
 use crate::config::Config;
-
-use crate::ffi::{CSlice, UpacLib};
+use crate::ffi::{CCommitRequest, COstreeOperation, CSlice, UpacLib};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
 enum State {
     Validating,
-    RollingBack,
+    Committing,
     Done,
     Failed(String),
 }
 
-struct RollbackMachine {
+struct CommitMachine {
     config: Config,
-    commit: String,
     stack: Vec<State>,
 }
 
-impl RollbackMachine {
-    fn new(config: Config, commit: String) -> Self {
+impl CommitMachine {
+    fn new(config: Config) -> Self {
         Self {
             config,
-            commit,
             stack: Vec::new(),
         }
     }
@@ -40,79 +37,55 @@ impl RollbackMachine {
 }
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_validating(machine: &mut RollbackMachine) -> Result<()> {
+fn state_validating(machine: &mut CommitMachine) -> Result<()> {
     machine.enter(State::Validating);
 
     if !machine.config.ostree.enabled {
-        anyhow::bail!("OStree is disabled in config. Set ostree.enabled = true to use rollback");
+        anyhow::bail!("OStree is disabled in config. Set ostree.enabled = true to use commit");
     }
 
-    if machine.commit.len() != 64 || !machine.commit.chars().all(|c| c.is_ascii_hexdigit()) {
-        anyhow::bail!(
-            "invalid commit hash '{}'. Expected 64 hex characters",
-            machine.commit
-        );
-    }
-
-    println!(
-        "{} rolling back to {}",
-        "→".cyan(),
-        &machine.commit[..12].dimmed()
-    );
-
-    state_rolling_back(machine)
+    state_committing(machine)
 }
 
-fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
-    machine.enter(State::RollingBack);
+fn state_committing(machine: &mut CommitMachine) -> Result<()> {
+    machine.enter(State::Committing);
 
-    let progress_bar = spinner("Rolling back...");
+    let progress_bar = spinner("Creating OStree snapshot...");
 
     let upac_lib = UpacLib::load()?;
 
-    let c_repo_path = CSlice::from_str(&machine.config.paths.ostree_path);
-    let c_content_path = CSlice::from_str(&machine.config.paths.repo_path);
-    let _branch = CSlice::from_str(&machine.config.ostree.branch);
+    let request = CCommitRequest {
+        repo_path: CSlice::from_str(&machine.config.paths.ostree_path),
+        content_path: CSlice::from_str(&machine.config.paths.repo_path),
+        branch: CSlice::from_str(&machine.config.ostree.branch),
+        operation: COstreeOperation::Manual,
+        packages: std::ptr::null(),
+        packages_len: 0,
+        db_path: CSlice::from_str(&machine.config.paths.database_path),
+    };
 
-    let c_commit = CSlice::from_str(&machine.commit);
-
-    let return_code = unsafe { (upac_lib.ostree_rollback)(c_repo_path, c_content_path, c_commit) };
+    let code = unsafe { (upac_lib.ostree_commit)(request) };
 
     progress_bar.finish_and_clear();
-
-    UpacLib::check(return_code, "rollback")?;
-
-    println!(
-        "{} {}",
-        "⚠".yellow().bold(),
-        "Hardlinks need to be refreshed. Run: upac refresh".dimmed()
-    );
-
-    // Так же нужно обновить БД чтобы она отражала состояние после отката
-    // TODO: upac refresh команда синхронизирует БД с файловой системой
+    UpacLib::check(code, "commit")?;
 
     state_done(machine)
 }
 
-fn state_done(machine: &mut RollbackMachine) -> Result<()> {
+fn state_done(machine: &mut CommitMachine) -> Result<()> {
     machine.enter(State::Done);
-    println!(
-        "{} rolled back to {}",
-        "✓".green().bold(),
-        &machine.commit[..12].bold()
-    );
+    println!("{} snapshot created", "✓".green().bold());
     Ok(())
 }
 
 // ── Публичное API ─────────────────────────────────────────────────────────────
-pub fn run(config: Config, commit: String) -> Result<()> {
-    let mut machine = RollbackMachine::new(config, commit);
+pub fn run(config: Config) -> Result<()> {
+    let mut machine = CommitMachine::new(config);
 
     state_validating(&mut machine).map_err(|err| {
         if !matches!(machine.stack.last(), Some(State::Failed(_))) {
             machine.enter(State::Failed(err.to_string()));
         }
-
         if machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
@@ -125,16 +98,17 @@ pub fn run(config: Config, commit: String) -> Result<()> {
 }
 
 // ── Хелперы ───────────────────────────────────────────────────────────────────
+fn spinner(message: &str) -> ProgressBar {
+    let progress_bar = ProgressBar::new_spinner();
 
-fn spinner(msg: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
+    progress_bar.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
             .template("{spinner:.cyan} {msg}")
             .unwrap(),
     );
-    pb.set_message(msg.to_owned());
-    pb.enable_steady_tick(Duration::from_millis(80));
-    pb
+
+    progress_bar.set_message(message.to_owned());
+    progress_bar.enable_steady_tick(Duration::from_millis(80));
+    progress_bar
 }
