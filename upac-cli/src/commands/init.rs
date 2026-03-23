@@ -50,6 +50,8 @@ fn state_validating(init_machine: &mut InitMachine) -> Result<()> {
             "config file not found: {}\n\
              Create it before running init. Example:\n\
              \n\
+             verbose = false\n\
+             \n\
              [paths]\n\
              db_path     = \"/var/db/upac\"\n\
              repo_path   = \"/var/repo\"\n\

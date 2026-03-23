@@ -9,6 +9,7 @@ use std::path::Path;
 pub struct Config {
     #[serde(default)]
     pub verbose: bool,
+    pub step_retries: u8,
     #[serde(alias = "paths")]
     pub paths: Paths,
     pub ostree: OstreeConfig,

@@ -11,162 +11,162 @@ const PackageMeta = database.PackageMeta;
 const PackageFiles = database.PackageFiles;
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
-pub fn stateAcquiringLock(machine: *DbMachine) anyerror!void {
-    try machine.enter(.acquiring_lock);
+pub fn stateAcquiringLock(database_machine: *DbMachine) anyerror!void {
+    try database_machine.enter(.acquiring_lock);
 
-    const lock_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, ".lock" });
-    defer machine.allocator.free(lock_path);
+    const lock_path = try std.fs.path.join(database_machine.allocator, &.{ database_machine.dir_path, ".lock" });
+    defer database_machine.allocator.free(lock_path);
 
     const file_descriptor = posix.open(lock_path, .{ .ACCMODE = .RDWR, .CREAT = true }, 0o600) catch |err| {
-        stateFailed(machine);
+        stateFailed(database_machine);
         return err;
     };
-    machine.lock_fd = file_descriptor;
+    database_machine.lock_fd = file_descriptor;
 
-    const kind: LockKind = switch (machine.input) {
+    const kind: LockKind = switch (database_machine.input) {
         .read_meta, .read_files, .list => .shared,
         .add, .remove => .exclusive,
     };
 
-    machine.lock = Lock.tryAcquire(file_descriptor, kind) catch |err| {
-        stateFailed(machine);
+    database_machine.lock = Lock.tryAcquire(file_descriptor, kind) catch |err| {
+        stateFailed(database_machine);
         return err;
     };
 
-    return stateReadingIndex(machine);
+    return stateReadingIndex(database_machine);
 }
 
-fn stateReadingIndex(machine: *DbMachine) anyerror!void {
-    try machine.enter(.reading_index);
+fn stateReadingIndex(database_machine: *DbMachine) anyerror!void {
+    try database_machine.enter(.reading_index);
 
-    const index_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, "index.toml" });
-    defer machine.allocator.free(index_path);
+    const index_path = try std.fs.path.join(database_machine.allocator, &.{ database_machine.dir_path, "index.toml" });
+    defer database_machine.allocator.free(index_path);
 
-    const file_content = std.fs.cwd().readFileAlloc(machine.allocator, index_path, 64 * 1024) catch |err| switch (err) {
+    const file_content = std.fs.cwd().readFileAlloc(database_machine.allocator, index_path, 64 * 1024) catch |err| switch (err) {
         error.FileNotFound => {
-            machine.index = try machine.allocator.alloc([]const u8, 0);
-            return switch (machine.input) {
+            database_machine.index = try database_machine.allocator.alloc([]const u8, 0);
+            return switch (database_machine.input) {
                 .list => {
-                    machine.result = .{ .list = machine.index.? };
-                    machine.index = null;
-                    return stateReleasingLock(machine);
+                    database_machine.result = .{ .list = database_machine.index.? };
+                    database_machine.index = null;
+                    return stateReleasingLock(database_machine);
                 },
-                .read_meta, .read_files => return stateReadingPackage(machine),
-                .add, .remove => return stateWritingPackage(machine),
+                .read_meta, .read_files => return stateReadingPackage(database_machine),
+                .add, .remove => return stateWritingPackage(database_machine),
             };
         },
         else => {
-            stateFailed(machine);
+            stateFailed(database_machine);
             return err;
         },
     };
-    defer machine.allocator.free(file_content);
+    defer database_machine.allocator.free(file_content);
 
-    machine.index = parseIndex(machine.allocator, file_content) catch |err| {
-        stateFailed(machine);
+    database_machine.index = parseIndex(database_machine.allocator, file_content) catch |err| {
+        stateFailed(database_machine);
         return err;
     };
 
-    return switch (machine.input) {
+    return switch (database_machine.input) {
         .list => {
-            machine.result = .{ .list = machine.index.? };
-            machine.index = null;
-            return stateReleasingLock(machine);
+            database_machine.result = .{ .list = database_machine.index.? };
+            database_machine.index = null;
+            return stateReleasingLock(database_machine);
         },
-        .read_meta, .read_files => return stateReadingPackage(machine),
-        .add, .remove => return stateWritingPackage(machine),
+        .read_meta, .read_files => return stateReadingPackage(database_machine),
+        .add, .remove => return stateWritingPackage(database_machine),
     };
 }
 
-fn stateReadingPackage(machine: *DbMachine) anyerror!void {
-    try machine.enter(.reading_package);
+fn stateReadingPackage(database_machine: *DbMachine) anyerror!void {
+    try database_machine.enter(.reading_package);
 
-    const name = switch (machine.input) {
+    const name = switch (database_machine.input) {
         .read_meta => |data| data.name,
         .read_files => |data| data.name,
         else => unreachable,
     };
 
-    const filename = try std.fmt.allocPrint(machine.allocator, "{s}.toml", .{name});
-    defer machine.allocator.free(filename);
+    const filename = try std.fmt.allocPrint(database_machine.allocator, "{s}.toml", .{name});
+    defer database_machine.allocator.free(filename);
 
-    const pkg_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, filename });
-    defer machine.allocator.free(pkg_path);
+    const pkg_path = try std.fs.path.join(database_machine.allocator, &.{ database_machine.dir_path, filename });
+    defer database_machine.allocator.free(pkg_path);
 
-    const content = std.fs.cwd().readFileAlloc(machine.allocator, pkg_path, 64 * 1024) catch |err| {
-        stateFailed(machine);
+    const content = std.fs.cwd().readFileAlloc(database_machine.allocator, pkg_path, 64 * 1024) catch |err| {
+        stateFailed(database_machine);
         return err;
     };
-    defer machine.allocator.free(content);
+    defer database_machine.allocator.free(content);
 
-    switch (machine.input) {
+    switch (database_machine.input) {
         .read_meta => {
-            const meta = parseMeta(machine.allocator, content) catch |err| {
-                stateFailed(machine);
+            const meta = parseMeta(database_machine.allocator, content) catch |err| {
+                stateFailed(database_machine);
                 return err;
             };
-            machine.result = .{ .read_meta = meta };
+            database_machine.result = .{ .read_meta = meta };
         },
         .read_files => {
-            const files = parseFiles(machine.allocator, name, content) catch |err| {
-                stateFailed(machine);
+            const files = parseFiles(database_machine.allocator, name, content) catch |err| {
+                stateFailed(database_machine);
                 return err;
             };
-            machine.result = .{ .read_files = files };
+            database_machine.result = .{ .read_files = files };
         },
         else => unreachable,
     }
 
-    return stateReleasingLock(machine);
+    return stateReleasingLock(database_machine);
 }
 
-fn stateWritingPackage(machine: *DbMachine) anyerror!void {
-    try machine.enter(.writing_package);
+fn stateWritingPackage(database_machine: *DbMachine) anyerror!void {
+    try database_machine.enter(.writing_package);
 
-    switch (machine.input) {
+    switch (database_machine.input) {
         .add => |d| {
-            const content = serializePackage(machine.allocator, d.meta, d.files) catch |err| {
-                stateFailed(machine);
+            const content = serializePackage(database_machine.allocator, d.meta, d.files) catch |err| {
+                stateFailed(database_machine);
                 return err;
             };
-            defer machine.allocator.free(content);
+            defer database_machine.allocator.free(content);
 
-            const filename = try std.fmt.allocPrint(machine.allocator, "{s}.toml", .{d.meta.name});
-            defer machine.allocator.free(filename);
-            const pkg_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, filename });
-            defer machine.allocator.free(pkg_path);
+            const filename = try std.fmt.allocPrint(database_machine.allocator, "{s}.toml", .{d.meta.name});
+            defer database_machine.allocator.free(filename);
+            const pkg_path = try std.fs.path.join(database_machine.allocator, &.{ database_machine.dir_path, filename });
+            defer database_machine.allocator.free(pkg_path);
 
-            writeAtomic(machine.allocator, pkg_path, content) catch |err| {
-                stateFailed(machine);
+            writeAtomic(database_machine.allocator, pkg_path, content) catch |err| {
+                stateFailed(database_machine);
                 return err;
             };
         },
         .remove => |d| {
-            const filename = try std.fmt.allocPrint(machine.allocator, "{s}.toml", .{d.name});
-            defer machine.allocator.free(filename);
-            const pkg_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, filename });
-            defer machine.allocator.free(pkg_path);
+            const filename = try std.fmt.allocPrint(database_machine.allocator, "{s}.toml", .{d.name});
+            defer database_machine.allocator.free(filename);
+            const pkg_path = try std.fs.path.join(database_machine.allocator, &.{ database_machine.dir_path, filename });
+            defer database_machine.allocator.free(pkg_path);
 
             std.fs.deleteFileAbsolute(pkg_path) catch |err| {
-                stateFailed(machine);
+                stateFailed(database_machine);
                 return err;
             };
         },
         else => unreachable,
     }
 
-    return stateUpdatingIndex(machine);
+    return stateUpdatingIndex(database_machine);
 }
 
-fn stateUpdatingIndex(machine: *DbMachine) anyerror!void {
-    try machine.enter(.updating_index);
+fn stateUpdatingIndex(database_machine: *DbMachine) anyerror!void {
+    try database_machine.enter(.updating_index);
 
-    var names = std.ArrayList([]const u8).init(machine.allocator);
+    var names = std.ArrayList([]const u8).init(database_machine.allocator);
     defer names.deinit();
 
-    if (machine.index) |index| for (index) |package| try names.append(package);
+    if (database_machine.index) |index| for (index) |package| try names.append(package);
 
-    switch (machine.input) {
+    switch (database_machine.input) {
         .add => |data| {
             const exists = for (names.items) |package| {
                 if (std.mem.eql(u8, package, data.meta.name)) break true;
@@ -186,49 +186,49 @@ fn stateUpdatingIndex(machine: *DbMachine) anyerror!void {
         else => unreachable,
     }
 
-    const content = serializeIndex(machine.allocator, names.items) catch |err| {
-        stateFailed(machine);
+    const content = serializeIndex(database_machine.allocator, names.items) catch |err| {
+        stateFailed(database_machine);
         return err;
     };
-    defer machine.allocator.free(content);
+    defer database_machine.allocator.free(content);
 
-    const index_path = try std.fs.path.join(machine.allocator, &.{ machine.dir_path, "index.toml" });
-    defer machine.allocator.free(index_path);
+    const index_path = try std.fs.path.join(database_machine.allocator, &.{ database_machine.dir_path, "index.toml" });
+    defer database_machine.allocator.free(index_path);
 
-    writeAtomic(machine.allocator, index_path, content) catch |err| {
-        stateFailed(machine);
+    writeAtomic(database_machine.allocator, index_path, content) catch |err| {
+        stateFailed(database_machine);
         return err;
     };
 
-    return stateReleasingLock(machine);
+    return stateReleasingLock(database_machine);
 }
 
-fn stateReleasingLock(machine: *DbMachine) anyerror!void {
-    try machine.enter(.releasing_lock);
-    if (machine.lock) |*lock| {
+fn stateReleasingLock(database_machine: *DbMachine) anyerror!void {
+    try database_machine.enter(.releasing_lock);
+    if (database_machine.lock) |*lock| {
         lock.release();
-        machine.lock = null;
+        database_machine.lock = null;
     }
-    if (machine.lock_fd) |fd| {
+    if (database_machine.lock_fd) |fd| {
         posix.close(fd);
-        machine.lock_fd = null;
+        database_machine.lock_fd = null;
     }
-    return stateDone(machine);
+    return stateDone(database_machine);
 }
 
-fn stateDone(machine: *DbMachine) anyerror!void {
-    try machine.enter(.done);
+fn stateDone(database_machine: *DbMachine) anyerror!void {
+    try database_machine.enter(.done);
 }
 
-fn stateFailed(machine: *DbMachine) void {
-    _ = machine.enter(.failed) catch {};
-    if (machine.lock) |*lock| {
+fn stateFailed(database_machine: *DbMachine) void {
+    _ = database_machine.enter(.failed) catch {};
+    if (database_machine.lock) |*lock| {
         lock.release();
-        machine.lock = null;
+        database_machine.lock = null;
     }
-    if (machine.lock_fd) |file_descriptor| {
+    if (database_machine.lock_fd) |file_descriptor| {
         posix.close(file_descriptor);
-        machine.lock_fd = null;
+        database_machine.lock_fd = null;
     }
 }
 

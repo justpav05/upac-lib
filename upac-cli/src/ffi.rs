@@ -111,6 +111,15 @@ pub struct CCommitRequest {
 }
 
 #[repr(C)]
+pub struct CRefreshRequest {
+    pub repo_path: CSlice,
+    pub content_path: CSlice,
+    pub root_path: CSlice,
+    pub branch: CSlice,
+    pub database_path: CSlice,
+}
+
+#[repr(C)]
 pub struct CSystemPaths {
     pub ostree_path: CSlice,
     pub repo_path: CSlice,
@@ -144,8 +153,9 @@ pub struct UpacLib {
 
     pub ostree_commit: unsafe extern "C" fn(CCommitRequest) -> i32,
     pub ostree_list_commits: unsafe extern "C" fn(CSlice, CSlice, *mut CCommitArray) -> i32,
+    pub refresh: unsafe extern "C" fn(CSlice, CSlice, CSlice, CSlice, CSlice) -> i32,
     pub commits_free: unsafe extern "C" fn(*mut CCommitArray),
-    pub ostree_rollback: unsafe extern "C" fn(CSlice, CSlice, CSlice) -> i32,
+    pub ostree_rollback: unsafe extern "C" fn(CSlice, CSlice, CSlice, CSlice) -> i32,
 
     pub init_system: unsafe extern "C" fn(CSystemPaths, CRepoMode) -> i32,
 }
@@ -182,6 +192,7 @@ impl UpacLib {
 
             ostree_commit: sym!(b"upac_ostree_commit"),
             ostree_list_commits: sym!(b"upac_ostree_list_commits"),
+            refresh: sym!(b"upac_refresh"),
             commits_free: sym!(b"upac_commits_free"),
             ostree_rollback: sym!(b"upac_ostree_rollback"),
 

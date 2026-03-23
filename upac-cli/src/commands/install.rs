@@ -6,14 +6,13 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use std::fs;
 use std::process;
+use std::ptr;
 use std::time::Duration;
 
 use crate::backends::{Backend, BackendKind, PackageMeta};
 
 use crate::config::Config;
 use crate::ffi::{CCommitRequest, CInstallRequest, COstreeOperation, CSlice, CSliceArray, UpacLib};
-
-const MAX_RETRIES: u8 = 2;
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -61,7 +60,7 @@ impl InstallMachine {
     }
 
     fn exhausted(&self) -> bool {
-        self.retries >= MAX_RETRIES
+        self.retries >= self.config.step_retries
     }
 }
 
@@ -108,7 +107,7 @@ fn state_preparing_package(install_machine: &mut InstallMachine) -> Result<()> {
 
     let backend = Backend::load(install_machine.kind.as_ref().unwrap())?;
 
-    let abs_file = std::fs::canonicalize(&install_machine.file)
+    let abs_file = fs::canonicalize(&install_machine.file)
         .map_err(|err| anyhow::anyhow!("cannot resolve path '{}': {err}", install_machine.file))?;
     let abs_file_str = abs_file
         .to_str()
@@ -141,7 +140,10 @@ fn state_installing(install_machine: &mut InstallMachine) -> Result<()> {
     let progress_bar = spinner(&format!(
         "Installing{}...",
         if install_machine.retries > 0 {
-            format!(" (retry {}/{})", install_machine.retries, MAX_RETRIES)
+            format!(
+                " (retry {}/{})",
+                install_machine.retries, install_machine.config.step_retries
+            )
         } else {
             String::new()
         }
@@ -161,7 +163,7 @@ fn state_installing(install_machine: &mut InstallMachine) -> Result<()> {
         repo_path: CSlice::from_str(&install_machine.config.paths.repo_path),
         package_path: CSlice::from_str(tmp_dir_string_path),
         db_path: CSlice::from_str(&install_machine.config.paths.database_path),
-        max_retries: 3,
+        max_retries: install_machine.config.step_retries,
     };
 
     let return_code = unsafe { (upac_lib.install)(c_install_request) };
@@ -223,14 +225,14 @@ fn state_rolling_back(install_machine: &mut InstallMachine, reason: String) -> R
             "{}/{}",
             install_machine.config.paths.repo_path, package_meta.name
         );
-        std::fs::remove_dir_all(&repo_package_string_path).ok();
+        fs::remove_dir_all(&repo_package_string_path).ok();
 
         if let Ok(upac_lib) = UpacLib::load() {
             let c_database_path = CSlice::from_str(&install_machine.config.paths.database_path);
             let c_package_name = CSlice::from_str(&package_meta.name);
 
             let mut c_list = CSliceArray {
-                ptr: std::ptr::null_mut(),
+                ptr: ptr::null_mut(),
                 len: 0,
             };
             let return_code = unsafe { (upac_lib.db_list_packages)(c_database_path, &mut c_list) };
@@ -244,7 +246,10 @@ fn state_rolling_back(install_machine: &mut InstallMachine, reason: String) -> R
     progress_bar.finish_and_clear();
 
     if install_machine.exhausted() {
-        let message = format!("install failed after {} retries: {reason}", MAX_RETRIES);
+        let message = format!(
+            "install failed after {} retries: {reason}",
+            install_machine.config.step_retries
+        );
         install_machine.enter(State::Failed(message.clone()));
         anyhow::bail!("{message}");
     }
@@ -254,7 +259,7 @@ fn state_rolling_back(install_machine: &mut InstallMachine, reason: String) -> R
         "{} retry {}/{}: {reason}",
         "⚠".yellow().bold(),
         install_machine.retries,
-        MAX_RETRIES
+        install_machine.config.step_retries
     );
 
     state_preparing_package(install_machine)

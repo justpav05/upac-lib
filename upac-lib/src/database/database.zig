@@ -80,12 +80,8 @@ pub const DbMachine = struct {
 };
 
 // ── Запуск машины ─────────────────────────────────────────────────────────────
-pub fn runMachine(
-    dir_path: []const u8,
-    allocator: std.mem.Allocator,
-    input: OperationInput,
-) !?OperationResult {
-    var machine = DbMachine{
+pub fn runMachine(dir_path: []const u8, allocator: std.mem.Allocator, input: OperationInput) !?OperationResult {
+    var database_machine = DbMachine{
         .stack = std.ArrayList(DbStateId).init(allocator),
         .lock = null,
         .lock_fd = null,
@@ -95,10 +91,10 @@ pub fn runMachine(
         .result = null,
         .index = null,
     };
-    defer machine.deinit();
+    defer database_machine.deinit();
 
-    try states.stateAcquiringLock(&machine);
-    return machine.result;
+    try states.stateAcquiringLock(&database_machine);
+    return database_machine.result;
 }
 
 // ── Публичное API ─────────────────────────────────────────────────────────────

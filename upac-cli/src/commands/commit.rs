@@ -4,6 +4,7 @@ use colored::Colorize;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
+use std::ptr;
 use std::time::Duration;
 
 use crate::config::Config;
@@ -59,7 +60,7 @@ fn state_committing(commit_machine: &mut CommitMachine) -> Result<()> {
         content_path: CSlice::from_str(&commit_machine.config.paths.repo_path),
         branch: CSlice::from_str(&commit_machine.config.ostree.branch),
         operation: COstreeOperation::Manual,
-        packages: std::ptr::null(),
+        packages: ptr::null(),
         packages_len: 0,
         db_path: CSlice::from_str(&commit_machine.config.paths.database_path),
     };

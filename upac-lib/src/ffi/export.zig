@@ -306,7 +306,7 @@ pub export fn upac_diff_free(c_diff: *CDiffArray) callconv(.C) void {
     allocator.free(entries);
 }
 
-pub export fn upac_ostree_list_commits(c_repo_path: CSlice, c_branch: CSlice, c_out: *CCommitArray) callconv(.C) i32 {
+pub export fn upac_ostree_list_commits(c_repo_path: CSlice, c_branch: CSlice, c_commits: *CCommitArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
     const commit_entries = ostree.listCommits(
@@ -315,7 +315,7 @@ pub export fn upac_ostree_list_commits(c_repo_path: CSlice, c_branch: CSlice, c_
         allocator,
     ) catch |err| return @intFromEnum(types.fromError(err));
 
-    const c_entries = allocator.alloc(CCommitEntry, commit_entries.len) catch {
+    const c_commit_entries = allocator.alloc(CCommitEntry, commit_entries.len) catch {
         for (commit_entries) |entry| {
             allocator.free(entry.checksum);
             allocator.free(entry.subject);
@@ -325,33 +325,36 @@ pub export fn upac_ostree_list_commits(c_repo_path: CSlice, c_branch: CSlice, c_
     };
 
     for (commit_entries, 0..) |entry, index| {
-        c_entries[index] = .{
+        c_commit_entries[index] = .{
             .checksum = CSlice.fromSlice(entry.checksum),
             .subject = CSlice.fromSlice(entry.subject),
         };
     }
     allocator.free(commit_entries);
 
-    c_out.* = .{ .ptr = c_entries.ptr, .len = c_entries.len };
+    c_commits.* = .{ .ptr = c_commit_entries.ptr, .len = c_commit_entries.len };
     return @intFromEnum(ErrorCode.ok);
 }
 
 pub export fn upac_commits_free(c_commits: *CCommitArray) callconv(.C) void {
     const allocator = types.allocator();
     const entries = c_commits.toSlice();
+
     for (entries) |entry| {
         allocator.free(entry.checksum.toSlice());
         allocator.free(entry.subject.toSlice());
     }
+
     allocator.free(entries);
 }
 
 /// Откатить на предыдущий коммит.
-pub export fn upac_ostree_rollback(c_repo_path: CSlice, c_content_path: CSlice, c_branch: CSlice) callconv(.C) i32 {
+pub export fn upac_ostree_rollback(c_repo_path: CSlice, c_content_path: CSlice, c_branch: CSlice, c_commit_hash: CSlice) callconv(.C) i32 {
     ostree.rollback(
         c_repo_path.toSlice(),
         c_content_path.toSlice(),
         c_branch.toSlice(),
+        c_commit_hash.toSlice(),
         types.allocator(),
     ) catch |err| return @intFromEnum(types.fromError(err));
 

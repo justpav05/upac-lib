@@ -424,7 +424,7 @@ pub fn refresh(repo_path: []const u8, content_path: []const u8, root_path: []con
     try refreshHardlinks(allocator, content_path, root_path);
 }
 
-pub fn rollback(repo_path: []const u8, content_path: []const u8, branch: []const u8, allocator: std.mem.Allocator) !void {
+pub fn rollback(repo_path: []const u8, content_path: []const u8, branch: []const u8, commit_hash: []const u8, allocator: std.mem.Allocator) !void {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
 
@@ -433,6 +433,9 @@ pub fn rollback(repo_path: []const u8, content_path: []const u8, branch: []const
 
     const branch_c = try std.fmt.allocPrintZ(allocator, "{s}", .{branch});
     defer allocator.free(branch_c);
+
+    const commit_hash_c = try std.fmt.allocPrintZ(allocator, "{s}", .{commit_hash});
+    defer allocator.free(commit_hash_c);
 
     const g_repo_file = c_libs.g_file_new_for_path(repo_path_c.ptr);
     defer c_libs.g_object_unref(g_repo_file);
@@ -446,30 +449,16 @@ pub fn rollback(repo_path: []const u8, content_path: []const u8, branch: []const
         return OstreeError.RepoOpenFailed;
     }
 
-    var current_checksum: [*c]u8 = null;
-    defer if (current_checksum) |checksum| c_libs.g_free(checksum);
+    var validated_checksum: [*c]u8 = null;
+    defer if (validated_checksum) |checksum| c_libs.g_free(checksum);
 
-    if (c_libs.ostree_repo_resolve_rev(struct_ostree_repo, branch_c.ptr, 0, &current_checksum, &global_struct_glib_err) == 0) {
+    if (c_libs.ostree_repo_resolve_rev(struct_ostree_repo, commit_hash_c.ptr, 0, &validated_checksum, &global_struct_glib_err) == 0) {
         if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
         return OstreeError.NoPreviousCommit;
     }
 
-    var commit_variant: ?*c_libs.GVariant = null;
-    defer if (commit_variant) |v| c_libs.g_variant_unref(v);
-
-    if (c_libs.ostree_repo_load_variant(
-        struct_ostree_repo,
-        c_libs.OSTREE_OBJECT_TYPE_COMMIT,
-        current_checksum,
-        &commit_variant,
-        &global_struct_glib_err,
-    ) == 0) {
-        if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);
-        return OstreeError.RollbackFailed;
-    }
-
-    const parent_checksum = c_libs.ostree_commit_get_parent(commit_variant);
-    if (parent_checksum == null) return OstreeError.NoPreviousCommit;
+    const commit_variant: ?*c_libs.GVariant = null;
+    defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
 
     var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
@@ -480,7 +469,7 @@ pub fn rollback(repo_path: []const u8, content_path: []const u8, branch: []const
         &options,
         std.c.AT.FDCWD,
         content_path_c.ptr,
-        parent_checksum,
+        validated_checksum,
         null,
         &global_struct_glib_err,
     ) == 0) {
@@ -493,7 +482,7 @@ pub fn rollback(repo_path: []const u8, content_path: []const u8, branch: []const
         return OstreeError.RollbackFailed;
     }
 
-    c_libs.ostree_repo_transaction_set_ref(struct_ostree_repo, null, branch_c.ptr, parent_checksum);
+    c_libs.ostree_repo_transaction_set_ref(struct_ostree_repo, null, branch_c.ptr, validated_checksum);
 
     if (c_libs.ostree_repo_commit_transaction(struct_ostree_repo, null, null, &global_struct_glib_err) == 0) {
         if (global_struct_glib_err) |struct_glib_err| c_libs.g_error_free(struct_glib_err);

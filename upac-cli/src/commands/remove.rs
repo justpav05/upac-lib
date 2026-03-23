@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::backends::PackageMeta;
 use crate::config::Config;
-use crate::ffi::{CPackageMeta, CSlice, CUninstallRequest, UpacLib};
+use crate::ffi::{CCommitRequest, COstreeOperation, CSlice, CUninstallRequest, UpacLib};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -44,19 +44,24 @@ impl RemoveMachine {
 }
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_validating(machine: &mut RemoveMachine) -> Result<()> {
-    machine.enter(State::Validating);
+fn state_validating(remove_machine: &mut RemoveMachine) -> Result<()> {
+    remove_machine.enter(State::Validating);
 
     let upac_lib = UpacLib::load()?;
-    let database_path = CSlice::from_str(&machine.config.paths.database_path);
-    let name = CSlice::from_str(&machine.package_name);
+    let database_path = CSlice::from_str(&remove_machine.config.paths.database_path);
+    let package_name = CSlice::from_str(&remove_machine.package_name);
 
     let mut c_test_package_meta = MaybeUninit::uninit();
-    let code =
-        unsafe { (upac_lib.db_get_meta)(database_path, name, c_test_package_meta.as_mut_ptr()) };
+    let return_code = unsafe {
+        (upac_lib.db_get_meta)(
+            database_path,
+            package_name,
+            c_test_package_meta.as_mut_ptr(),
+        )
+    };
 
-    if code != 0 {
-        anyhow::bail!("package '{}' is not installed", machine.package_name);
+    if return_code != 0 {
+        anyhow::bail!("package '{}' is not installed", remove_machine.package_name);
     }
 
     let c_package_meta = unsafe { c_test_package_meta.assume_init() };
@@ -76,93 +81,99 @@ fn state_validating(machine: &mut RemoveMachine) -> Result<()> {
     let mut package_meta_owned = c_package_meta;
     unsafe { (upac_lib.meta_free)(&mut package_meta_owned) };
 
-    machine.package_meta = Some(package_meta);
+    remove_machine.package_meta = Some(package_meta);
 
-    println!("{} removing {}", "→".cyan(), machine.package_name.bold());
+    println!(
+        "{} removing {}",
+        "→".cyan(),
+        remove_machine.package_name.bold()
+    );
 
-    state_uninstalling(machine)
+    state_uninstalling(remove_machine)
 }
 
-fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
-    machine.enter(State::Uninstalling);
+fn state_uninstalling(remove_machine: &mut RemoveMachine) -> Result<()> {
+    remove_machine.enter(State::Uninstalling);
 
     let progress_bar = spinner("Removing package...");
 
     let upac_lib = UpacLib::load()?;
 
-    let request = CUninstallRequest {
-        package_name: CSlice::from_str(&machine.package_name),
-        root_path: CSlice::from_str(&machine.config.paths.root_path),
-        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
-        db_path: CSlice::from_str(&machine.config.paths.database_path),
-        max_retries: 3,
+    let c_remove_request = CUninstallRequest {
+        package_name: CSlice::from_str(&remove_machine.package_name),
+        root_path: CSlice::from_str(&remove_machine.config.paths.root_path),
+        repo_path: CSlice::from_str(&remove_machine.config.paths.repo_path),
+        db_path: CSlice::from_str(&remove_machine.config.paths.database_path),
+        max_retries: remove_machine.config.step_retries,
     };
 
-    let code = unsafe { (upac_lib.uninstall)(request) };
+    let return_code = unsafe { (upac_lib.uninstall)(c_remove_request) };
 
     progress_bar.finish_and_clear();
-    UpacLib::check(code, "uninstall")?;
+    UpacLib::check(return_code, "uninstall")?;
 
-    if machine.config.ostree.enabled {
-        return state_committing(machine);
+    if remove_machine.config.ostree.enabled {
+        return state_committing(remove_machine);
     }
 
-    state_done(machine)
+    state_done(remove_machine)
 }
 
-fn state_committing(machine: &mut RemoveMachine) -> Result<()> {
-    machine.enter(State::Committing);
+fn state_committing(remove_machine: &mut RemoveMachine) -> Result<()> {
+    remove_machine.enter(State::Committing);
 
     let progress_bar = spinner("Creating OStree snapshot...");
 
     let upac_lib = UpacLib::load()?;
+    let package_meta = remove_machine.package_meta.as_ref().unwrap();
+    let c_package_meta = package_meta.as_c();
 
-    let request = crate::ffi::CCommitRequest {
-        repo_path: CSlice::from_str(&machine.config.paths.ostree_path),
-        content_path: CSlice::from_str(&machine.config.paths.repo_path),
-        branch: CSlice::from_str(&machine.config.ostree.branch),
-        operation: crate::ffi::COstreeOperation::Remove,
-        packages: std::ptr::null(),
-        packages_len: 0,
-        db_path: CSlice::from_str(&machine.config.paths.database_path),
+    let c_commit_request = CCommitRequest {
+        repo_path: CSlice::from_str(&remove_machine.config.paths.ostree_path),
+        content_path: CSlice::from_str(&remove_machine.config.paths.repo_path),
+        branch: CSlice::from_str(&remove_machine.config.ostree.branch),
+        operation: COstreeOperation::Remove,
+        packages: &c_package_meta as *const _,
+        packages_len: 1,
+        db_path: CSlice::from_str(&remove_machine.config.paths.database_path),
     };
 
-    let code = unsafe { (upac_lib.ostree_commit)(request) };
+    let return_code = unsafe { (upac_lib.ostree_commit)(c_commit_request) };
 
     progress_bar.finish_and_clear();
 
-    if let Err(err) = UpacLib::check(code, "ostree commit") {
+    if let Err(err) = UpacLib::check(return_code, "ostree commit") {
         eprintln!("{} ostree snapshot failed: {err}", "⚠".yellow().bold());
         return Ok(());
     }
 
     println!("{} snapshot created", "✓".green().bold());
-    state_done(machine)
+    state_done(remove_machine)
 }
 
-fn state_done(machine: &mut RemoveMachine) -> Result<()> {
-    machine.enter(State::Done);
+fn state_done(remove_machine: &mut RemoveMachine) -> Result<()> {
+    remove_machine.enter(State::Done);
     println!(
         "{} removed {}",
         "✓".green().bold(),
-        machine.package_name.bold()
+        remove_machine.package_name.bold()
     );
     Ok(())
 }
 
 // ── Публичное API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, package_name: String) -> Result<()> {
-    let mut machine = RemoveMachine::new(config, package_name);
+    let mut remove_machine = RemoveMachine::new(config, package_name);
 
-    state_validating(&mut machine).map_err(|err| {
-        if !matches!(machine.stack.last(), Some(State::Failed(_))) {
-            machine.enter(State::Failed(err.to_string()));
+    state_validating(&mut remove_machine).map_err(|err| {
+        if !matches!(remove_machine.stack.last(), Some(State::Failed(_))) {
+            remove_machine.enter(State::Failed(err.to_string()));
         }
-        if machine.config.verbose {
+        if remove_machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
                 "✗".red().bold(),
-                machine.stack.last()
+                remove_machine.stack.last()
             );
         }
         err
