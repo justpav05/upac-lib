@@ -19,12 +19,20 @@ upac-lib/                  Core library (.so)
 ├── lock/                  File-descriptor based locking (flock)
 ├── database/              Package database (TOML files + index)
 ├── installer/             File copying, hardlinking, permissions
+├── uninstaller/           File deleting, relinking
 ├── ostree/                OStree commit, diff, rollback
+├── parser/                Parse toml files
 ├── ffi/                   C ABI exports
 └── init                   System directory initialization
 
 upac-alpm-backend/         Arch Linux package backend (.so)
 └── src/                   Verification, extraction, .PKGINFO parsing
+
+upac-rpm-backend/          Fedora Linux like package backend (.so)
+└── src/                   Verification, extraction, archive parsing
+
+upac-deb-backend/          Debian Linux like package backend (.so)
+└── src/                   Verification, extraction, archive parsing
 
 upac-cli/                  Command-line interface (Rust)
 ```
