@@ -4,32 +4,27 @@ const database = @import("upac-database");
 
 const ostree = @import("ostree.zig");
 const OstreeError = ostree.OstreeError;
+const CommitMachine = ostree.CommitMachine;
+const StateId = ostree.StateId;
 
-const fsm = @import("machine.zig");
-const CommitMachine = fsm.CommitMachine;
-
-const c_librarys = @cImport({
-    @cInclude("ostree.h");
-    @cInclude("glib.h");
-    @cInclude("gio/gio.h");
-});
+pub const c_libs = ostree.c_libs;
 
 // ── Состояния FSM ─────────────────────────────────────────────────────────────
 pub fn stateOpeningRepo(machine: *CommitMachine) anyerror!void {
     try machine.enter(.opening_repo);
 
-    const path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.repo_path});
-    defer machine.allocator.free(path_c);
+    const repo_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.repo_path});
+    defer machine.allocator.free(repo_path_c);
 
-    const file = c_librarys.g_file_new_for_path(path_c.ptr);
-    defer c_librarys.g_object_unref(file);
+    const g_file = c_libs.g_file_new_for_path(repo_path_c.ptr);
+    defer c_libs.g_object_unref(g_file);
 
-    var err: ?*c_librarys.GError = null;
-    const repo = c_librarys.ostree_repo_new(file);
+    var global_glib_err: ?*c_libs.GError = null;
+    const ostree_repo_c = c_libs.ostree_repo_new(g_file);
 
-    if (c_librarys.ostree_repo_open(repo, null, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
-        c_librarys.g_object_unref(repo);
+    if (c_libs.ostree_repo_open(ostree_repo_c, null, &global_glib_err) == 0) {
+        if (global_glib_err) |err| c_libs.g_error_free(err);
+        c_libs.g_object_unref(ostree_repo_c);
         if (machine.exhausted()) {
             stateFailed(machine);
             return OstreeError.RepoOpenFailed;
@@ -38,7 +33,7 @@ pub fn stateOpeningRepo(machine: *CommitMachine) anyerror!void {
         return stateOpeningRepo(machine);
     }
 
-    machine.repo = repo;
+    machine.repo = ostree_repo_c;
     machine.retries = 0;
     return stateBuildingMessage(machine);
 }
@@ -48,43 +43,53 @@ fn stateBuildingMessage(machine: *CommitMachine) anyerror!void {
 
     var subject_buf = std.ArrayList(u8).init(machine.allocator);
     errdefer subject_buf.deinit();
-    const sw = subject_buf.writer();
+    const subject_writer = subject_buf.writer();
 
-    try sw.writeAll(machine.request.operation);
-    try sw.writeAll(": ");
-    for (machine.request.packages, 0..) |pkg, i| {
-        if (i > 0) try sw.writeAll(", ");
-        try sw.print("{s} {s}", .{ pkg.name, pkg.version });
+    try subject_writer.writeAll(machine.request.operation.toString());
+    try subject_writer.writeAll(": ");
+    for (machine.request.packages, 0..) |package, index| {
+        if (index > 0) try subject_writer.writeAll(", ");
+        try subject_writer.print("{s} {s}", .{ package.name, package.version });
     }
     machine.subject = try subject_buf.toOwnedSlice();
 
     var body_buf = std.ArrayList(u8).init(machine.allocator);
     errdefer body_buf.deinit();
-    const bw = body_buf.writer();
+    const body_writer = body_buf.writer();
 
-    try bw.writeAll("Installed packages:\n");
+    try body_writer.writeAll("Installed packages:\n");
 
-    const names = database.listPackages(machine.request.database_path, machine.allocator) catch |err| {
+    const package_names = database.listPackages(machine.request.database_path, machine.allocator) catch |err| {
         stateFailed(machine);
         return err;
     };
     defer {
-        for (names) |n| machine.allocator.free(n);
-        machine.allocator.free(names);
+        for (package_names) |name| machine.allocator.free(name);
+        machine.allocator.free(package_names);
     }
 
-    for (names) |name| {
-        const meta = database.getMeta(machine.request.database_path, name, machine.allocator) catch continue;
+    for (package_names) |package_name| {
+        const package_meta = database.getMeta(machine.request.database_path, package_name, machine.allocator) catch continue;
         defer {
-            machine.allocator.free(meta.name);
-            machine.allocator.free(meta.version);
-            machine.allocator.free(meta.author);
-            machine.allocator.free(meta.description);
-            machine.allocator.free(meta.license);
-            machine.allocator.free(meta.url);
-            machine.allocator.free(meta.checksum);
+            machine.allocator.free(package_meta.name);
+            machine.allocator.free(package_meta.version);
+            machine.allocator.free(package_meta.author);
+            machine.allocator.free(package_meta.description);
+            machine.allocator.free(package_meta.license);
+            machine.allocator.free(package_meta.url);
+            machine.allocator.free(package_meta.checksum);
         }
-        try bw.print("  - {s} {s} ({s})\n", .{ meta.name, meta.version, meta.license });
+
+        try body_writer.print("  - name={s} version={s} author={s} description={s} license={s} url={s} installed_at={d} checksum={s}\n", .{
+            package_meta.name,
+            package_meta.version,
+            package_meta.author,
+            package_meta.description,
+            package_meta.license,
+            package_meta.url,
+            package_meta.installed_at,
+            package_meta.checksum,
+        });
     }
 
     machine.body = try body_buf.toOwnedSlice();
@@ -95,29 +100,32 @@ fn stateBuildingMessage(machine: *CommitMachine) anyerror!void {
 fn stateCommitting(machine: *CommitMachine) anyerror!void {
     try machine.enter(.committing);
 
-    const repo = machine.repo orelse {
+    const c_ostree_repo = machine.repo orelse {
         stateFailed(machine);
         return OstreeError.RepoOpenFailed;
     };
 
     const content_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.content_path});
     defer machine.allocator.free(content_path_c);
+
     const branch_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.branch});
     defer machine.allocator.free(branch_c);
+
     const subject_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.subject.?});
     defer machine.allocator.free(subject_c);
+
     const body_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.body.?});
     defer machine.allocator.free(body_c);
 
-    const content_file = c_librarys.g_file_new_for_path(content_path_c.ptr);
-    defer c_librarys.g_object_unref(content_file);
+    const content_file = c_libs.g_file_new_for_path(content_path_c.ptr);
+    defer c_libs.g_object_unref(content_file);
 
-    var err: ?*c_librarys.GError = null;
+    var global_glib_err: ?*c_libs.GError = null;
     var commit_checksum: [*c]u8 = null;
-    defer if (commit_checksum) |cs| c_librarys.g_free(cs);
+    defer if (commit_checksum) |checksu| c_libs.g_free(checksu);
 
-    if (c_librarys.ostree_repo_prepare_transaction(repo, null, null, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+    if (c_libs.ostree_repo_prepare_transaction(c_ostree_repo, null, null, &global_glib_err) == 0) {
+        if (global_glib_err) |err| c_libs.g_error_free(err);
         if (machine.exhausted()) {
             stateFailed(machine);
             return OstreeError.CommitFailed;
@@ -126,12 +134,12 @@ fn stateCommitting(machine: *CommitMachine) anyerror!void {
         return stateCommitting(machine);
     }
 
-    const mtree: ?*c_librarys.OstreeMutableTree = c_librarys.ostree_mutable_tree_new();
-    defer if (mtree) |t| c_librarys.g_object_unref(t);
+    const mtree: ?*c_libs.OstreeMutableTree = c_libs.ostree_mutable_tree_new();
+    defer if (mtree) |t| c_libs.g_object_unref(t);
 
-    if (c_librarys.ostree_repo_write_directory_to_mtree(repo, content_file, mtree, null, null, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
-        _ = c_librarys.ostree_repo_abort_transaction(repo, null, null);
+    if (c_libs.ostree_repo_write_directory_to_mtree(c_ostree_repo, content_file, mtree, null, null, &global_glib_err) == 0) {
+        if (global_glib_err) |err| c_libs.g_error_free(err);
+        _ = c_libs.ostree_repo_abort_transaction(c_ostree_repo, null, null);
         if (machine.exhausted()) {
             stateFailed(machine);
             return OstreeError.CommitFailed;
@@ -140,12 +148,12 @@ fn stateCommitting(machine: *CommitMachine) anyerror!void {
         return stateCommitting(machine);
     }
 
-    var root: ?*c_librarys.GFile = null;
-    defer if (root) |r| c_librarys.g_object_unref(r);
+    var root: ?*c_libs.GFile = null;
+    defer if (root) |r| c_libs.g_object_unref(r);
 
-    if (c_librarys.ostree_repo_write_mtree(repo, mtree, &root, null, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
-        _ = c_librarys.ostree_repo_abort_transaction(repo, null, null);
+    if (c_libs.ostree_repo_write_mtree(c_ostree_repo, mtree, &root, null, &global_glib_err) == 0) {
+        if (global_glib_err) |err| c_libs.g_error_free(err);
+        _ = c_libs.ostree_repo_abort_transaction(c_ostree_repo, null, null);
         if (machine.exhausted()) {
             stateFailed(machine);
             return OstreeError.CommitFailed;
@@ -154,19 +162,30 @@ fn stateCommitting(machine: *CommitMachine) anyerror!void {
         return stateCommitting(machine);
     }
 
-    if (c_librarys.ostree_repo_write_commit(
-        repo,
+    var parent_checksum: [*c]u8 = null;
+    defer if (parent_checksum) |checksum| c_libs.g_free(checksum);
+
+    _ = c_libs.ostree_repo_resolve_rev(
+        c_ostree_repo,
+        branch_c.ptr,
+        1,
+        &parent_checksum,
         null,
+    );
+
+    if (c_libs.ostree_repo_write_commit(
+        c_ostree_repo,
+        parent_checksum,
         subject_c.ptr,
         body_c.ptr,
         null,
         @ptrCast(root),
         &commit_checksum,
         null,
-        &err,
+        &global_glib_err,
     ) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
-        _ = c_librarys.ostree_repo_abort_transaction(repo, null, null);
+        if (global_glib_err) |err| c_libs.g_error_free(err);
+        _ = c_libs.ostree_repo_abort_transaction(c_ostree_repo, null, null);
         if (machine.exhausted()) {
             stateFailed(machine);
             return OstreeError.CommitFailed;
@@ -175,10 +194,10 @@ fn stateCommitting(machine: *CommitMachine) anyerror!void {
         return stateCommitting(machine);
     }
 
-    c_librarys.ostree_repo_transaction_set_ref(repo, null, branch_c.ptr, commit_checksum);
+    c_libs.ostree_repo_transaction_set_ref(c_ostree_repo, null, branch_c.ptr, commit_checksum);
 
-    if (c_librarys.ostree_repo_commit_transaction(repo, null, null, &err) == 0) {
-        if (err) |e| c_librarys.g_error_free(e);
+    if (c_libs.ostree_repo_commit_transaction(c_ostree_repo, null, null, &global_glib_err) == 0) {
+        if (global_glib_err) |err| c_libs.g_error_free(err);
         if (machine.exhausted()) {
             stateFailed(machine);
             return OstreeError.CommitFailed;
@@ -193,12 +212,11 @@ fn stateCommitting(machine: *CommitMachine) anyerror!void {
 
 fn stateDone(machine: *CommitMachine) anyerror!void {
     try machine.enter(.done);
-    std.debug.print("✓ ostree commit on branch '{s}'\n", .{machine.request.branch});
 }
 
 fn stateFailed(machine: *CommitMachine) void {
     _ = machine.enter(.failed) catch {};
     std.debug.print("✗ ostree failed, path: ", .{});
-    for (machine.stack.items) |s| std.debug.print("{s} ", .{@tagName(s)});
+    for (machine.stack.items) |state_id| std.debug.print("{s} ", .{@tagName(state_id)});
     std.debug.print("\n", .{});
 }

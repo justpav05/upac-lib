@@ -57,6 +57,15 @@ pub const CInstallRequest = extern struct {
     max_retries: u8,
 };
 
+// ── Типы uninstaller ────────────────────────────────────────────────────────────
+pub const CUninstallRequest = extern struct {
+    package_name: CSlice,
+    root_path: CSlice,
+    repo_path: CSlice,
+    db_path: CSlice,
+    max_retries: u8,
+};
+
 // ── Типы ostree ───────────────────────────────────────────────────────────────
 pub const CDiffKind = enum(u8) {
     added = 0,
@@ -78,14 +87,42 @@ pub const CDiffArray = extern struct {
     }
 };
 
+pub const COstreeOperation = enum(u8) {
+    install = 0,
+    remove = 1,
+    manual = 2,
+};
+
+pub const CCommitEntry = extern struct {
+    checksum: CSlice,
+    subject: CSlice,
+};
+
+pub const CCommitArray = extern struct {
+    ptr: [*]CCommitEntry,
+    len: usize,
+
+    pub fn toSlice(self: CCommitArray) []CCommitEntry {
+        return self.ptr[0..self.len];
+    }
+};
+
 pub const CCommitRequest = extern struct {
     repo_path: CSlice,
     content_path: CSlice,
     branch: CSlice,
-    operation: CSlice,
+    operation: COstreeOperation,
     packages: [*]CPackageMeta,
     packages_len: usize,
     db_path: CSlice,
+};
+
+pub const CRefreshRequest = extern struct {
+    repo_path: CSlice,
+    content_path: CSlice,
+    root_path: CSlice,
+    branch: CSlice,
+    database_path: CSlice,
 };
 
 // ── Типы init ─────────────────────────────────────────────────────────────────

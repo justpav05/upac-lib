@@ -23,8 +23,12 @@ pub fn build(b: *std.Build) void {
     const upac_installer = b.addModule("upac-installer", .{
         .root_source_file = b.path("src/installer/installer.zig"),
     });
-    upac_installer.addImport("upac-lock", upac_lock);
     upac_installer.addImport("upac-database", upac_database);
+
+    const upac_uninstaller = b.addModule("upac-uninstaller", .{
+        .root_source_file = b.path("src/uninstaller/uninstaller.zig"),
+    });
+    upac_uninstaller.addImport("upac-database", upac_database);
 
     const upac_ostree = b.addModule("upac-ostree", .{
         .root_source_file = b.path("src/ostree/ostree.zig"),
@@ -77,6 +81,7 @@ pub fn build(b: *std.Build) void {
 
     shared_lib.root_module.addImport("upac-database", upac_database);
     shared_lib.root_module.addImport("upac-installer", upac_installer);
+    shared_lib.root_module.addImport("upac-uninstaller", upac_uninstaller);
     shared_lib.root_module.addImport("upac-ostree", upac_ostree);
     shared_lib.root_module.addImport("upac-init", upac_init);
 

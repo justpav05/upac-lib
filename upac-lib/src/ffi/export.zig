@@ -6,6 +6,8 @@ const database = @import("upac-database");
 
 const installer = @import("upac-installer");
 
+const uninstaller = @import("upac-uninstaller");
+
 const ostree = @import("upac-ostree");
 
 const init = @import("upac-init");
@@ -17,7 +19,11 @@ const CPackageMeta = types.CPackageMeta;
 const CPackageFiles = types.CPackageFiles;
 
 const CInstallRequest = types.CInstallRequest;
+const CUninstallRequest = types.CUninstallRequest;
 const CCommitRequest = types.CCommitRequest;
+
+const CCommitEntry = types.CCommitEntry;
+const CCommitArray = types.CCommitArray;
 
 const CDiffArray = types.CDiffArray;
 const CDiffEntry = types.CDiffEntry;
@@ -198,6 +204,24 @@ pub export fn upac_install(c_install_data: CInstallRequest) callconv(.C) i32 {
     return @intFromEnum(ErrorCode.ok);
 }
 
+// ── Uninstaller API ───────────────────────────────────────────────────────────
+pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C) i32 {
+    const allocator = types.allocator();
+
+    const zig_uninstall_data = uninstaller.UninstallData{
+        .package_name = c_uninstall_request.package_name.toSlice(),
+        .root_path = c_uninstall_request.root_path.toSlice(),
+        .repo_path = c_uninstall_request.repo_path.toSlice(),
+        .database_path = c_uninstall_request.db_path.toSlice(),
+        .max_retries = c_uninstall_request.max_retries,
+    };
+
+    uninstaller.uninstall(zig_uninstall_data, allocator) catch |err|
+        return @intFromEnum(types.fromError(err));
+
+    return @intFromEnum(ErrorCode.ok);
+}
+
 // ── OStree API ────────────────────────────────────────────────────────────────
 /// Создать коммит OStree.
 pub export fn upac_ostree_commit(c_commit_request: CCommitRequest) callconv(.C) i32 {
@@ -213,12 +237,31 @@ pub export fn upac_ostree_commit(c_commit_request: CCommitRequest) callconv(.C) 
         .repo_path = c_commit_request.repo_path.toSlice(),
         .content_path = c_commit_request.content_path.toSlice(),
         .branch = c_commit_request.branch.toSlice(),
-        .operation = c_commit_request.operation.toSlice(),
+        .operation = switch (c_commit_request.operation) {
+            .install => .install,
+            .remove => .remove,
+            .manual => .manual,
+        },
         .packages = zig_package_meta,
         .database_path = c_commit_request.db_path.toSlice(),
     };
 
     ostree.commit(zig_request, allocator) catch |err| return @intFromEnum(types.fromError(err));
+
+    return @intFromEnum(ErrorCode.ok);
+}
+
+pub export fn upac_refresh(c_repo_path: CSlice, c_content_path: CSlice, c_root_path: CSlice, c_branch: CSlice, c_database_path: CSlice) callconv(.C) i32 {
+    const allocator = types.allocator();
+
+    ostree.refresh(
+        c_repo_path.toSlice(),
+        c_content_path.toSlice(),
+        c_root_path.toSlice(),
+        c_branch.toSlice(),
+        c_database_path.toSlice(),
+        allocator,
+    ) catch |err| return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
@@ -260,6 +303,46 @@ pub export fn upac_diff_free(c_diff: *CDiffArray) callconv(.C) void {
     const entries = c_diff.toSlice();
 
     for (entries) |entry| allocator.free(entry.path.toSlice());
+    allocator.free(entries);
+}
+
+pub export fn upac_ostree_list_commits(c_repo_path: CSlice, c_branch: CSlice, c_out: *CCommitArray) callconv(.C) i32 {
+    const allocator = types.allocator();
+
+    const commit_entries = ostree.listCommits(
+        c_repo_path.toSlice(),
+        c_branch.toSlice(),
+        allocator,
+    ) catch |err| return @intFromEnum(types.fromError(err));
+
+    const c_entries = allocator.alloc(CCommitEntry, commit_entries.len) catch {
+        for (commit_entries) |entry| {
+            allocator.free(entry.checksum);
+            allocator.free(entry.subject);
+        }
+        allocator.free(commit_entries);
+        return @intFromEnum(ErrorCode.out_of_memory);
+    };
+
+    for (commit_entries, 0..) |entry, index| {
+        c_entries[index] = .{
+            .checksum = CSlice.fromSlice(entry.checksum),
+            .subject = CSlice.fromSlice(entry.subject),
+        };
+    }
+    allocator.free(commit_entries);
+
+    c_out.* = .{ .ptr = c_entries.ptr, .len = c_entries.len };
+    return @intFromEnum(ErrorCode.ok);
+}
+
+pub export fn upac_commits_free(c_commits: *CCommitArray) callconv(.C) void {
+    const allocator = types.allocator();
+    const entries = c_commits.toSlice();
+    for (entries) |entry| {
+        allocator.free(entry.checksum.toSlice());
+        allocator.free(entry.subject.toSlice());
+    }
     allocator.free(entries);
 }
 

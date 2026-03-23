@@ -76,41 +76,41 @@ fn skipLeadSection(file: std.fs.File) !void {
 }
 
 fn skipSignatureSection(allocator: std.mem.Allocator, file: std.fs.File) !void {
-    _ = allocator;
-
-    // Читаем magic + version (4 байта) + reserved (4 байта)
     var section_header_buffer: [8]u8 = undefined;
-    _ = try file.read(&section_header_buffer);
+    try file.reader().readNoEof(&section_header_buffer);
 
     if (!std.mem.eql(u8, section_header_buffer[0..3], &header_magic)) {
         return error.InvalidSignatureMagic;
     }
 
-    // Читаем количество тегов и размер данных
     var count_buffer: [4]u8 = undefined;
-    _ = try file.read(&count_buffer);
+    try file.reader().readNoEof(&count_buffer);
     const tag_count = std.mem.readInt(u32, &count_buffer, .big);
 
     var size_buffer: [4]u8 = undefined;
-    _ = try file.read(&size_buffer);
+    try file.reader().readNoEof(&size_buffer);
     const data_size = std.mem.readInt(u32, &size_buffer, .big);
 
-    // Пропускаем теги и данные
     const tags_size = tag_count * 16;
-    try file.seekBy(@intCast(tags_size + data_size));
 
-    // Секция сигнатуры выровнена по 8 байт
+    // Пропускаем теги и данные через буфер
+    const skip_buffer = try allocator.alloc(u8, tags_size + data_size);
+    defer allocator.free(skip_buffer);
+    try file.reader().readNoEof(skip_buffer);
+
+    // Выравнивание по 8 байт
     const total_size = 16 + tags_size + data_size;
     const alignment_remainder = total_size % 8;
     if (alignment_remainder != 0) {
-        try file.seekBy(@intCast(8 - alignment_remainder));
+        var padding: [8]u8 = undefined;
+        try file.reader().readNoEof(padding[0 .. 8 - alignment_remainder]);
     }
 }
 
 fn readHeaderSection(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader {
     // Magic + version
     var section_header_buffer: [8]u8 = undefined;
-    _ = try file.read(&section_header_buffer);
+    try file.reader().readNoEof(&section_header_buffer);
 
     if (!std.mem.eql(u8, section_header_buffer[0..3], &header_magic)) {
         return error.InvalidHeaderMagic;
@@ -118,12 +118,12 @@ fn readHeaderSection(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader
 
     // Количество тегов
     var tag_count_buffer: [4]u8 = undefined;
-    _ = try file.read(&tag_count_buffer);
+    try file.reader().readNoEof(&tag_count_buffer);
     const tag_count = std.mem.readInt(u32, &tag_count_buffer, .big);
 
     // Размер блока данных
     var data_size_buffer: [4]u8 = undefined;
-    _ = try file.read(&data_size_buffer);
+    try file.reader().readNoEof(&data_size_buffer);
     const data_size = std.mem.readInt(u32, &data_size_buffer, .big);
 
     // Читаем все теги
@@ -139,26 +139,27 @@ fn readHeaderSection(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader
 
     for (tag_entries) |*tag_entry| {
         var tag_buffer: [4]u8 = undefined;
-        _ = try file.read(&tag_buffer);
+        try file.reader().readNoEof(&tag_buffer);
         tag_entry.tag = std.mem.readInt(u32, &tag_buffer, .big);
 
         var type_buffer: [4]u8 = undefined;
-        _ = try file.read(&type_buffer);
+        try file.reader().readNoEof(&type_buffer);
         tag_entry.tag_type = std.mem.readInt(u32, &type_buffer, .big);
 
         var offset_buffer: [4]u8 = undefined;
-        _ = try file.read(&offset_buffer);
+        try file.reader().readNoEof(&offset_buffer);
         tag_entry.offset = std.mem.readInt(u32, &offset_buffer, .big);
 
         var count_buffer: [4]u8 = undefined;
-        _ = try file.read(&count_buffer);
+        try file.reader().readNoEof(&count_buffer);
         tag_entry.count = std.mem.readInt(u32, &count_buffer, .big);
     }
 
     // Читаем блок данных
     const data_block = try allocator.alloc(u8, data_size);
     defer allocator.free(data_block);
-    _ = try file.read(data_block);
+
+    try file.reader().readNoEof(data_block);
 
     // Извлекаем нужные теги
     var rpm_header = RpmHeader{
