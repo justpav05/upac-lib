@@ -31,13 +31,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Install {
-        file: String,
+        files: Vec<String>,
 
         #[arg(long)]
         backend: Option<String>,
 
-        #[arg(long)]
-        checksum: Option<String>,
+        #[arg(long, num_args = 0..)]
+        checksums: Vec<String>,
     },
 
     Remove {
@@ -83,11 +83,11 @@ fn run() -> Result<()> {
 
     match cli.command {
         Command::Install {
-            file,
+            files,
             backend,
-            checksum,
+            checksums,
         } => {
-            commands::install::run(config, file, backend, checksum)?;
+            commands::install::run(config, files, backend, checksums)?;
         }
         Command::Remove { name } => {
             commands::remove::run(config, name)?;

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub verbose: bool,
@@ -15,7 +15,7 @@ pub struct Config {
     pub ostree: OstreeConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Paths {
     #[serde(alias = "db_path")]
     pub database_path: String,
@@ -26,7 +26,7 @@ pub struct Paths {
     pub ostree_path: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct OstreeConfig {
     pub enabled: bool,
     pub branch: String,

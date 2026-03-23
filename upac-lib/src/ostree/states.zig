@@ -80,7 +80,7 @@ fn stateBuildingMessage(machine: *CommitMachine) anyerror!void {
             machine.allocator.free(package_meta.checksum);
         }
 
-        try body_writer.print("  - name={s} version={s} author={s} description={s} license={s} url={s} installed_at={d} checksum={s}\n", .{
+        try body_writer.print("pkg name={s} version={s} author={s} description={s} license={s} url={s} installed_at={d} checksum={s}\n", .{
             package_meta.name,
             package_meta.version,
             package_meta.author,

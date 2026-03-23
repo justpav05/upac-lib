@@ -12,3 +12,5 @@ toml       = { version = "0.8" }
 colored    = { version = "2" }
 anyhow     = { version = "1" }
 chrono = { version = "0.4" }
+sha2 = { version = "0.10" }
+hex  = { version = "0.4" }

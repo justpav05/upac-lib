@@ -76,9 +76,8 @@ jobs:
             rpm -Uvh pkg/rpm/RPMS/x86_64/upac-${{ steps.version.outputs.version }}-1.x86_64.rpm
             ```
 
-            files: |
-              pkg/arch/${{ steps.version.outputs.pkg }}
-              pkg/rpm/RPMS/x86_64/upac-${{ steps.version.outputs.version }}-1.x86_64.rpm
-              config.toml.example
+          files: |
+            pkg/arch/${{ steps.version.outputs.pkg }}
+            pkg/rpm/RPMS/x86_64/upac-${{ steps.version.outputs.version }}-1.x86_64.rpm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

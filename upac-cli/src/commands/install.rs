@@ -4,7 +4,10 @@ use colored::Colorize;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
+use sha2::{Digest, Sha256};
+
 use std::fs;
+use std::io::Read;
 use std::process;
 use std::ptr;
 use std::time::Duration;
@@ -12,7 +15,9 @@ use std::time::Duration;
 use crate::backends::{Backend, BackendKind, PackageMeta};
 
 use crate::config::Config;
-use crate::ffi::{CCommitRequest, CInstallRequest, COstreeOperation, CSlice, CSliceArray, UpacLib};
+use crate::ffi::{
+    CCommitRequest, CInstallRequest, COstreeOperation, CPackageMeta, CSlice, CSliceArray, UpacLib,
+};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -282,29 +287,82 @@ fn state_done(install_machine: &mut InstallMachine) -> Result<()> {
 // ── Публичное API ─────────────────────────────────────────────────────────────
 pub fn run(
     config: Config,
-    file: String,
+    files: Vec<String>,
     backend: Option<String>,
-    checksum: Option<String>,
+    checksums: Vec<String>,
 ) -> Result<()> {
-    let package_checksum = checksum.ok_or_else(|| {
-        anyhow::anyhow!("--checksum is required. Provide the SHA-256 hash of the package file")
-    })?;
+    if !checksums.is_empty() && checksums.len() != files.len() {
+        anyhow::bail!(
+            "number of checksums ({}) must match number of files ({})",
+            checksums.len(),
+            files.len()
+        );
+    }
 
-    let mut install_machine = InstallMachine::new(config, file, backend, package_checksum);
+    let mut config_no_ostree = config.clone();
+    config_no_ostree.ostree.enabled = false;
 
-    state_detecting_backend(&mut install_machine).map_err(|err| {
-        if !matches!(install_machine.stack.last(), Some(State::Failed(_))) {
-            install_machine.enter(State::Failed(err.to_string()));
+    let mut installed_packages: Vec<PackageMeta> = Vec::new();
+
+    for (index, file) in files.iter().enumerate() {
+        let checksum = if checksums.is_empty() {
+            compute_checksum(file)?
+        } else {
+            checksums[index].clone()
+        };
+
+        let mut install_machine = InstallMachine::new(
+            config_no_ostree.clone(),
+            file.clone(),
+            backend.clone(),
+            checksum,
+        );
+
+        state_detecting_backend(&mut install_machine).map_err(|err| {
+            if !matches!(install_machine.stack.last(), Some(State::Failed(_))) {
+                install_machine.enter(State::Failed(err.to_string()));
+            }
+            if config.verbose {
+                eprintln!(
+                    "{} failed at state {:?}",
+                    "✗".red().bold(),
+                    install_machine.stack.last()
+                );
+            }
+            err
+        })?;
+
+        if let Some(meta) = install_machine.package_meta.take() {
+            installed_packages.push(meta);
         }
-        if install_machine.config.verbose {
-            eprintln!(
-                "{} failed at state {:?}",
-                "✗".red().bold(),
-                install_machine.stack.last()
-            );
+    }
+
+    if config.ostree.enabled && !installed_packages.is_empty() {
+        let upac_lib = UpacLib::load()?;
+        let c_packages_metas: Vec<CPackageMeta> = installed_packages
+            .iter()
+            .map(|package_meta| package_meta.as_c())
+            .collect();
+
+        let c_commit_request = CCommitRequest {
+            repo_path: CSlice::from_str(&config.paths.ostree_path),
+            content_path: CSlice::from_str(&config.paths.repo_path),
+            branch: CSlice::from_str(&config.ostree.branch),
+            operation: COstreeOperation::Install,
+            packages: c_packages_metas.as_ptr(),
+            packages_len: c_packages_metas.len(),
+            db_path: CSlice::from_str(&config.paths.database_path),
+        };
+
+        let return_code = unsafe { (upac_lib.ostree_commit)(c_commit_request) };
+        if let Err(err) = UpacLib::check(return_code, "ostree commit") {
+            eprintln!("{} ostree snapshot failed: {err}", "⚠".yellow().bold());
+        } else {
+            println!("{} snapshot created", "✓".green().bold());
         }
-        err
-    })
+    }
+
+    Ok(())
 }
 
 // ── Хелперы ───────────────────────────────────────────────────────────────────
@@ -319,4 +377,22 @@ fn spinner(message: &str) -> ProgressBar {
     progress_bar.set_message(message.to_owned());
     progress_bar.enable_steady_tick(Duration::from_millis(80));
     progress_bar
+}
+
+fn compute_checksum(file_path: &str) -> Result<String> {
+    let mut file =
+        fs::File::open(file_path).map_err(|err| anyhow::anyhow!("failed to open file: {err}"))?;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 4096];
+
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
 }
