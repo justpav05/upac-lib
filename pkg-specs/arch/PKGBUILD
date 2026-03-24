@@ -32,6 +32,9 @@ package() {
     install -Dm755 "${srcdir}/../root/usr/lib/libupac-backend-rpm.so" \
         "${pkgdir}/usr/lib/libupac-backend-rpm.so"
 
+    install -Dm755 "${srcdir}/../root/usr/lib/libupac-backend-deb.so" \
+        "${pkgdir}/usr/lib/libupac-backend-deb.so"
+
     # Пример конфига
     install -Dm644 "${srcdir}/../root/etc/upac/config.toml.example" \
         "${pkgdir}/etc/upac/config.toml.example"

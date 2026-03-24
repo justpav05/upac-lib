@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const backend = @import("backend.zig");
-const Machine = backend.Machine;
+const Machine = backend.BackendMachine;
 const PackageMeta = backend.PackageMeta;
 const BackendError = backend.BackendError;
 

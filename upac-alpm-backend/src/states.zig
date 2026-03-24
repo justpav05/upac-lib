@@ -2,7 +2,7 @@ const std = @import("std");
 const posix = std.posix;
 
 const backend = @import("backend.zig");
-const Machine = backend.Machine;
+const Machine = backend.BackendMachine;
 const PackageMeta = backend.PackageMeta;
 const BackendError = backend.BackendError;
 

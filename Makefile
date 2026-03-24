@@ -23,6 +23,8 @@ build-backends:
 	cd $(ROOT_DIR)/upac-alpm-backend && zig build --prefix zig-out
 	@echo "--- Building upac-rpm-backend ---"
 	cd $(ROOT_DIR)/upac-rpm-backend && zig build --prefix zig-out
+	@echo "--- Building upac-deb-backend ---"
+	cd $(ROOT_DIR)/upac-deb-backend && zig build --prefix zig-out
 
 build-cli:
 	@echo "--- Building upac-cli ---"
@@ -33,8 +35,10 @@ debug-build:
 	cd $(ROOT_DIR)/upac-lib && zig build --prefix zig-out
 
 	cd $(ROOT_DIR)/upac-alpm-backend && zig build --prefix zig-out
-
+	@echo "--- Debug building upac-rpm-backend ---"
 	cd $(ROOT_DIR)/upac-rpm-backend && zig build --prefix zig-out
+	@echo "--- Debug building upac-deb-backend ---"
+	cd $(ROOT_DIR)/upac-deb-backend && zig build --prefix zig-out
 
 	cd $(ROOT_DIR)/upac-cli && \
     	RUSTFLAGS="-C prefer-dynamic=false \
@@ -63,6 +67,8 @@ pkg-arch: build
 	    $(PKG_DIR)/arch/root/usr/lib/
 	@cp $(ROOT_DIR)/upac-rpm-backend/zig-out/lib/libupac-backend-rpm.so \
         $(PKG_DIR)/arch/root/usr/lib/
+	@cp $(ROOT_DIR)/upac-deb-backend/zig-out/lib/libupac-backend-deb.so \
+	    $(PKG_DIR)/arch/root/usr/lib/
 	@cp $(ROOT_DIR)/config.toml.example \
 	    $(PKG_DIR)/arch/root/etc/upac/
 	@cd $(PKG_DIR)/arch && makepkg --nodeps --noconfirm -f
@@ -91,6 +97,8 @@ pkg-rpm: build
 	@cp $(ROOT_DIR)/upac-alpm-backend/zig-out/lib/libupac-backend-arch.so \
 	    $(PKG_DIR)/rpm/root/usr/lib/
 	@cp $(ROOT_DIR)/upac-rpm-backend/zig-out/lib/libupac-backend-rpm.so \
+	    $(PKG_DIR)/rpm/root/usr/lib/
+	@cp $(ROOT_DIR)/upac-deb-backend/zig-out/lib/libupac-backend-deb.so \
 	    $(PKG_DIR)/rpm/root/usr/lib/
 	@cp $(ROOT_DIR)/config.toml.example \
 	    $(PKG_DIR)/rpm/root/etc/upac/

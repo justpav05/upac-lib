@@ -40,25 +40,25 @@ pub const StateId = enum {
     failed,
 };
 
-pub const Machine = struct {
+pub const BackendMachine = struct {
     request: PrepareRequest,
     stack: std.ArrayList(StateId),
     allocator: std.mem.Allocator,
     meta: ?PackageMeta,
 
-    pub fn enter(self: *Machine, id: StateId) !void {
+    pub fn enter(self: *BackendMachine, id: StateId) !void {
         try self.stack.append(id);
         std.debug.print("[arch → {s}]\n", .{@tagName(id)});
     }
 
-    pub fn deinit(self: *Machine) void {
+    pub fn deinit(self: *BackendMachine) void {
         self.stack.deinit();
     }
 };
 
 // ── Публичное API ─────────────────────────────────────────────────────────────
 pub fn prepare(request: PrepareRequest, allocator: std.mem.Allocator) !PackageMeta {
-    var machine = Machine{
+    var machine = BackendMachine{
         .request = request,
         .stack = std.ArrayList(StateId).init(allocator),
         .allocator = allocator,
@@ -105,10 +105,7 @@ const CPrepareRequest = extern struct {
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 // ── FFI экспорты ──────────────────────────────────────────────────────────────
-pub export fn upac_backend_prepare(
-    request: *const CPrepareRequest,
-    out_meta: *CPackageMeta,
-) callconv(.C) i32 {
+pub export fn upac_backend_prepare(request: *const CPrepareRequest, out_meta: *CPackageMeta) callconv(.C) i32 {
     const allocator = gpa.allocator();
 
     const zig_request = PrepareRequest{

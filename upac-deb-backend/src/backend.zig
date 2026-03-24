@@ -2,6 +2,7 @@ const std = @import("std");
 
 const states = @import("states.zig");
 
+// ── Публичные типы ────────────────────────────────────────────────────────────
 pub const PackageMeta = struct {
     name: []const u8,
     version: []const u8,
@@ -14,8 +15,8 @@ pub const PackageMeta = struct {
 };
 
 pub const PrepareRequest = struct {
-    package_path: []const u8,
-    output_path: []const u8,
+    pkg_path: []const u8,
+    out_path: []const u8,
     checksum: []const u8,
 };
 
@@ -30,32 +31,35 @@ pub const BackendError = error{
     ArchiveExtractFailed,
 };
 
+// ── Внутренние типы FSM ───────────────────────────────────────────────────────
 pub const StateId = enum {
     verifying,
+    verifying_files,
     extracting,
     reading_meta,
     done,
     failed,
 };
 
-pub const BackendMachine = struct {
+pub const Machine = struct {
     request: PrepareRequest,
     stack: std.ArrayList(StateId),
     allocator: std.mem.Allocator,
     meta: ?PackageMeta,
 
-    pub fn enter(self: *BackendMachine, state_id: StateId) !void {
-        try self.stack.append(state_id);
-        std.debug.print("[rpm → {s}]\n", .{@tagName(state_id)});
+    pub fn enter(self: *Machine, id: StateId) !void {
+        try self.stack.append(id);
+        std.debug.print("[arch → {s}]\n", .{@tagName(id)});
     }
 
-    pub fn deinit(self: *BackendMachine) void {
+    pub fn deinit(self: *Machine) void {
         self.stack.deinit();
     }
 };
 
+// ── Публичное API ─────────────────────────────────────────────────────────────
 pub fn prepare(request: PrepareRequest, allocator: std.mem.Allocator) !PackageMeta {
-    var machine = BackendMachine{
+    var machine = Machine{
         .request = request,
         .stack = std.ArrayList(StateId).init(allocator),
         .allocator = allocator,
@@ -68,7 +72,7 @@ pub fn prepare(request: PrepareRequest, allocator: std.mem.Allocator) !PackageMe
     return machine.meta orelse BackendError.InvalidPackage;
 }
 
-// ── FFI ───────────────────────────────────────────────────────────────────────
+// ── FFI типы ──────────────────────────────────────────────────────────────────
 const CSlice = extern struct {
     ptr: [*]const u8,
     len: usize,
@@ -77,8 +81,8 @@ const CSlice = extern struct {
         return self.ptr[0..self.len];
     }
 
-    fn fromSlice(slice: []const u8) CSlice {
-        return .{ .ptr = slice.ptr, .len = slice.len };
+    fn fromSlice(s: []const u8) CSlice {
+        return .{ .ptr = s.ptr, .len = s.len };
     }
 };
 
@@ -94,13 +98,14 @@ const CPackageMeta = extern struct {
 };
 
 const CPrepareRequest = extern struct {
-    package_path: CSlice,
-    output_path: CSlice,
+    pkg_path: CSlice,
+    out_path: CSlice,
     checksum: CSlice,
 };
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
+// ── FFI экспорты ──────────────────────────────────────────────────────────────
 pub export fn upac_backend_prepare(
     request: *const CPrepareRequest,
     out_meta: *CPackageMeta,
@@ -108,12 +113,12 @@ pub export fn upac_backend_prepare(
     const allocator = gpa.allocator();
 
     const zig_request = PrepareRequest{
-        .package_path = request.package_path.toSlice(),
-        .output_path = request.output_path.toSlice(),
+        .pkg_path = request.pkg_path.toSlice(),
+        .out_path = request.out_path.toSlice(),
         .checksum = request.checksum.toSlice(),
     };
 
-    const package_meta = prepare(zig_request, allocator) catch |err| {
+    const meta = prepare(zig_request, allocator) catch |err| {
         return switch (err) {
             BackendError.ChecksumMismatch => 1,
             BackendError.ExtractionFailed => 2,
@@ -128,26 +133,26 @@ pub export fn upac_backend_prepare(
     };
 
     out_meta.* = CPackageMeta{
-        .name = CSlice.fromSlice(package_meta.name),
-        .version = CSlice.fromSlice(package_meta.version),
-        .author = CSlice.fromSlice(package_meta.author),
-        .description = CSlice.fromSlice(package_meta.description),
-        .license = CSlice.fromSlice(package_meta.license),
-        .url = CSlice.fromSlice(package_meta.url),
-        .installed_at = package_meta.installed_at,
-        .checksum = CSlice.fromSlice(package_meta.checksum),
+        .name = CSlice.fromSlice(meta.name),
+        .version = CSlice.fromSlice(meta.version),
+        .author = CSlice.fromSlice(meta.author),
+        .description = CSlice.fromSlice(meta.description),
+        .license = CSlice.fromSlice(meta.license),
+        .url = CSlice.fromSlice(meta.url),
+        .installed_at = meta.installed_at,
+        .checksum = CSlice.fromSlice(meta.checksum),
     };
 
     return 0;
 }
 
-pub export fn upac_backend_meta_free(package_meta: *CPackageMeta) callconv(.C) void {
+pub export fn upac_backend_meta_free(meta: *CPackageMeta) callconv(.C) void {
     const allocator = gpa.allocator();
-    allocator.free(package_meta.name.toSlice());
-    allocator.free(package_meta.version.toSlice());
-    allocator.free(package_meta.author.toSlice());
-    allocator.free(package_meta.description.toSlice());
-    allocator.free(package_meta.license.toSlice());
-    allocator.free(package_meta.url.toSlice());
-    allocator.free(package_meta.checksum.toSlice());
+    allocator.free(meta.name.toSlice());
+    allocator.free(meta.version.toSlice());
+    allocator.free(meta.author.toSlice());
+    allocator.free(meta.description.toSlice());
+    allocator.free(meta.license.toSlice());
+    allocator.free(meta.url.toSlice());
+    allocator.free(meta.checksum.toSlice());
 }
