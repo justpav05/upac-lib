@@ -37,6 +37,7 @@ impl PackageMeta {
 pub enum BackendKind {
     Alpm,
     Rpm,
+    Deb,
 }
 
 impl BackendKind {
@@ -50,6 +51,9 @@ impl BackendKind {
         if path.ends_with(".rpm") {
             return Some(Self::Rpm);
         }
+        if path.ends_with(".deb") {
+            return Some(Self::Deb);
+        }
         None
     }
 
@@ -57,7 +61,8 @@ impl BackendKind {
         match string {
             "arch" | "alpm" => Ok(Self::Alpm),
             "rpm" | "fedora" | "opensuse" => Ok(Self::Rpm),
-            _ => bail!("unknown backend: '{string}'. Available: arch, alpm, rpm"),
+            "deb" | "debian" => Ok(Self::Deb),
+            _ => bail!("unknown backend: '{string}'. Available: alpm, rpm, deb"),
         }
     }
 
@@ -65,6 +70,7 @@ impl BackendKind {
         match self {
             Self::Alpm => "libupac-backend-arch.so",
             Self::Rpm => "libupac-backend-rpm.so",
+            Self::Deb => "libupac-backend-deb.so",
         }
     }
 }
