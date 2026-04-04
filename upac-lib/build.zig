@@ -5,10 +5,6 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // ── Модули ────────────────────────────────────────────────────────────────
-    const upac_toml = b.addModule("upac-toml", .{
-        .root_source_file = b.path("src/parser/parser.zig"),
-    });
-
     const upac_file = b.addModule("upac-toml", .{
         .root_source_file = b.path("src/file/file.zig"),
     });
@@ -20,7 +16,6 @@ pub fn build(b: *std.Build) void {
     const upac_database = b.addModule("upac-database", .{
         .root_source_file = b.path("src/database/database.zig"),
     });
-    upac_database.addImport("upac-toml", upac_toml);
 
     const upac_installer = b.addModule("upac-installer", .{
         .root_source_file = b.path("src/installer/installer.zig"),
@@ -35,7 +30,6 @@ pub fn build(b: *std.Build) void {
     const upac_ostree = b.addModule("upac-ostree", .{
         .root_source_file = b.path("src/ostree/ostree.zig"),
     });
-    upac_ostree.addImport("upac-lock", upac_lock);
     upac_ostree.addImport("upac-database", upac_database);
     upac_ostree.addIncludePath(.{ .cwd_relative = "/usr/include/ostree-1" });
     upac_ostree.addIncludePath(.{ .cwd_relative = "/usr/include/glib-2.0" });
