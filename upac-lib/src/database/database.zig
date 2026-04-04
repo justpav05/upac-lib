@@ -1,128 +1,93 @@
 const std = @import("std");
-const posix = std.posix;
-
-const lock = @import("upac-lock");
-const Lock = lock.Lock;
-const LockKind = lock.LockKind;
 
 const states = @import("states.zig");
 
-// ── Публичные типы ────────────────────────────────────────────────────────────
-pub const PackageMeta = struct {
-    name: []const u8,
-    version: []const u8,
-    author: []const u8,
-    description: []const u8,
-    license: []const u8,
-    url: []const u8,
-    installed_at: i64,
-    checksum: []const u8,
+const types = @import("upac-types");
+const Package = types.Package;
+
+// ── Errors ────────────────────────────────────────────────────────────────────
+pub const ParserFSMError = error{
+    UnexpectedEndOfInput,
+    UnexpectedChar,
+    MissingField,
+    InvalidHeader,
+    InvalidFilesSection,
 };
 
-pub const PackageFiles = struct {
-    name: []const u8,
-    paths: []const []const u8,
-};
+// ── DatabaseFSMStateId ──────────────────────────────────────────────────────────
+pub const ParserFSMStateId = enum {
+    start,
 
-// ── Внутренние типы FSM ───────────────────────────────────────────────────────
-pub const DbOperation = enum { add, remove, read_meta, read_files, list };
+    open_package,
+    author,
+    version,
+    license,
+    category,
+    description,
+    link,
+    date,
+    checksum,
+    close_package,
+    open_files,
+    file_path_start,
+    file_path_end,
+    file_checksum_start,
+    file_checksum_end,
+    close_files,
 
-pub const DbStateId = enum {
-    acquiring_lock,
-    reading_index,
-    reading_package,
-    writing_package,
-    updating_index,
-    updating_package,
-    releasing_lock,
     done,
     failed,
 };
 
-pub const OperationInput = union(DbOperation) {
-    add: struct { meta: PackageMeta, files: PackageFiles },
-    remove: struct { name: []const u8 },
-    read_meta: struct { name: []const u8 },
-    read_files: struct { name: []const u8 },
-    list: struct {},
-};
+// ── DatabaseFSM ─────────────────────────────────────────────────────────────────
+pub const ParserFSM = struct {
+    current_character_position: usize,
 
-pub const OperationResult = union(DbOperation) {
-    add: void,
-    remove: void,
-    read_meta: PackageMeta,
-    read_files: PackageFiles,
-    list: [][]const u8,
-};
+    current_file_path: []const u8,
 
-pub const DbMachine = struct {
-    stack: std.ArrayList(DbStateId),
-    lock: ?Lock,
-    lock_fd: ?posix.fd_t,
-    dir_path: []const u8,
+    data: []const u8,
+    result: Package,
+
+    stack: std.ArrayList(ParserFSMStateId),
     allocator: std.mem.Allocator,
-    input: OperationInput,
-    result: ?OperationResult,
-    index: ?[][]const u8,
 
-    pub fn enter(self: *DbMachine, id: DbStateId) !void {
-        try self.stack.append(id);
+    pub fn enter(self: *ParserFSM, state_id: ParserFSMStateId) !void {
+        try self.stack.append(state_id);
     }
 
-    pub fn deinit(self: *DbMachine) void {
-        self.stack.deinit();
+    pub fn currentChar(self: *const ParserFSM) ?u8 {
+        if (self.pos >= self.data.input.len) return null;
+        return self.data.input[self.pos];
+    }
 
-        if (self.index) |index| {
-            for (index) |name| self.allocator.free(name);
-            self.allocator.free(index);
-        }
+    pub fn advance(self: *ParserFSM) void {
+        if (self.pos < self.data.input.len) self.pos += 1;
+    }
+
+    pub fn run(input_string: []const u8, allocator: std.mem.Allocator) !Package {
+        var machine = ParserFSM{
+            .pos = 0,
+            .current_file_path = &[_]u8{},
+            .data = input_string,
+            .result = PackageInfo{
+                .name = &[_]u8{},
+                .author = &[_]u8{},
+                .version = &[_]u8{},
+                .license = &[_]u8{},
+                .category = &[_]u8{},
+                .description = &[_]u8{},
+                .link = &[_]u8{},
+                .install_date = &[_]u8{},
+                .checksum = &[_]u8{},
+                .files = std.StringHashMap([]const u8).init(allocator),
+            },
+            .stack = std.ArrayList(ParserFSMStateId).init(allocator),
+            .allocator = allocator,
+        };
+        defer machine.stack.deinit();
+        errdefer machine.result.files.deinit();
+
+        try states.stateStart(&machine);
+        return machine.result;
     }
 };
-
-// ── Запуск машины ─────────────────────────────────────────────────────────────
-pub fn runMachine(dir_path: []const u8, allocator: std.mem.Allocator, input: OperationInput) !?OperationResult {
-    var database_machine = DbMachine{
-        .stack = std.ArrayList(DbStateId).init(allocator),
-        .lock = null,
-        .lock_fd = null,
-        .dir_path = dir_path,
-        .allocator = allocator,
-        .input = input,
-        .result = null,
-        .index = null,
-    };
-    defer database_machine.deinit();
-
-    try states.stateAcquiringLock(&database_machine);
-    return database_machine.result;
-}
-
-// ── Публичное API ─────────────────────────────────────────────────────────────
-/// Добавить или обновить пакет в базе данных.
-pub fn addPackage(dir_path: []const u8, package_meta: PackageMeta, package_files: PackageFiles, allocator: std.mem.Allocator) !void {
-    _ = try runMachine(dir_path, allocator, .{ .add = .{ .meta = package_meta, .files = package_files } });
-}
-
-/// Удалить пакет из базы данных.
-pub fn removePackage(dir_path: []const u8, package_name: []const u8, allocator: std.mem.Allocator) !void {
-    _ = try runMachine(dir_path, allocator, .{ .remove = .{ .name = package_name } });
-}
-
-/// Получить метаданные пакета. Вызывающий освобождает все поля PackageMeta.
-pub fn getMeta(dir_path: []const u8, package_name: []const u8, allocator: std.mem.Allocator) !PackageMeta {
-    const result = try runMachine(dir_path, allocator, .{ .read_meta = .{ .name = package_name } });
-    return result.?.read_meta;
-}
-
-/// Получить список файлов пакета. Вызывающий освобождает PackageFiles.paths.
-pub fn getFiles(dir_path: []const u8, package_name: []const u8, allocator: std.mem.Allocator) !PackageFiles {
-    const result = try runMachine(dir_path, allocator, .{ .read_files = .{ .name = package_name } });
-    return result.?.read_files;
-}
-
-/// Получить список имён всех установленных пакетов.
-/// Вызывающий освобождает каждую строку и слайс.
-pub fn listPackages(dir_path: []const u8, allocator: std.mem.Allocator) ![][]const u8 {
-    const result = try runMachine(dir_path, allocator, .{ .list = .{} });
-    return result.?.list;
-}

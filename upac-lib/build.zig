@@ -5,20 +5,22 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // ── Модули ────────────────────────────────────────────────────────────────
-
-    const upac_lock = b.addModule("upac-lock", .{
-        .root_source_file = b.path("src/lock/lock.zig"),
-    });
-
     const upac_toml = b.addModule("upac-toml", .{
         .root_source_file = b.path("src/parser/parser.zig"),
     });
+
+    const upac_file = b.addModule("upac-toml", .{
+        .root_source_file = b.path("src/file/file.zig"),
+    });
+    upac_file.addIncludePath(.{ .cwd_relative = "/usr/include/ostree-1" });
+    upac_file.addIncludePath(.{ .cwd_relative = "/usr/include/glib-2.0" });
+    upac_file.addIncludePath(.{ .cwd_relative = "/usr/lib/glib-2.0/include" });
+    upac_file.addIncludePath(.{ .cwd_relative = "/usr/include/gio-unix-2.0" });
 
     const upac_database = b.addModule("upac-database", .{
         .root_source_file = b.path("src/database/database.zig"),
     });
     upac_database.addImport("upac-toml", upac_toml);
-    upac_database.addImport("upac-lock", upac_lock);
 
     const upac_installer = b.addModule("upac-installer", .{
         .root_source_file = b.path("src/installer/installer.zig"),

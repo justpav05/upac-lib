@@ -30,12 +30,6 @@ pub fn stateVerifying(machine: *InstallerMachine) anyerror!void {
 pub fn stateCopying(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.copying);
 
-    const package_destination = try std.fs.path.join(
-        machine.allocator,
-        &.{ machine.data.repo_path, machine.data.package_meta.name },
-    );
-    defer machine.allocator.free(package_destination);
-
     std.fs.makeDirAbsolute(package_destination) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
@@ -92,16 +86,6 @@ pub fn stateLinking(machine: *InstallerMachine) anyerror!void {
 
 pub fn stateSettingPerms(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.setting_perms);
-
-    // var root_dir = std.fs.openDirAbsolute(machine.state.root_path, .{ .iterate = true }) catch |err| {
-    //     if (machine.exhausted()) {
-    //         stateFailed(machine);
-    //         return err;
-    //     }
-    //     machine.retries += 1;
-    //     return stateLinking(machine);
-    // };
-    // defer root_dir.close();
 
     const pkg_path = try std.fs.path.join(
         machine.allocator,
