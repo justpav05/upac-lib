@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
 const data = @import("upac-data");
@@ -11,7 +12,8 @@ const installer_mod = @import("installer.zig");
 const InstallerMachine = installer_mod.InstallerMachine;
 const InstallerError = installer_mod.InstallerError;
 
-// ── Состояния ─────────────────────────────────────────────────────────────────
+// ── InstallerFSM states ─────────────────────────────────────────────────────────────────
+// It verifies the physical existence of the temporary package folder and the repository path. If the paths do not exist, the installation is immediately aborted
 pub fn stateVerifying(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.verifying);
 
@@ -29,6 +31,7 @@ pub fn stateVerifying(machine: *InstallerMachine) anyerror!void {
     return stateOpenRepo(machine);
 }
 
+// Initializes an Ostree Repo object. This marks the transition from Zig paths to objects within the OSTree C library
 fn stateOpenRepo(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.open_repo);
 
@@ -58,11 +61,7 @@ fn stateOpenRepo(machine: *InstallerMachine) anyerror!void {
 
     machine.repo = repo;
 
-    const branch_c = std.fmt.allocPrintZ(
-        machine.allocator,
-        "{s}",
-        .{machine.data.branch},
-    ) catch |err| {
+    const branch_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch}) catch |err| {
         stateFailed(machine);
         return err;
     };
@@ -91,6 +90,7 @@ fn stateOpenRepo(machine: *InstallerMachine) anyerror!void {
     return stateCheckInstalled(machine);
 }
 
+// A function to verify that a package has not been previously installed on the system, in order to prevent undefined behavior
 fn stateCheckInstalled(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.check_installed);
 
@@ -140,6 +140,7 @@ fn stateCheckInstalled(machine: *InstallerMachine) anyerror!void {
     return stateProcessFiles(machine);
 }
 
+// Initializes an empty mutable tree (mtree) and initiates a recursive file traversal to add files to the repository
 fn stateProcessFiles(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.process_files);
 
@@ -162,6 +163,7 @@ fn stateProcessFiles(machine: *InstallerMachine) anyerror!void {
     return stateWriteDatabase(machine);
 }
 
+// Once the files have been processed, this function saves the data to the local upac database (.meta and .files) so that the system knows the package is installed
 fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.write_database);
 
@@ -218,6 +220,7 @@ fn stateProcessDbFiles(machine: *InstallerMachine) anyerror!void {
     return stateCommit(machine);
 }
 
+// It takes an in-memory tree (mtree) and uses it to create an actual commit in the selected branch of an OSTree repository
 fn stateCommit(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.commit);
 
@@ -347,10 +350,12 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
     return stateDone(machine);
 }
 
+// Transitions the machine to its final state. Signals the caller that the package has been successfully committed to OSTree, the database has been updated, and the index has been synchronized
 fn stateDone(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.done);
 }
 
+// An automaton error state, signaling that a system rollback is required
 fn stateFailed(machine: *InstallerMachine) void {
     _ = machine.enter(.failed) catch {};
     std.debug.print("✗ install failed '{s}', states: ", .{
@@ -362,7 +367,8 @@ fn stateFailed(machine: *InstallerMachine) void {
     std.debug.print("\n", .{});
 }
 
-// ── Вспомогательные функции ───────────────────────────────────────────────────
+// ── Helpers functions ───────────────────────────────────────────────────
+// Function for generating a list of files with their checksums
 fn processDirectory(machine: *InstallerMachine, dir: std.fs.Dir, dir_path: []const u8) !void {
     var dir_iter = dir.iterate();
     while (try dir_iter.next()) |entry| {
@@ -396,6 +402,7 @@ fn processDirectory(machine: *InstallerMachine, dir: std.fs.Dir, dir_path: []con
     }
 }
 
+// A recursive assistant. It traverses the directory structure, calculates checksums for all files, and populates the FileMap. It is precisely this data that is subsequently written to the `.files` file within the database
 fn collectFileChecksums(machine: *InstallerMachine, dir_path: []const u8, prefix: []const u8, file_map: *data.FileMap) !void {
     var dir = try std.fs.openDirAbsolute(dir_path, .{ .iterate = true });
     defer dir.close();
