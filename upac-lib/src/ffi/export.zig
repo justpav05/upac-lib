@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
 const types = @import("types.zig");
@@ -23,6 +24,7 @@ const CRepoMode = types.CRepoMode;
 
 const ErrorCode = types.ErrorCode;
 
+// An internal helper function that converts the C struct CPackageMeta to native PackageMeta, translating CSlices into regular slices ([]const u8)
 fn toMeta(c_package_meta: CPackageMeta) global_types.PackageMeta {
     return .{
         .name = c_package_meta.name.toSlice(),
@@ -36,6 +38,7 @@ fn toMeta(c_package_meta: CPackageMeta) global_types.PackageMeta {
     };
 }
 
+// The main entry point for package installation. It gathers installation data from the request, initializes the installation engine, and returns an error code as an i32
 pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 {
     const install_data = installer.InstallData{
         .package_meta = toMeta(c_install_request.meta),
@@ -55,6 +58,7 @@ pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 
     return @intFromEnum(ErrorCode.ok);
 }
 
+// An exported function for deleting a package. It extracts the parameters (paths, package name, retry limits) and initiates the deletion process
 pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C) i32 {
     const uninstall_data = uninstaller.UninstallData{
         .package_name = c_uninstall_request.package_name.toSlice(),
@@ -71,6 +75,7 @@ pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C
     return @intFromEnum(ErrorCode.ok);
 }
 
+// Reverts the system state to a specific commit hash in the OSTree repository
 pub export fn upac_rollback(c_rollback_request: CRollbackRequest) callconv(.C) i32 {
     rollback.rollback(
         c_rollback_request.repo_path.toSlice(),
@@ -83,7 +88,8 @@ pub export fn upac_rollback(c_rollback_request: CRollbackRequest) callconv(.C) i
     return @intFromEnum(ErrorCode.ok);
 }
 
-pub export fn upac_ostree_diff(c_repo_path: CSlice, c_from_ref: CSlice, c_to_ref: CSlice, c_diff_out: *CDiffArray) callconv(.C) i32 {
+// Compares two states (refs) in a repository and returns an array of changes (CDiffArray). Allocates memory for the entries, which must be freed later
+pub export fn upac_diff(c_repo_path: CSlice, c_from_ref: CSlice, c_to_ref: CSlice, c_diff_out: *CDiffArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
     const diff_entries = rollback.diff(c_repo_path.toSlice(), c_from_ref.toSlice(), c_to_ref.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
@@ -106,6 +112,7 @@ pub export fn upac_ostree_diff(c_repo_path: CSlice, c_from_ref: CSlice, c_to_ref
     return @intFromEnum(ErrorCode.ok);
 }
 
+// Frees all memory allocated for the array of changes and the paths within each CDiffEntry record
 pub export fn upac_diff_free(c_diff: *CDiffArray) callconv(.C) void {
     const allocator = types.allocator();
     const entries = c_diff.toSlice();
@@ -113,11 +120,8 @@ pub export fn upac_diff_free(c_diff: *CDiffArray) callconv(.C) void {
     allocator.free(entries);
 }
 
-pub export fn upac_ostree_list_commits(
-    c_repo_path: CSlice,
-    c_branch: CSlice,
-    c_commits: *CCommitArray,
-) callconv(.C) i32 {
+// Generates a list of commits for a specified branch. Converts internal commit records into a C-compatible format
+pub export fn upac_list_commits(c_repo_path: CSlice, c_branch: CSlice, c_commits: *CCommitArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
     const commit_entries = rollback.listCommits(
@@ -147,6 +151,7 @@ pub export fn upac_ostree_list_commits(
     return @intFromEnum(ErrorCode.ok);
 }
 
+// A function for cleaning up memory after retrieving the list of commits; it frees the checksum and header strings
 pub export fn upac_commits_free(c_commits: *CCommitArray) callconv(.C) void {
     const allocator = types.allocator();
     const entries = c_commits.toSlice();
@@ -157,14 +162,11 @@ pub export fn upac_commits_free(c_commits: *CCommitArray) callconv(.C) void {
     allocator.free(entries);
 }
 
-pub export fn upac_init_system(
-    c_system_paths: CSystemPaths,
-    c_repo_mode: CRepoMode,
-) callconv(.C) i32 {
+// Initializes system paths and the OSTree repository in the selected mode (archive, bare, etc.)
+pub export fn upac_init(c_system_paths: CSystemPaths, c_repo_mode: CRepoMode) callconv(.C) i32 {
     const system_paths = init.SystemPaths{
-        .ostree_path = c_system_paths.ostree_path.toSlice(),
         .repo_path = c_system_paths.repo_path.toSlice(),
-        .db_path = c_system_paths.db_path.toSlice(),
+        .root_path = c_system_paths.root_path.toSlice(),
     };
 
     const repo_mode: init.RepoMode = switch (c_repo_mode) {
