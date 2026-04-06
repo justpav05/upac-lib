@@ -1,18 +1,19 @@
 const std = @import("std");
 
-const types = @import("types.zig");
+// ── Types imports ─────────────────────────────────────────────────────────────────
+const types = @import("upac-types");
+const data = @import("upac-data");
+const file = @import("upac-file");
 
-const database = @import("upac-database");
-
-const installer = @import("upac-installer");
-
-const uninstaller = @import("upac-uninstaller");
-
-const ostree = @import("upac-ostree");
-
+// ── Functions imports ─────────────────────────────────────────────────────────────────
 const init = @import("upac-init");
+const installer = @import("upac-installer");
+const uninstaller = @import("upac-uninstaller");
+const rollback = @import("upac-rollback");
 
+// ── C types imports ─────────────────────────────────────────────────────────────────
 const CSlice = types.CSlice;
+
 const CSliceArray = types.CSliceArray;
 
 const CPackageMeta = types.CPackageMeta;
@@ -32,10 +33,11 @@ const CSystemPaths = types.CSystemPaths;
 
 const CRepoMode = types.CRepoMode;
 
+// ── Error codes imports ─────────────────────────────────────────────────────────────────
 const ErrorCode = types.ErrorCode;
 
-// ── Конвертеры C → Zig ────────────────────────────────────────────────────────
-fn toMeta(c_package_metadata: CPackageMeta) database.PackageMeta {
+// ── Converts from C to Zig ────────────────────────────────────────────────────────
+fn toMeta(c_package_metadata: CPackageMeta) data.PackageMeta {
     return .{
         .name = c_package_metadata.name.toSlice(),
         .version = c_package_metadata.version.toSlice(),
@@ -48,7 +50,7 @@ fn toMeta(c_package_metadata: CPackageMeta) database.PackageMeta {
     };
 }
 
-fn toFiles(c_package_files: CPackageFiles) database.PackageFiles {
+fn toFiles(c_package_files: CPackageFiles) data.PackageFiles {
     const c_packages_paths = c_package_files.paths.toSlice();
     const packages_paths = @as([*][]const u8, @ptrCast(c_packages_paths.ptr))[0..c_packages_paths.len];
 
@@ -58,7 +60,7 @@ fn toFiles(c_package_files: CPackageFiles) database.PackageFiles {
     };
 }
 
-// ── Database API ──────────────────────────────────────────────────────────────
+// ── Data API ──────────────────────────────────────────────────────────────
 pub export fn upac_db_add_package(database_path: CSlice, c_package_meta: CPackageMeta, c_package_files: CPackageFiles) callconv(.C) i32 {
     const allocator = types.allocator();
 
@@ -70,27 +72,25 @@ pub export fn upac_db_add_package(database_path: CSlice, c_package_meta: CPackag
     for (c_package_paths, 0..) |c_slice_path, index| package_paths[index] = c_slice_path.toSlice();
 
     const zig_package_meta = toMeta(c_package_meta);
-    const zig_package_files = database.PackageFiles{
+    const zig_package_files = data.PackageFiles{
         .name = c_package_files.name.toSlice(),
         .paths = package_paths,
     };
 
-    database.addPackage(database_path.toSlice(), zig_package_meta, zig_package_files, types.allocator()) catch |err| return @intFromEnum(types.fromError(err));
+    data.addPackage(database_path.toSlice(), zig_package_meta, zig_package_files, types.allocator()) catch |err| return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
 
-/// Удалить пакет из базы данных.
 pub export fn upac_db_remove_package(database_path: CSlice, package_name: CSlice) callconv(.C) i32 {
-    database.removePackage(database_path.toSlice(), package_name.toSlice(), types.allocator()) catch |err| return @intFromEnum(types.fromError(err));
+    data.removePackage(database_path.toSlice(), package_name.toSlice(), types.allocator()) catch |err| return @intFromEnum(types.fromError(err));
     return @intFromEnum(ErrorCode.ok);
 }
 
-/// Получить метаданные пакета
 pub export fn upac_db_get_meta(c_database_path: CSlice, c_package_name: CSlice, c_package_meta: *CPackageMeta) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    const package_meta = database.getMeta(c_database_path.toSlice(), c_package_name.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
+    const package_meta = data.getMeta(c_database_path.toSlice(), c_package_name.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
 
     c_package_meta.* = .{
         .name = CSlice.fromSlice(package_meta.name),
@@ -118,12 +118,10 @@ pub export fn upac_meta_free(c_package_meta: *CPackageMeta) callconv(.C) void {
     allocator.free(c_package_meta.checksum.toSlice());
 }
 
-/// Получить список файлов пакета.
-/// Вызывающий освобождает через upac_files_free.
 pub export fn upac_db_get_files(c_database_path: CSlice, c_name: CSlice, c_package_files: *CPackageFiles) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    const package_files = database.getFiles(c_database_path.toSlice(), c_name.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
+    const package_files = data.getFiles(c_database_path.toSlice(), c_name.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
 
     // Конвертируем [][]const u8 → []CSlice
     const c_package_paths = allocator.alloc(CSlice, package_files.paths.len) catch {
@@ -143,7 +141,6 @@ pub export fn upac_db_get_files(c_database_path: CSlice, c_name: CSlice, c_packa
     return @intFromEnum(ErrorCode.ok);
 }
 
-/// Освобождает память занятую CPackageFiles.
 pub export fn upac_files_free(c_package_files: *CPackageFiles) callconv(.C) void {
     const allocator = types.allocator();
     const package_paths = c_package_files.paths.toSlice();
@@ -158,7 +155,7 @@ pub export fn upac_files_free(c_package_files: *CPackageFiles) callconv(.C) void
 pub export fn upac_db_list_packages(c_database_path: CSlice, c_packages_list: *CSliceArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    const packages_name = database.listPackages(c_database_path.toSlice(), allocator) catch |err|
+    const packages_name = data.listPackages(c_database_path.toSlice(), allocator) catch |err|
         return @intFromEnum(types.fromError(err));
 
     const c_packages_names = allocator.alloc(CSlice, packages_name.len) catch {
@@ -222,18 +219,18 @@ pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C
     return @intFromEnum(ErrorCode.ok);
 }
 
-// ── OStree API ────────────────────────────────────────────────────────────────
-/// Создать коммит OStree.
+// ── rollback API ────────────────────────────────────────────────────────────────
+/// Создать коммит rollback.
 pub export fn upac_ostree_commit(c_commit_request: CCommitRequest) callconv(.C) i32 {
     const allocator = types.allocator();
 
     const c_packages_meta = c_commit_request.packages[0..c_commit_request.packages_len];
-    var zig_package_meta = allocator.alloc(database.PackageMeta, c_packages_meta.len) catch return @intFromEnum(ErrorCode.out_of_memory);
+    var zig_package_meta = allocator.alloc(data.PackageMeta, c_packages_meta.len) catch return @intFromEnum(ErrorCode.out_of_memory);
     defer allocator.free(zig_package_meta);
 
     for (c_packages_meta, 0..) |c_packge_meta, index| zig_package_meta[index] = toMeta(c_packge_meta);
 
-    const zig_request = ostree.OstreeCommitRequest{
+    const zig_request = rollback.OstreeCommitRequest{
         .repo_path = c_commit_request.repo_path.toSlice(),
         .content_path = c_commit_request.content_path.toSlice(),
         .branch = c_commit_request.branch.toSlice(),
@@ -246,7 +243,7 @@ pub export fn upac_ostree_commit(c_commit_request: CCommitRequest) callconv(.C) 
         .database_path = c_commit_request.db_path.toSlice(),
     };
 
-    ostree.commit(zig_request, allocator) catch |err| return @intFromEnum(types.fromError(err));
+    rollback.commit(zig_request, allocator) catch |err| return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
@@ -254,7 +251,7 @@ pub export fn upac_ostree_commit(c_commit_request: CCommitRequest) callconv(.C) 
 pub export fn upac_refresh(c_repo_path: CSlice, c_content_path: CSlice, c_root_path: CSlice, c_branch: CSlice, c_database_path: CSlice) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    ostree.refresh(
+    rollback.refresh(
         c_repo_path.toSlice(),
         c_content_path.toSlice(),
         c_root_path.toSlice(),
@@ -271,7 +268,7 @@ pub export fn upac_refresh(c_repo_path: CSlice, c_content_path: CSlice, c_root_p
 pub export fn upac_ostree_diff(c_repo_path: CSlice, c_from_ref: CSlice, c_to_ref: CSlice, c_diff_out: *CDiffArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    const diff_entries = ostree.diff(
+    const diff_entries = rollback.diff(
         c_repo_path.toSlice(),
         c_from_ref.toSlice(),
         c_to_ref.toSlice(),
@@ -309,7 +306,7 @@ pub export fn upac_diff_free(c_diff: *CDiffArray) callconv(.C) void {
 pub export fn upac_ostree_list_commits(c_repo_path: CSlice, c_branch: CSlice, c_commits: *CCommitArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    const commit_entries = ostree.listCommits(
+    const commit_entries = rollback.listCommits(
         c_repo_path.toSlice(),
         c_branch.toSlice(),
         allocator,
@@ -350,7 +347,7 @@ pub export fn upac_commits_free(c_commits: *CCommitArray) callconv(.C) void {
 
 /// Откатить на предыдущий коммит.
 pub export fn upac_ostree_rollback(c_repo_path: CSlice, c_content_path: CSlice, c_branch: CSlice, c_commit_hash: CSlice) callconv(.C) i32 {
-    ostree.rollback(
+    rollback.rollback(
         c_repo_path.toSlice(),
         c_content_path.toSlice(),
         c_branch.toSlice(),

@@ -1,8 +1,6 @@
 const std = @import("std");
 
 // ── Базовые типы ──────────────────────────────────────────────────────────────
-
-/// Строка через границу .so — ptr + len вместо null-terminated
 pub const CSlice = extern struct {
     ptr: [*]const u8,
     len: usize,
@@ -20,7 +18,6 @@ pub const CSlice = extern struct {
     }
 };
 
-/// Массив строк через границу .so
 pub const CSliceArray = extern struct {
     ptr: [*]CSlice,
     len: usize,
@@ -66,7 +63,7 @@ pub const CUninstallRequest = extern struct {
     max_retries: u8,
 };
 
-// ── Типы ostree ───────────────────────────────────────────────────────────────
+// ── Типы rollback ───────────────────────────────────────────────────────────────
 pub const CDiffKind = enum(u8) {
     added = 0,
     removed = 1,
@@ -138,11 +135,10 @@ pub const CRepoMode = enum(u8) {
     bare_user = 2,
 };
 
-/// Числовые коды ошибок для C boundary.
 pub const ErrorCode = enum(i32) {
     ok = 0,
 
-    // Общие
+    // General
     unexpected = 1,
     out_of_memory = 2,
     invalid_path = 3,
@@ -197,7 +193,7 @@ pub fn fromError(err: anyerror) ErrorCode {
         else => .unexpected,
     };
 }
-/// Глобальный аллокатор для .so — инициализируется один раз.
+
 var gpa = std.heap.GeneralPurposeAllocator(.{
     .safety = true,
 }){};
@@ -206,7 +202,6 @@ pub fn allocator() std.mem.Allocator {
     return gpa.allocator();
 }
 
-/// Освобождает память выделенную библиотекой.
 pub export fn upac_free(ptr: *anyopaque, len: usize) callconv(.C) void {
     const slice = @as([*]u8, @ptrCast(ptr))[0..len];
     gpa.allocator().free(slice);
