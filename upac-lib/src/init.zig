@@ -1,20 +1,16 @@
 const std = @import("std");
 const posix = std.posix;
 
-const c_libs = @cImport({
-    @cInclude("ostree.h");
-    @cInclude("glib.h");
-    @cInclude("gio/gio.h");
-});
+const types = @import("upac-file");
+const c_libs = types.c_libs;
 
-// ── Публичные типы ────────────────────────────────────────────────────────────
+// ── Public types ────────────────────────────────────────────────────────────
 pub const SystemPaths = struct {
     ostree_path: []const u8,
     repo_path: []const u8,
     db_path: []const u8,
 };
 
-/// Режим OStree репозитория.
 pub const RepoMode = enum {
     archive,
     bare,
