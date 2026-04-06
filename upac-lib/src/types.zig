@@ -1,6 +1,7 @@
 const std = @import("std");
 
 // ── Package ─────────────────────────────────────────────────────────────────────
+// An aggregating structure containing metadata and a list of all files belonging to the package
 pub const Package = struct {
     meta: PackageMeta,
     files: []const PackageFile,
@@ -12,6 +13,7 @@ pub const Package = struct {
     }
 };
 
+// Stores detailed information: version, author, description, license, installation time and etc
 pub const PackageMeta = struct {
     name: []const u8,
     version: []const u8,
@@ -22,6 +24,7 @@ pub const PackageMeta = struct {
     installed_at: i64,
     checksum: []const u8,
 
+    // Deinitialization methods that guarantee the release of memory allocated for dynamic strings
     pub fn deinit(self: *PackageMeta, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.version);
@@ -33,10 +36,12 @@ pub const PackageMeta = struct {
     }
 };
 
+// A simple structure for linking a file path in the system to its checksum
 pub const PackageFile = struct {
     path: []const u8,
     checksum: []const u8,
 
+    // Deinitialization methods that guarantee the release of memory allocated for dynamic strings
     pub fn deinit(self: *PackageFile, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
         allocator.free(self.checksum);
