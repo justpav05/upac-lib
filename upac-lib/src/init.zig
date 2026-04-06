@@ -6,9 +6,8 @@ const c_libs = types.c_libs;
 
 // ── Public types ────────────────────────────────────────────────────────────
 pub const SystemPaths = struct {
-    ostree_path: []const u8,
     repo_path: []const u8,
-    db_path: []const u8,
+    root_path: []const u8,
 };
 
 pub const RepoMode = enum {
@@ -19,30 +18,36 @@ pub const RepoMode = enum {
 
 pub const InitError = error{
     AlreadyInitialized,
+    RootNotFound,
     CreateDirFailed,
     OstreeInitFailed,
 };
 
-// ── Публичное API ─────────────────────────────────────────────────────────────
+// ── Public API ─────────────────────────────────────────────────────────────
 pub fn initSystem(system_paths: SystemPaths, repo_mode: RepoMode, allocator: std.mem.Allocator) !void {
-    try checkNotExists(system_paths.ostree_path);
     try checkNotExists(system_paths.repo_path);
-    try checkNotExists(system_paths.db_path);
+    try checkExists(system_paths.root_path);
 
     std.fs.makeDirAbsolute(system_paths.repo_path) catch return InitError.CreateDirFailed;
 
-    std.fs.makeDirAbsolute(system_paths.db_path) catch return InitError.CreateDirFailed;
-
-    try initOstreeRepo(system_paths.ostree_path, repo_mode, allocator);
+    try initOstreeRepo(system_paths.repo_path, repo_mode, allocator);
 }
 
-// ── Внутренние функции ────────────────────────────────────────────────────────
+// ── Helpers funchtions ────────────────────────────────────────────────────────
 fn checkNotExists(path: []const u8) !void {
     std.fs.accessAbsolute(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
     return InitError.AlreadyInitialized;
+}
+
+fn checkExists(path: []const u8) !void {
+    std.fs.accessAbsolute(path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return error.FileNotFound,
+        else => return err,
+    };
+    return InitError.RootNotFound;
 }
 
 fn initOstreeRepo(repo_path: []const u8, repo_mode: RepoMode, allocator: std.mem.Allocator) !void {
