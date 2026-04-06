@@ -2,7 +2,7 @@ const std = @import("std");
 
 const database = @import("upac-database");
 
-const ostree = @import("ostree.zig");
+const ostree = @import("rollback.zig");
 const OstreeError = ostree.OstreeError;
 const CommitMachine = ostree.CommitMachine;
 const StateId = ostree.StateId;

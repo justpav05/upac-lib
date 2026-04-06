@@ -1,17 +1,13 @@
 const std = @import("std");
 
-const states = @import("states.zig");
+const file = @import("upac-file");
+const c_libs = file.c_libs;
 
 const database = @import("upac-database");
 const PackageMeta = database.PackageMeta;
 const PackageFiles = database.PackageFiles;
 
-pub const c_libs = @cImport({
-    @cInclude("ostree.h");
-    @cInclude("glib.h");
-    @cInclude("gio/gio.h");
-    @cInclude("fcntl.h");
-});
+const states = @import("states.zig");
 
 // ── Типы FSM ────────────────────────────────────────────────────────────
 pub const StateId = enum {
