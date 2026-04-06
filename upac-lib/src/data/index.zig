@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
 // ── File index format ───────────────────────────────────────────────────
@@ -49,20 +50,24 @@ const IndexFSM = struct {
     stack: std.ArrayList(IndexFSMStateId),
     allocator: std.mem.Allocator,
 
+    // Adds the ID of the new state to the automaton's stack
     fn enter(self: *IndexFSM, state_id: IndexFSMStateId) !void {
         try self.stack.append(state_id);
     }
 
+    // Returns the current character from the content being processed, or null if the end has been reached
     fn currentChar(self: *const IndexFSM) ?u8 {
         if (self.current_character_position >= self.content.len) return null;
         return self.content[self.current_character_position];
     }
 
+    // Advances the current position pointer by one character
     fn advance(self: *IndexFSM) void {
         if (self.current_character_position < self.content.len)
             self.current_character_position += 1;
     }
 
+    // Initializes the automaton structure and initiates the content parsing process
     fn run(content: []const u8, package_name: []const u8, allocator: std.mem.Allocator) !IndexEntry {
         const package_name_lower = try std.ascii.allocLowerString(allocator, package_name);
         defer allocator.free(package_name_lower);
@@ -90,11 +95,13 @@ const IndexFSM = struct {
 };
 
 // ── FSM states ────────────────────────────────────────────────────────────────
+// The initial state that transitions the automaton to parsing the first line
 fn stateStart(machine: *IndexFSM) !void {
     try machine.enter(.start);
     return stateLineStart(machine);
 }
 
+// Checks the beginning of the line for characters or an end-of-file indicator
 fn stateLineStart(machine: *IndexFSM) !void {
     try machine.enter(.line_start);
 
@@ -113,6 +120,7 @@ fn stateLineStart(machine: *IndexFSM) !void {
     return stateReadingName(machine);
 }
 
+// Reads the package name up to the first space and compares it with the target
 fn stateReadingName(machine: *IndexFSM) !void {
     try machine.enter(.reading_name);
 
@@ -135,6 +143,7 @@ fn stateReadingName(machine: *IndexFSM) !void {
     return stateSkipLine(machine);
 }
 
+// Skips the current line if the package name does not match
 fn stateSkipLine(machine: *IndexFSM) !void {
     try machine.enter(.skip_line);
 
@@ -146,6 +155,7 @@ fn stateSkipLine(machine: *IndexFSM) !void {
     return stateLineStart(machine);
 }
 
+// Reads the packet checksum, calculates the source line length, and saves the result to IndexEntry
 fn stateReadingChecksum(machine: *IndexFSM) !void {
     try machine.enter(.reading_checksum);
 
@@ -173,13 +183,15 @@ fn stateReadingChecksum(machine: *IndexFSM) !void {
     try machine.enter(.done);
 }
 
-// ── Публичное API ─────────────────────────────────────────────────────────────
+// ── Public API ─────────────────────────────────────────────────────────────
+// A public interface for searching the index for an entry by package name. Launches the FSM
 pub fn find(content: []const u8, package_name: []const u8, allocator: std.mem.Allocator) !?IndexEntry {
     const result = try IndexFSM.run(content, package_name, allocator);
 
     return result;
 }
 
+// Appends a new line containing the package name and its hash to the end of the index file. If the file does not exist, it will be created
 pub fn append(index_path: []const u8, package_name: []const u8, checksum: []const u8, allocator: std.mem.Allocator) !void {
     const package_name_lower = try std.ascii.allocLowerString(allocator, package_name);
     defer allocator.free(package_name_lower);
@@ -191,6 +203,7 @@ pub fn append(index_path: []const u8, package_name: []const u8, checksum: []cons
     try tepm_package_file.writer().print("{s} {s}\n", .{ package_name_lower, checksum });
 }
 
+// Removes an entry from the index. The function reads the entire file, extracts the segment corresponding to the entry to be deleted (using the offset and length), and overwrites the file
 pub fn remove(index_path: []const u8, entry: IndexEntry, allocator: std.mem.Allocator) !void {
     const content = std.fs.cwd().readFileAlloc(
         allocator,
@@ -216,6 +229,7 @@ pub fn remove(index_path: []const u8, entry: IndexEntry, allocator: std.mem.Allo
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+// A helper function for case-insensitive string comparison
 fn asciiEqlLower(first_string: []const u8, second_string: []const u8) bool {
     if (first_string.len != second_string.len) return false;
     for (first_string, second_string) |first_string_c, second_string_c| {

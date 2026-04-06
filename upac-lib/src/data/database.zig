@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
 const types = @import("upac-types");
@@ -29,6 +30,7 @@ pub const DatabaseError = error{
 // ── FileMap ───────────────────────────────────────────────────────────────────
 pub const FileMap = std.StringHashMap([]const u8);
 
+// It iterates over the `FileMap` hash map, freeing the memory allocated for each entry (path and checksum), and subsequently deinitializes the map itself
 pub fn freeFileMap(file_map: *FileMap, allocator: std.mem.Allocator) void {
     var file_map_iter = file_map.iterator();
 
@@ -40,12 +42,14 @@ pub fn freeFileMap(file_map: *FileMap, allocator: std.mem.Allocator) void {
     file_map.deinit();
 }
 
-// ── Публичное API ─────────────────────────────────────────────────────────────
+// ── Public API ─────────────────────────────────────────────────────────────
+// A high-level function that sequentially writes the package's metadata and file list to the database
 pub fn writePackage(database_path: []const u8, package_checksum: []const u8, package_meta: PackageMeta, files: FileMap, allocator: std.mem.Allocator) !void {
     try writeMeta(database_path, package_checksum, package_meta, allocator);
     try writeFiles(database_path, package_checksum, files, allocator);
 }
 
+// Constructs the path to the .meta file, reads its contents into memory, and passes them to the parser to obtain the PackageMeta structure
 pub fn readMeta(database_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) !PackageMeta {
     const package_meta_path = try metaPath(database_path, package_checksum, allocator);
     defer allocator.free(package_meta_path);
@@ -62,6 +66,7 @@ pub fn readMeta(database_path: []const u8, package_checksum: []const u8, allocat
     return parseMeta(package_meta_content, allocator);
 }
 
+// Constructs the path to the .files file, reads its contents into memory, and passes them to the parser to obtain the FileMap structure
 pub fn readFiles(database_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) !FileMap {
     const package_files_path = try filesPath(database_path, package_checksum, allocator);
     defer allocator.free(package_files_path);
@@ -72,19 +77,8 @@ pub fn readFiles(database_path: []const u8, package_checksum: []const u8, alloca
     return parseFiles(package_files_content, allocator);
 }
 
-// TODO: Уточнить по поводу того, как правильно удалять файлы из OSTree
-pub fn remove(database_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) !void {
-    const package_meta_path = try metaPath(database_path, package_checksum, allocator);
-    defer allocator.free(package_meta_path);
-
-    const files_p = try filesPath(database_path, package_checksum, allocator);
-    defer allocator.free(files_p);
-
-    std.fs.deleteFileAbsolute(package_meta_path) catch |e| if (e != error.FileNotFound) return e;
-    std.fs.deleteFileAbsolute(files_p) catch |e| if (e != error.FileNotFound) return e;
-}
-
-// ── Write ────────────────────────────────────────────────────────────────────
+// ── Write meta file ────────────────────────────────────────────────────────────────────
+// Formats the package data (name, version, author, etc.) into a text format and writes it to a file at the absolute path
 fn writeMeta(temp_path: []const u8, package_checksum: []const u8, package_meta: PackageMeta, allocator: std.mem.Allocator) !void {
     const package_meta_path = try metaPath(temp_path, package_checksum, allocator);
     defer allocator.free(package_meta_path);
@@ -104,6 +98,8 @@ fn writeMeta(temp_path: []const u8, package_checksum: []const u8, package_meta: 
     package_meta_writer.print("checksum {s}\n", .{package_meta.checksum}) catch return DatabaseError.WriteError;
 }
 
+// ── Write file about package files ────────────────────────────────────────────────────────────────────
+// Writes "file path — checksum" pairs from a hash map to the corresponding database file
 fn writeFiles(temp_path: []const u8, package_checksum: []const u8, file_map: FileMap, allocator: std.mem.Allocator) !void {
     const package_files_path = try filesPath(temp_path, package_checksum, allocator);
     defer allocator.free(package_files_path);
@@ -118,7 +114,8 @@ fn writeFiles(temp_path: []const u8, package_checksum: []const u8, file_map: Fil
     }
 }
 
-// ── Парсинг ───────────────────────────────────────────────────────────────────
+// ── Parsing meta file ───────────────────────────────────────────────────────────────────
+// Parses the contents of a meta-file line by line, separating keys and values by whitespace and populating the PackageMeta structure
 fn parseMeta(content: []const u8, allocator: std.mem.Allocator) !PackageMeta {
     var package_meta = PackageMeta{
         .name = &[_]u8{},
@@ -175,6 +172,8 @@ fn parseMeta(content: []const u8, allocator: std.mem.Allocator) !PackageMeta {
     return package_meta;
 }
 
+// ── Parsing file about package files ────────────────────────────────────────────────────────────────────
+// Parses the contents of a file list, extracting file paths and their hashes to populate the FileMap
 fn parseFiles(content: []const u8, allocator: std.mem.Allocator) !FileMap {
     var file_map = FileMap.init(allocator);
     errdefer freeFileMap(&file_map, allocator);
@@ -199,10 +198,12 @@ fn parseFiles(content: []const u8, allocator: std.mem.Allocator) !FileMap {
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
+// A helper function for generating file path strings for .meta files based on a package checksum
 fn metaPath(temp_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}/{s}.meta", .{ temp_path, package_checksum });
 }
 
+// A helper function for generating file path strings for .files files based on a package checksum
 fn filesPath(temp_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}/{s}.files", .{ temp_path, package_checksum });
 }
