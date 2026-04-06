@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
 const file = @import("file.zig");
@@ -7,12 +8,14 @@ const FileFSM = file.FileFSM;
 const FileFSMError = file.FileFSMError;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
+// The starting point of operation; transitions the automaton into the checksum calculation state
 pub fn stateStart(machine: *FileFSM) !void {
     try machine.enter(.start);
     return stateChecksum(machine);
 }
 
 // ── States ────────────────────────────────────────────────────────────────────
+// Uses the ostree library to compute a file's hash based on its temporary path. On success, it saves the hash to the machine; on failure, it initiates a retry or terminates with an error
 fn stateChecksum(machine: *FileFSM) !void {
     try machine.enter(.checksum);
 
@@ -36,6 +39,7 @@ fn stateChecksum(machine: *FileFSM) !void {
     return stateWriteObject(machine);
 }
 
+// Responsible for physically writing a file to the OSTree repository as a "loose object." If the write operation fails, it increments the attempt counter and retries
 fn stateWriteObject(machine: *FileFSM) !void {
     try machine.enter(.write_object);
 
@@ -74,14 +78,7 @@ fn stateWriteObject(machine: *FileFSM) !void {
     defer machine.allocator.free(expected_c);
 
     var object_exists: c_libs.gboolean = 0;
-    _ = c_libs.ostree_repo_has_object(
-        machine.data.repo,
-        c_libs.OSTREE_OBJECT_TYPE_FILE,
-        expected_c.ptr,
-        &object_exists,
-        null,
-        null,
-    );
+    _ = c_libs.ostree_repo_has_object(machine.data.repo, c_libs.OSTREE_OBJECT_TYPE_FILE, expected_c.ptr, &object_exists, null, null);
     if (object_exists != 0) return FileFSMError.FileAlreadyExists;
 
     var written_file_checksum: ?[*]c_libs.guchar = null;
@@ -97,6 +94,7 @@ fn stateWriteObject(machine: *FileFSM) !void {
     return stateInsertMtree(machine);
 }
 
+// The most complex part is inserting an object into a mutable tree (OstreeMutableTree). It splits the path into components, ensures the existence of all parent directories, and binds the file to the tree
 fn stateInsertMtree(machine: *FileFSM) !void {
     try machine.enter(.insert_mtree);
 
@@ -113,11 +111,13 @@ fn stateInsertMtree(machine: *FileFSM) !void {
     return stateDone(machine);
 }
 
+// The final state of the FileFSM automaton. It signals the successful completion of all file processing stages (hashing, object writing, and tree insertion) and terminates the state machine's operational cycle
 fn stateDone(machine: *FileFSM) !void {
     try machine.enter(.done);
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+// The "path builder" within OSTree is responsible for ensuring that a file ends up exactly where it belongs in the installed system
 fn insertIntoMtree(root: *c_libs.OstreeMutableTree, relative_path: []const u8, checksum: []const u8, allocator: std.mem.Allocator) !void {
     var gerror: ?*c_libs.GError = null;
 
