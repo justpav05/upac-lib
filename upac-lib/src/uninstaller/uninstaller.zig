@@ -1,10 +1,9 @@
 const std = @import("std");
 
-const database = @import("upac-database");
-const PackageMeta = database.PackageMeta;
+const data_mod = @import("upac-data");
 
-const file = @import("upac-file");
-const c_libs = file.c_libs;
+const file_mod = @import("upac-file");
+const c_libs = file_mod.c_libs;
 
 const states = @import("states.zig");
 
@@ -23,7 +22,6 @@ pub const StateId = enum {
     remove_files,
     remove_db_files,
     commit,
-
     done,
     failed,
 };
@@ -32,10 +30,9 @@ pub const UninstallData = struct {
     package_name: []const u8,
 
     repo_path: []const u8,
-    database_path: []const u8,
+    db_path: []const u8,
+    branch: []const u8,
     checkout_path: []const u8,
-
-    branch_name: []const u8,
 
     max_retries: u8 = 0,
 };
@@ -46,9 +43,8 @@ pub const UninstallerMachine = struct {
 
     repo: ?*c_libs.OstreeRepo,
     mtree: ?*c_libs.OstreeMutableTree,
-
     package_checksum: ?[]const u8,
-    package_file_map: ?database.FileMap,
+    package_file_map: ?data_mod.FileMap,
 
     stack: std.ArrayList(StateId),
     allocator: std.mem.Allocator,
@@ -66,12 +62,10 @@ pub const UninstallerMachine = struct {
     }
 
     pub fn deinit(self: *UninstallerMachine) void {
-        if (self.pkg_checksum) |checksum| self.allocator.free(checksum);
-        if (self.pkg_file_map) |*file_map| database.freeFileMap(file_map, self.allocator);
-
+        if (self.package_checksum) |checksum| self.allocator.free(checksum);
+        if (self.package_file_map) |*file_map| data_mod.freeFileMap(file_map, self.allocator);
         if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
         if (self.repo) |repo| c_libs.g_object_unref(repo);
-
         self.stack.deinit();
     }
 
@@ -79,13 +73,10 @@ pub const UninstallerMachine = struct {
         var machine = UninstallerMachine{
             .data = uninstall_data,
             .retries = 0,
-
             .repo = null,
             .mtree = null,
-
-            .pkg_checksum = null,
-            .pkg_file_map = null,
-
+            .package_checksum = null,
+            .package_file_map = null,
             .stack = std.ArrayList(StateId).init(allocator),
             .allocator = allocator,
         };

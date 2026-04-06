@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const database = @import("upac-database");
+const database = @import("upac-types");
 const PackageMeta = database.PackageMeta;
 
 const file = @import("upac-file");

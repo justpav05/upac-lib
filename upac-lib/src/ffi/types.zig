@@ -1,6 +1,5 @@
 const std = @import("std");
 
-// ── Базовые типы ──────────────────────────────────────────────────────────────
 pub const CSlice = extern struct {
     ptr: [*]const u8,
     len: usize,
@@ -27,7 +26,6 @@ pub const CSliceArray = extern struct {
     }
 };
 
-// ── Типы базы данных ──────────────────────────────────────────────────────────
 pub const CPackageMeta = extern struct {
     name: CSlice,
     version: CSlice,
@@ -39,31 +37,27 @@ pub const CPackageMeta = extern struct {
     checksum: CSlice,
 };
 
-pub const CPackageFiles = extern struct {
-    name: CSlice,
-    paths: CSliceArray,
-};
-
-// ── Типы installer ────────────────────────────────────────────────────────────
 pub const CInstallRequest = extern struct {
     meta: CPackageMeta,
-    root_path: CSlice,
+    package_temp_path: CSlice,
+    package_checksum: CSlice,
     repo_path: CSlice,
-    package_path: CSlice,
+    index_path: CSlice,
     db_path: CSlice,
+    branch: CSlice,
+    checkout_path: CSlice,
     max_retries: u8,
 };
 
-// ── Типы uninstaller ────────────────────────────────────────────────────────────
 pub const CUninstallRequest = extern struct {
     package_name: CSlice,
-    root_path: CSlice,
     repo_path: CSlice,
     db_path: CSlice,
+    branch: CSlice,
+    checkout_path: CSlice,
     max_retries: u8,
 };
 
-// ── Типы rollback ───────────────────────────────────────────────────────────────
 pub const CDiffKind = enum(u8) {
     added = 0,
     removed = 1,
@@ -84,12 +78,6 @@ pub const CDiffArray = extern struct {
     }
 };
 
-pub const COstreeOperation = enum(u8) {
-    install = 0,
-    remove = 1,
-    manual = 2,
-};
-
 pub const CCommitEntry = extern struct {
     checksum: CSlice,
     subject: CSlice,
@@ -104,25 +92,13 @@ pub const CCommitArray = extern struct {
     }
 };
 
-pub const CCommitRequest = extern struct {
+pub const CRollbackRequest = extern struct {
     repo_path: CSlice,
-    content_path: CSlice,
     branch: CSlice,
-    operation: COstreeOperation,
-    packages: [*]CPackageMeta,
-    packages_len: usize,
-    db_path: CSlice,
+    commit_hash: CSlice,
+    checkout_path: CSlice,
 };
 
-pub const CRefreshRequest = extern struct {
-    repo_path: CSlice,
-    content_path: CSlice,
-    root_path: CSlice,
-    branch: CSlice,
-    database_path: CSlice,
-};
-
-// ── Типы init ─────────────────────────────────────────────────────────────────
 pub const CSystemPaths = extern struct {
     ostree_path: CSlice,
     repo_path: CSlice,
@@ -138,39 +114,34 @@ pub const CRepoMode = enum(u8) {
 pub const ErrorCode = enum(i32) {
     ok = 0,
 
-    // General
     unexpected = 1,
     out_of_memory = 2,
     invalid_path = 3,
     file_not_found = 4,
     permission_denied = 5,
 
-    // Lock
     lock_would_block = 10,
 
-    // Database
     db_missing_field = 20,
     db_missing_section = 21,
     db_invalid_entry = 22,
     db_parse_error = 23,
 
-    // Installer
-    install_copy_failed = 30,
-    install_link_failed = 31,
-    install_perm_failed = 32,
-    install_reg_failed = 33,
+    install_already_installed = 30,
+    install_failed = 31,
 
-    // OStree
-    ostree_repo_open = 40,
-    ostree_commit = 41,
-    ostree_diff = 42,
-    ostree_rollback = 43,
-    ostree_no_parent = 44,
+    uninstall_not_found = 40,
+    uninstall_failed = 41,
 
-    // Init
-    already_initialized = 50,
-    create_dir_failed = 51,
-    ostree_init_failed = 52,
+    ostree_repo_open = 50,
+    ostree_commit = 51,
+    ostree_diff = 52,
+    ostree_rollback = 53,
+    ostree_no_parent = 54,
+
+    already_initialized = 60,
+    create_dir_failed = 61,
+    ostree_init_failed = 62,
 };
 
 pub fn fromError(err: anyerror) ErrorCode {
@@ -178,25 +149,22 @@ pub fn fromError(err: anyerror) ErrorCode {
         error.OutOfMemory => .out_of_memory,
         error.FileNotFound => .file_not_found,
         error.WouldBlock => .lock_would_block,
-        error.MissingField => .db_missing_field,
         error.AccessDenied => .permission_denied,
-        error.MissingMetaSection, error.MissingFilesSection => .db_missing_section,
-        error.InvalidIndexEntry, error.InvalidFilePath => .db_invalid_entry,
+        error.AlreadyInstalled => .install_already_installed,
+        error.PackageNotFound => .uninstall_not_found,
+        error.RepoOpenFailed => .ostree_repo_open,
+        error.MaxRetriesExceeded => .install_failed,
         error.AlreadyInitialized => .already_initialized,
         error.CreateDirFailed => .create_dir_failed,
         error.OstreeInitFailed => .ostree_init_failed,
-        error.RepoOpenFailed => .ostree_repo_open,
-        error.CommitFailed => .ostree_commit,
-        error.DiffFailed => .ostree_diff,
         error.RollbackFailed => .ostree_rollback,
         error.NoPreviousCommit => .ostree_no_parent,
+        error.DiffFailed => .ostree_diff,
         else => .unexpected,
     };
 }
 
-var gpa = std.heap.GeneralPurposeAllocator(.{
-    .safety = true,
-}){};
+var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
 
 pub fn allocator() std.mem.Allocator {
     return gpa.allocator();

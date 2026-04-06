@@ -73,9 +73,11 @@ pub const FileFSM = struct {
         var machine = FileFSM{
             .retries = 0,
             .max_retries = max_retries,
+
             .data = data,
+
             .file_checksum = null,
-            .relative_path = &[_]u8{},
+
             .stack = std.ArrayList(FileFSMStateId).init(allocator),
             .allocator = allocator,
         };

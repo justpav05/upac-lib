@@ -108,7 +108,7 @@ fn writeFiles(temp_path: []const u8, package_checksum: []const u8, file_map: Fil
     const package_files_path = try filesPath(temp_path, package_checksum, allocator);
     defer allocator.free(package_files_path);
 
-    const package_files_file = std.fs.createFileAbsolute(file_map, .{}) catch return DatabaseError.WriteError;
+    const package_files_file = std.fs.createFileAbsolute(package_files_path, .{}) catch return DatabaseError.WriteError;
     defer package_files_file.close();
 
     const package_file_writer = package_files_file.writer();

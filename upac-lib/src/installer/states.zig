@@ -77,7 +77,7 @@ fn stateOpenRepo(machine: *InstallerMachine) anyerror!void {
         defer c_libs.g_free(@ptrCast(checksum));
 
         var mtree_root: ?*c_libs.GFile = null;
-        if (c_libs.ostree_repo_read_commit(repo, checksum, &mtree_root, null, &gerror) != 0) {
+        if (c_libs.ostree_repo_read_commit(repo, checksum, &mtree_root, null, null, &gerror) != 0) {
             defer if (mtree_root) |root| c_libs.g_object_unref(root);
             _ = c_libs.ostree_repo_write_directory_to_mtree(repo, mtree_root, mtree, null, null, &gerror);
             if (gerror) |err| c_libs.g_error_free(err);
@@ -173,7 +173,7 @@ fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
         return err;
     };
 
-    data.write(machine.data.package_temp_path, machine.data.package_checksum, machine.data.package_meta, file_map, machine.allocator) catch |err| {
+    data.writePackage(machine.data.package_temp_path, machine.data.package_checksum, machine.data.package_meta, file_map, machine.allocator) catch |err| {
         if (machine.exhausted()) {
             stateFailed(machine);
             return err;
