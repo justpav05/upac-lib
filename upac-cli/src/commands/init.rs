@@ -53,13 +53,10 @@ fn state_validating(init_machine: &mut InitMachine) -> Result<()> {
              verbose = false\n\
              \n\
              [paths]\n\
-             db_path     = \"/var/db/upac\"\n\
              repo_path   = \"/var/repo\"\n\
              root_path   = \"/\"\n\
-             ostree_path = \"/var/ostree\"\n\
              \n\
              [ostree]\n\
-             enabled = false\n\
              branch  = \"packages\"",
             init_machine.config.paths.config_path
         );
@@ -76,7 +73,7 @@ fn state_initializing(init_machine: &mut InitMachine) -> Result<()> {
     let upac_lib = UpacLib::load()?;
 
     let c_system_paths = CSystemPaths {
-        repo_path: CSlice::from_str(&init_machine.config.paths.ostree_path),
+        repo_path: CSlice::from_str(&init_machine.config.paths.repo_path),
         root_path: CSlice::from_str(&init_machine.config.paths.root_path),
     };
 

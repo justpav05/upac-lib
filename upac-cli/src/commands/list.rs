@@ -49,12 +49,8 @@ impl ListMachine {
 fn state_fetching_commits(machine: &mut ListMachine) -> Result<()> {
     machine.enter(State::FetchingCommits);
 
-    if !machine.config.ostree.enabled {
-        anyhow::bail!("OStree is disabled in config. Set ostree.enabled = true to use list");
-    }
-
     let upac_lib = UpacLib::load()?;
-    let c_repo_path = CSlice::from_str(&machine.config.paths.ostree_path);
+    let c_repo_path = CSlice::from_str(&machine.config.paths.repo_path);
     let c_branch = CSlice::from_str(&machine.config.ostree.branch);
 
     let mut c_commits = CCommitArray {
@@ -129,5 +125,3 @@ pub fn run(config: Config, full: bool) -> Result<()> {
         err
     })
 }
-
-

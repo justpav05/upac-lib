@@ -43,10 +43,6 @@ impl RollbackMachine {
 fn state_validating(rolling_machine: &mut RollbackMachine) -> Result<()> {
     rolling_machine.enter(State::Validating);
 
-    if !rolling_machine.config.ostree.enabled {
-        anyhow::bail!("OStree is disabled in config. Set ostree.enabled = true to use rollback");
-    }
-
     if rolling_machine.commit_hash.len() != 64
         || !rolling_machine
             .commit_hash
@@ -77,8 +73,10 @@ fn state_rolling_back(rolling_machine: &mut RollbackMachine) -> Result<()> {
 
     let c_rollback_request = CRollbackRequest {
         root_path: CSlice::from_str(&rolling_machine.config.paths.root_path),
-        repo_path: CSlice::from_str(&rolling_machine.config.paths.ostree_path),
+        repo_path: CSlice::from_str(&rolling_machine.config.paths.repo_path),
+
         branch: CSlice::from_str(&rolling_machine.config.ostree.branch),
+
         commit_hash: CSlice::from_str(&rolling_machine.commit_hash),
     };
 

@@ -62,17 +62,15 @@ fn state_uninstalling(remove_machine: &mut RemoveMachine) -> Result<()> {
 
     let upac_lib = UpacLib::load()?;
 
-    let branch = if remove_machine.config.ostree.enabled {
-        &remove_machine.config.ostree.branch
-    } else {
-        ""
-    };
+    let branch = &remove_machine.config.ostree.branch;
 
     let c_remove_request = CUninstallRequest {
         package_name: CSlice::from_str(&remove_machine.package_name),
+
         repo_path: CSlice::from_str(&remove_machine.config.paths.repo_path),
         root_path: CSlice::from_str(&remove_machine.config.paths.root_path),
         db_path: CSlice::from_str(&remove_machine.config.paths.database_path),
+
         branch: CSlice::from_str(branch),
         max_retries: remove_machine.config.step_retries,
     };

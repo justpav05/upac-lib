@@ -139,11 +139,7 @@ fn state_installing(install_machine: &mut InstallMachine) -> Result<()> {
     let tmp_dir_string_path = install_machine.tmp_dir.as_ref().unwrap();
     let c_package_meta = package_meta.as_c();
 
-    let branch = if install_machine.config.ostree.enabled {
-        &install_machine.config.ostree.branch
-    } else {
-        ""
-    };
+    let branch = &install_machine.config.ostree.branch;
 
     let c_install_request = CInstallRequest {
         meta: c_package_meta,
@@ -200,12 +196,8 @@ pub fn run(
             checksums[index].clone()
         };
 
-        let mut install_machine = InstallMachine::new(
-            config.clone(),
-            file.clone(),
-            backend.clone(),
-            checksum,
-        );
+        let mut install_machine =
+            InstallMachine::new(config.clone(), file.clone(), backend.clone(), checksum);
 
         state_detecting_backend(&mut install_machine).map_err(|err| {
             if !matches!(install_machine.stack.last(), Some(State::Failed(_))) {
