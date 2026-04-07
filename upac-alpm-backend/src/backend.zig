@@ -77,16 +77,14 @@ pub const BackendMachine = struct {
 
         try states.stateVerifying(&machine);
 
-        return machine.meta;
+        return machine.meta orelse BackendError.InvalidPackage;
     }
 };
 
 // ── Public API ─────────────────────────────────────────────────────────────
 // The main high-level function for initiating the package preparation process
 pub fn prepare(request: PrepareRequest, allocator: std.mem.Allocator) !PackageMeta {
-    const result = BackendMachine.run(request, allocator);
-
-    return result orelse BackendError.InvalidPackage;
+    return BackendMachine.run(request, allocator);
 }
 
 // ── FFI типы ──────────────────────────────────────────────────────────────────
