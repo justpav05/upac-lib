@@ -1,8 +1,11 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
 const file = @import("upac-file");
 const c_libs = file.c_libs;
 
+// ── Errors ─────────────────────────────────────────────────────────────────────
+// Specific rollback errors: failure to open the repository, missing specified commit, or failure to compute the difference between versions
 pub const RollbackError = error{
     RepoOpenFailed,
     CommitNotFound,
@@ -10,18 +13,22 @@ pub const RollbackError = error{
     DiffFailed,
 };
 
+// A structure for storing information about a specific "restore point"
 pub const CommitEntry = struct {
     checksum: []const u8,
     subject: []const u8,
 };
 
+// Listing of file change types: added, removed, modified
 pub const DiffKind = enum { added, removed, modified };
 
+// Description of the specific change: the file path and exactly what happened to it
 pub const DiffEntry = struct {
     path: []const u8,
     kind: DiffKind,
 };
 
+// The primary function of the coordinator is to switch the system to a different state
 pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const u8, checkout_path: []const u8, allocator: std.mem.Allocator) !void {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
@@ -84,6 +91,7 @@ pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const 
     }
 }
 
+// Allows retrieving the change history for a specific branch
 pub fn listCommits(repo_path: []const u8, branch: []const u8, allocator: std.mem.Allocator) ![]CommitEntry {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
@@ -122,13 +130,7 @@ pub fn listCommits(repo_path: []const u8, branch: []const u8, allocator: std.mem
     while (checksum) |current_cs| {
         var commit_variant: ?*c_libs.GVariant = null;
 
-        if (c_libs.ostree_repo_load_variant(
-            repo,
-            c_libs.OSTREE_OBJECT_TYPE_COMMIT,
-            current_cs,
-            &commit_variant,
-            &gerror,
-        ) == 0) {
+        if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, current_cs, &commit_variant, &gerror) == 0) {
             if (gerror) |err| c_libs.g_error_free(err);
             break;
         }
@@ -156,11 +158,14 @@ pub fn listCommits(repo_path: []const u8, branch: []const u8, allocator: std.mem
     return entries.toOwnedSlice();
 }
 
+// Compares two repository states
 pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, allocator: std.mem.Allocator) ![]DiffEntry {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
+
     const from_ref_c = try std.fmt.allocPrintZ(allocator, "{s}", .{from_ref});
     defer allocator.free(from_ref_c);
+
     const to_ref_c = try std.fmt.allocPrintZ(allocator, "{s}", .{to_ref});
     defer allocator.free(to_ref_c);
 
@@ -203,16 +208,7 @@ pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, all
     const added_entries = c_libs.g_ptr_array_new();
     defer c_libs.g_ptr_array_unref(added_entries);
 
-    if (c_libs.ostree_diff_dirs(
-        c_libs.OSTREE_DIFF_FLAGS_NONE,
-        from_gfile,
-        to_gfile,
-        modified_entries,
-        removed_entries,
-        added_entries,
-        null,
-        &gerror,
-    ) == 0) {
+    if (c_libs.ostree_diff_dirs(c_libs.OSTREE_DIFF_FLAGS_NONE, from_gfile, to_gfile, modified_entries, removed_entries, added_entries, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         return RollbackError.DiffFailed;
     }
@@ -247,6 +243,7 @@ pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, all
     return diff_entries.toOwnedSlice();
 }
 
+// A low-level function for "deploying" a commit to a live system
 fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [:0]const u8, destination_path: [:0]const u8, allocator: std.mem.Allocator) !void {
     _ = allocator;
 
@@ -269,15 +266,7 @@ fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [:0]const u8, destination_path: 
     checkout_options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     checkout_options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_libs.ostree_repo_checkout_at(
-        repo,
-        &checkout_options,
-        std.c.AT.FDCWD,
-        destination_path.ptr,
-        resolved_checksum,
-        null,
-        &gerror,
-    ) == 0) {
+    if (c_libs.ostree_repo_checkout_at(repo, &checkout_options, std.c.AT.FDCWD, destination_path.ptr, resolved_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         return RollbackError.DiffFailed;
     }
