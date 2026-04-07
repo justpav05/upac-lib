@@ -25,7 +25,7 @@ pub const InitError = error{
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn initSystem(system_paths: SystemPaths, repo_mode: RepoMode, allocator: std.mem.Allocator) !void {
-    try checkNotExists(system_paths.repo_path);
+    try checkExists(system_paths.root_path);
     try checkExists(system_paths.root_path);
 
     std.fs.makeDirAbsolute(system_paths.repo_path) catch return InitError.CreateDirFailed;
@@ -34,14 +34,6 @@ pub fn initSystem(system_paths: SystemPaths, repo_mode: RepoMode, allocator: std
 }
 
 // ── Helpers funchtions ────────────────────────────────────────────────────────
-fn checkNotExists(path: []const u8) !void {
-    std.fs.accessAbsolute(path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => return err,
-    };
-    return InitError.AlreadyInitialized;
-}
-
 fn checkExists(path: []const u8) !void {
     std.fs.accessAbsolute(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,

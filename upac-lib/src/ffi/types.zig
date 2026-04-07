@@ -172,20 +172,38 @@ pub const ErrorCode = enum(i32) {
 // A mapper function that translates internal Zig errors (anyerror) into ErrorCode values understandable by the external interface
 pub fn fromError(err: anyerror) ErrorCode {
     return switch (err) {
+        // System & File System
         error.OutOfMemory => .out_of_memory,
+        error.InvalidPath, error.BadPathName => .invalid_path,
         error.FileNotFound => .file_not_found,
-        error.WouldBlock => .lock_would_block,
         error.AccessDenied => .permission_denied,
-        error.AlreadyInstalled => .install_already_installed,
-        error.PackageNotFound => .uninstall_not_found,
-        error.RepoOpenFailed => .ostree_repo_open,
-        error.MaxRetriesExceeded => .install_failed,
+        error.WouldBlock => .lock_would_block,
+
+        // Database
+        error.MissingField => .db_missing_field,
+        error.MissingSection => .db_missing_section,
+        error.InvalidEntry => .db_invalid_entry,
+        error.ParseError => .db_parse_error,
+
+        // Init Sequence
         error.AlreadyInitialized => .already_initialized,
         error.CreateDirFailed => .create_dir_failed,
         error.OstreeInitFailed => .ostree_init_failed,
+
+        // Package Management (Install/Uninstall)
+        error.AlreadyInstalled => .install_already_installed,
+        error.InstallFailed, error.MaxRetriesExceeded => .install_failed,
+        error.PackageNotFound => .uninstall_not_found,
+        error.UninstallFailed => .uninstall_failed,
+
+        // OSTree Operations
+        error.RepoOpenFailed => .ostree_repo_open,
+        error.CommitFailed => .ostree_commit,
+        error.DiffFailed => .ostree_diff,
         error.RollbackFailed => .ostree_rollback,
         error.NoPreviousCommit => .ostree_no_parent,
-        error.DiffFailed => .ostree_diff,
+
+        // Fallback for unmapped errors
         else => .unexpected,
     };
 }
