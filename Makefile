@@ -19,12 +19,12 @@ build-lib:
 	cd $(ROOT_DIR)/upac-lib && zig build --prefix zig-out
 
 build-backends:
-	@echo "--- Building upac-alpm-backend ---"
-	cd $(ROOT_DIR)/upac-alpm-backend && zig build --prefix zig-out
-	@echo "--- Building upac-rpm-backend ---"
-	cd $(ROOT_DIR)/upac-rpm-backend && zig build --prefix zig-out
-	@echo "--- Building upac-deb-backend ---"
-	cd $(ROOT_DIR)/upac-deb-backend && zig build --prefix zig-out
+	@echo "--- Building upac-alpm ---"
+	cd $(ROOT_DIR)/upac-alpm && zig build --prefix zig-out
+	@echo "--- Building upac-rpm ---"
+	cd $(ROOT_DIR)/upac-rpm && zig build --prefix zig-out
+	@echo "--- Building upac-deb ---"
+	cd $(ROOT_DIR)/upac-deb && zig build --prefix zig-out
 
 build-cli:
 	@echo "--- Building upac-cli ---"

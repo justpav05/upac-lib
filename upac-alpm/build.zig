@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
 
     // ── Shared library ────────────────────────────────────────────────────────
     const shared_lib = b.addSharedLibrary(.{
-        .name = "upac-backend-deb",
+        .name = "upac-arch",
         .root_source_file = b.path("src/backend.zig"),
         .target = target,
         .optimize = optimize,
