@@ -12,46 +12,11 @@ Upac-lib is a low-level package management library written in Zig, designed to b
 
 The library is intentionally split into independent components: backends handle format-specific unpacking, the core library handles installation and database operations, and OStree integration is optional.
 
-## Architecture
-
-```
-upac-lib/                  Core library (.so)
-├── lock/                  File-descriptor based locking (flock)
-├── database/              Package database (TOML files + index)
-├── installer/             File copying, hardlinking, permissions
-├── uninstaller/           File deleting, relinking
-├── ostree/                OStree commit, diff, rollback
-├── parser/                Parse toml files
-├── ffi/                   C ABI exports
-└── init                   System directory initialization
-
-upac-alpm-backend/         Arch Linux package backend (.so)
-└── src/                   Verification, extraction, .PKGINFO parsing
-
-upac-rpm-backend/          Fedora Linux like package backend (.so)
-└── src/                   Verification, extraction, archive parsing
-
-upac-deb-backend/          Debian Linux like package backend (.so)
-└── src/                   Verification, extraction, archive parsing
-
-upac-cli/                  Command-line interface (Rust)
-```
-
-Each component is implemented as a finite state machine. State transitions are explicit — each function either calls the next state directly or returns an error, making the control flow easy to trace and reason about.
-
 ## Components
 
 ### Core Library (`upac-lib`)
 
-The core library exposes a C-compatible ABI through `libupac.so`. All strings cross the boundary as `{ ptr, len }` pairs rather than null-terminated C strings. All functions return an integer error code; `0` means success.
-
-**Database** — Stores installed package metadata and file lists as TOML files in a directory. Each package gets its own file; an `index.toml` tracks which packages are installed. All writes are atomic (write to `.tmp`, then rename).
-
-**Installer** — Copies package files into the OStree repository directory, then hardlinks them into the root filesystem. Supports configurable retry limits and automatic rollback to the previous state on `FileNotFound` errors.
-
-**OStree** — Optional snapshotting layer. After installation, the caller may commit the current state of the repository directory to an OStree repo. Diff and rollback operations are also available.
-
-**Init** — One-time system initialization. Creates the database directory, repository directory, and OStree repository with a configurable mode (archive, bare, bare-user).
+The core library exposes a C-compatible ABI through `libupac.so`. All strings cross the boundary as `{ ptr, len }` pairs rather than null-terminated C strings. All functions return an integer error code.
 
 ### Backends
 
@@ -60,6 +25,8 @@ Backends are separate shared libraries that handle format-specific package unpac
 **`upac-alpm-backend`** handles Arch Linux packages (`.pkg.tar.zst`, `.pkg.tar.xz`, `.pkg.tar.gz`). Metadata is read from `.PKGINFO` inside the archive.
 
 **`upac-rpm-backend`** handles Fedora, RHEL, and openSUSE packages (.rpm). Metadata is read from the RPM header and internal cpio archive structures.
+
+**`upac-deb-backend`** handles Ubuntu, Debian, etc. (.deb). Metadata is read from the control file and internal tar archive structures.
 
 Adding support for a new package format means writing a new backend `.so` — the core library does not need to change.
 
@@ -97,33 +64,3 @@ make pkg-arch         # builds upac-package for Arch Linux → pkg/arch/upac-{ve
 ```sh
 make clean
 ```
-
-## Design Decisions
-
-**Finite state machines everywhere.** Every non-trivial operation is modeled as an FSM where each state is a function that calls the next state directly. This makes the transition graph explicit and keeps error handling close to where errors occur.
-
-**No central dispatcher.** There is no event loop or scheduler. The FSM runs by direct function calls, with self-loops for retry logic and backward transitions for rollback. The call stack *is* the state history.
-
-**Hardlinks over copies.** The installer copies files into the OStree repository directory once, then hardlinks them into the root filesystem. This avoids redundant disk usage and keeps the repository in sync with what is actually installed.
-
-**Stable C ABI.** All public functions use `extern "C"` calling convention with `repr(C)` types. Strings are `{ ptr: [*]const u8, len: usize }` pairs. This allows the library to be called from any language with C FFI support.
-
-**Optional OStree.** The installer has no knowledge of OStree. The caller decides whether to snapshot after installation. This keeps the installer simple and makes OStree genuinely optional.
-
-**Per-format backends.** Package format support is isolated in separate shared libraries. The core library never parses package archives. This means adding RPM or Debian support does not require touching the core.
-
-## Error Codes
-
-| Range | Component |
-|-------|-----------|
-| 0 | Success |
-| 1–9 | General errors |
-| 10–19 | Lock |
-| 20–29 | Database |
-| 30–39 | Installer |
-| 40–49 | OStree |
-| 50–59 | Init |
-
-## License
-
-TBD
