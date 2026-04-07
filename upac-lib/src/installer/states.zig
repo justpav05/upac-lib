@@ -236,12 +236,8 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
     );
     defer machine.allocator.free(branch_c);
 
-    const checkout_path_c = try std.fmt.allocPrintZ(
-        machine.allocator,
-        "{s}",
-        .{machine.data.checkout_path},
-    );
-    defer machine.allocator.free(checkout_path_c);
+    const root_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.root_path});
+    defer machine.allocator.free(root_path_c);
 
     var parent_checksum: ?[*:0]u8 = null;
     defer if (parent_checksum) |cs| c_libs.g_free(@ptrCast(cs));
@@ -299,11 +295,7 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
         return stateCommit(machine);
     }
 
-    const subject_c = try std.fmt.allocPrintZ(
-        machine.allocator,
-        "install: {s} {s}",
-        .{ machine.data.package_meta.name, machine.data.package_meta.version },
-    );
+    const subject_c = try std.fmt.allocPrintZ(machine.allocator, "install: {s} {s}", .{ machine.data.package_meta.name, machine.data.package_meta.version });
     defer machine.allocator.free(subject_c);
 
     var commit_checksum: ?[*:0]u8 = null;
@@ -336,7 +328,7 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, checkout_path_c.ptr, commit_checksum, null, &gerror) == 0) {
+    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, root_path_c.ptr, commit_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         if (machine.exhausted()) {
             stateFailed(machine);

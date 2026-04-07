@@ -28,11 +28,7 @@ pub fn stateVerifying(machine: *UninstallerMachine) anyerror!void {
 fn stateOpenRepo(machine: *UninstallerMachine) anyerror!void {
     try machine.enter(.open_repo);
 
-    const repo_path_c = std.fmt.allocPrintZ(
-        machine.allocator,
-        "{s}",
-        .{machine.data.repo_path},
-    ) catch |err| {
+    const repo_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.repo_path}) catch |err| {
         stateFailed(machine);
         return err;
     };
@@ -240,8 +236,8 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
     );
     defer machine.allocator.free(branch_c);
 
-    const checkout_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.checkout_path});
-    defer machine.allocator.free(checkout_path_c);
+    const root_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.root_path});
+    defer machine.allocator.free(root_path_c);
 
     var parent_checksum: ?[*:0]u8 = null;
     defer if (parent_checksum) |checksum| c_libs.g_free(@ptrCast(checksum));
@@ -341,7 +337,7 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
     checkout_options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     checkout_options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_libs.ostree_repo_checkout_at(repo, &checkout_options, std.c.AT.FDCWD, checkout_path_c.ptr, commit_checksum, null, &gerror) == 0) {
+    if (c_libs.ostree_repo_checkout_at(repo, &checkout_options, std.c.AT.FDCWD, root_path_c.ptr, commit_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         if (machine.exhausted()) {
             stateFailed(machine);

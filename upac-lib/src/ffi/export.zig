@@ -44,11 +44,13 @@ pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 
         .package_meta = toMeta(c_install_request.meta),
         .package_temp_path = c_install_request.package_temp_path.toSlice(),
         .package_checksum = c_install_request.package_checksum.toSlice(),
+
         .repo_path = c_install_request.repo_path.toSlice(),
-        .index_path = c_install_request.index_path.toSlice(),
+        .root_path = c_install_request.root_path.toSlice(),
         .database_path = c_install_request.db_path.toSlice(),
+
         .branch = c_install_request.branch.toSlice(),
-        .checkout_path = c_install_request.checkout_path.toSlice(),
+
         .max_retries = c_install_request.max_retries,
     };
 
@@ -62,10 +64,13 @@ pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 
 pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C) i32 {
     const uninstall_data = uninstaller.UninstallData{
         .package_name = c_uninstall_request.package_name.toSlice(),
+
         .repo_path = c_uninstall_request.repo_path.toSlice(),
+        .root_path = c_uninstall_request.root_path.toSlice(),
         .db_path = c_uninstall_request.db_path.toSlice(),
+
         .branch = c_uninstall_request.branch.toSlice(),
-        .checkout_path = c_uninstall_request.checkout_path.toSlice(),
+
         .max_retries = c_uninstall_request.max_retries,
     };
 
@@ -77,13 +82,7 @@ pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C
 
 // Reverts the system state to a specific commit hash in the OSTree repository
 pub export fn upac_rollback(c_rollback_request: CRollbackRequest) callconv(.C) i32 {
-    rollback.rollback(
-        c_rollback_request.repo_path.toSlice(),
-        c_rollback_request.branch.toSlice(),
-        c_rollback_request.commit_hash.toSlice(),
-        c_rollback_request.checkout_path.toSlice(),
-        types.allocator(),
-    ) catch |err| return @intFromEnum(types.fromError(err));
+    rollback.rollback(c_rollback_request.repo_path.toSlice(), c_rollback_request.branch.toSlice(), c_rollback_request.commit_hash.toSlice(), c_rollback_request.root_path.toSlice(), types.allocator()) catch |err| return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }

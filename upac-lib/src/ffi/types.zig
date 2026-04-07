@@ -47,23 +47,29 @@ pub const CPackageMeta = extern struct {
 // Parameter sets for the сorresponding operation — Installation
 pub const CInstallRequest = extern struct {
     meta: CPackageMeta,
+
     package_temp_path: CSlice,
     package_checksum: CSlice,
+
     repo_path: CSlice,
-    index_path: CSlice,
+    root_path: CSlice,
     db_path: CSlice,
+
     branch: CSlice,
-    checkout_path: CSlice,
+
     max_retries: u8,
 };
 
 // // Parameter sets for the сorresponding operation — Uninstallation
 pub const CUninstallRequest = extern struct {
     package_name: CSlice,
+
     repo_path: CSlice,
+    root_path: CSlice,
     db_path: CSlice,
+
     branch: CSlice,
-    checkout_path: CSlice,
+
     max_retries: u8,
 };
 
@@ -90,6 +96,7 @@ pub const CDiffArray = extern struct {
     }
 };
 
+//
 pub const CCommitEntry = extern struct {
     checksum: CSlice,
     subject: CSlice,
@@ -107,10 +114,12 @@ pub const CCommitArray = extern struct {
 
 // // Parameter sets for the сorresponding operation — Rollback
 pub const CRollbackRequest = extern struct {
+    root_path: CSlice,
     repo_path: CSlice,
+
     branch: CSlice,
+
     commit_hash: CSlice,
-    checkout_path: CSlice,
 };
 
 // A set of paths required to initialize the system

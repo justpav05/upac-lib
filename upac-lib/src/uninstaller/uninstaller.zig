@@ -37,9 +37,10 @@ pub const UninstallData = struct {
     package_name: []const u8,
 
     repo_path: []const u8,
+    root_path: []const u8,
     db_path: []const u8,
+
     branch: []const u8,
-    checkout_path: []const u8,
 
     max_retries: u8 = 0,
 };
@@ -52,6 +53,7 @@ pub const UninstallerMachine = struct {
 
     repo: ?*c_libs.OstreeRepo,
     mtree: ?*c_libs.OstreeMutableTree,
+
     package_checksum: ?[]const u8,
     package_file_map: ?data_mod.FileMap,
 

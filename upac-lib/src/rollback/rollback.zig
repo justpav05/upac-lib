@@ -29,15 +29,15 @@ pub const DiffEntry = struct {
 };
 
 // The primary function of the coordinator is to switch the system to a different state
-pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const u8, checkout_path: []const u8, allocator: std.mem.Allocator) !void {
+pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const u8, root_path: []const u8, allocator: std.mem.Allocator) !void {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
     const branch_c = try std.fmt.allocPrintZ(allocator, "{s}", .{branch});
     defer allocator.free(branch_c);
     const commit_hash_c = try std.fmt.allocPrintZ(allocator, "{s}", .{commit_hash});
     defer allocator.free(commit_hash_c);
-    const checkout_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{checkout_path});
-    defer allocator.free(checkout_path_c);
+    const root_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{root_path});
+    defer allocator.free(root_path_c);
 
     var gerror: ?*c_libs.GError = null;
 
@@ -77,15 +77,7 @@ pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const 
     checkout_options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     checkout_options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_libs.ostree_repo_checkout_at(
-        repo,
-        &checkout_options,
-        std.c.AT.FDCWD,
-        checkout_path_c.ptr,
-        resolved_checksum,
-        null,
-        &gerror,
-    ) == 0) {
+    if (c_libs.ostree_repo_checkout_at(repo, &checkout_options, std.c.AT.FDCWD, root_path_c.ptr, resolved_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         return RollbackError.RollbackFailed;
     }

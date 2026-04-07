@@ -43,12 +43,10 @@ pub const InstallData = struct {
     package_checksum: []const u8,
 
     repo_path: []const u8,
-    index_path: []const u8,
+    root_path: []const u8,
     database_path: []const u8,
 
     branch: []const u8,
-
-    checkout_path: []const u8,
 
     max_retries: u8 = 0,
 };
