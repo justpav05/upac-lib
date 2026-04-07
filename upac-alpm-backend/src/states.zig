@@ -13,6 +13,7 @@ const c_libs = @cImport({
 });
 
 // ── States ─────────────────────────────────────────────────────────────────
+// Archive Integrity Check Status: Calculating SHA256 and comparing against expected value
 pub fn stateVerifying(machine: *Machine) anyerror!void {
     try machine.enter(.verifying);
 
@@ -54,6 +55,7 @@ pub fn stateVerifying(machine: *Machine) anyerror!void {
     return stateExtracting(machine);
 }
 
+// Unpacking state: uses libarchive to extract files to the temp directory
 fn stateExtracting(machine: *Machine) anyerror!void {
     try machine.enter(.extracting);
 
@@ -143,6 +145,7 @@ fn stateExtracting(machine: *Machine) anyerror!void {
     return stateReadingMeta(machine);
 }
 
+// Parsing status: searching for and parsing the .PKGINFO file to populate package metadata
 fn stateReadingMeta(machine: *Machine) anyerror!void {
     try machine.enter(.reading_meta);
 
@@ -199,7 +202,6 @@ fn stateReadingMeta(machine: *Machine) anyerror!void {
         }
     }
 
-    // Проверяем обязательные поля
     if (name == null or version == null) {
         stateFailed(machine);
         return BackendError.InvalidPackage;
@@ -219,13 +221,12 @@ fn stateReadingMeta(machine: *Machine) anyerror!void {
     return stateDone(machine);
 }
 
+// The final state representing the successful completion of all processing stages
 fn stateDone(machine: *Machine) anyerror!void {
     try machine.enter(.done);
 }
 
+// An error state signaling that the machine failed to reach the required state at a certain stage
 fn stateFailed(machine: *Machine) void {
     _ = machine.enter(.failed) catch {};
-    std.debug.print("✗ backend failed, path: ", .{});
-    for (machine.stack.items) |s| std.debug.print("{s} ", .{@tagName(s)});
-    std.debug.print("\n", .{});
 }
