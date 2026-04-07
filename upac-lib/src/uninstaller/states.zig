@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
 const data = @import("upac-data");
@@ -9,6 +10,8 @@ const uninstaller_mod = @import("uninstaller.zig");
 const UninstallerMachine = uninstaller_mod.UninstallerMachine;
 const UninstallerError = uninstaller_mod.UninstallerError;
 
+// ── States ─────────────────────────────────────────────────────────────────────
+// The status of the path validation check
 pub fn stateVerifying(machine: *UninstallerMachine) anyerror!void {
     try machine.enter(.verifying);
 
@@ -21,6 +24,7 @@ pub fn stateVerifying(machine: *UninstallerMachine) anyerror!void {
     return stateOpenRepo(machine);
 }
 
+// The state of opening the repository and writing its data to the machine
 fn stateOpenRepo(machine: *UninstallerMachine) anyerror!void {
     try machine.enter(.open_repo);
 
@@ -54,11 +58,7 @@ fn stateOpenRepo(machine: *UninstallerMachine) anyerror!void {
 
     machine.repo = repo;
 
-    const branch_c = std.fmt.allocPrintZ(
-        machine.allocator,
-        "{s}",
-        .{machine.data.branch},
-    ) catch |err| {
+    const branch_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch}) catch |err| {
         stateFailed(machine);
         return err;
     };
@@ -75,14 +75,7 @@ fn stateOpenRepo(machine: *UninstallerMachine) anyerror!void {
         var mtree_root: ?*c_libs.GFile = null;
         if (c_libs.ostree_repo_read_commit(repo, checksum, &mtree_root, null, null, &gerror) != 0) {
             defer if (mtree_root) |root| c_libs.g_object_unref(root);
-            _ = c_libs.ostree_repo_write_directory_to_mtree(
-                repo,
-                mtree_root,
-                mtree,
-                null,
-                null,
-                &gerror,
-            );
+            _ = c_libs.ostree_repo_write_directory_to_mtree(repo, mtree_root, mtree, null, null, &gerror);
             if (gerror) |err| c_libs.g_error_free(err);
         } else {
             if (gerror) |err| c_libs.g_error_free(err);
@@ -94,24 +87,15 @@ fn stateOpenRepo(machine: *UninstallerMachine) anyerror!void {
     return stateCheckInstalled(machine);
 }
 
+// Installation verification status, designed to prevent the removal of non-existent items
 fn stateCheckInstalled(machine: *UninstallerMachine) anyerror!void {
     try machine.enter(.check_installed);
 
-    const branch_c = try std.fmt.allocPrintZ(
-        machine.allocator,
-        "{s}",
-        .{machine.data.branch},
-    );
+    const branch_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch});
     defer machine.allocator.free(branch_c);
 
     var last_checksum: ?[*:0]u8 = null;
-    if (c_libs.ostree_repo_resolve_rev(
-        machine.repo.?,
-        branch_c.ptr,
-        1,
-        &last_checksum,
-        null,
-    ) == 0 or last_checksum == null) {
+    if (c_libs.ostree_repo_resolve_rev(machine.repo.?, branch_c.ptr, 1, &last_checksum, null) == 0 or last_checksum == null) {
         stateFailed(machine);
         return UninstallerError.PackageNotFound;
     }
@@ -121,13 +105,7 @@ fn stateCheckInstalled(machine: *UninstallerMachine) anyerror!void {
     var commit_variant: ?*c_libs.GVariant = null;
     defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
 
-    if (c_libs.ostree_repo_load_variant(
-        machine.repo.?,
-        c_libs.OSTREE_OBJECT_TYPE_COMMIT,
-        last_checksum,
-        &commit_variant,
-        &gerror,
-    ) == 0) {
+    if (c_libs.ostree_repo_load_variant(machine.repo.?, c_libs.OSTREE_OBJECT_TYPE_COMMIT, last_checksum, &commit_variant, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         stateFailed(machine);
         return UninstallerError.PackageNotFound;
@@ -161,6 +139,7 @@ fn stateCheckInstalled(machine: *UninstallerMachine) anyerror!void {
     return UninstallerError.PackageNotFound;
 }
 
+// State for loading the list of paths created during installation, in order to precisely identify which OSTree tree nodes need to be removed
 fn stateLoadFiles(machine: *UninstallerMachine) anyerror!void {
     try machine.enter(.load_files);
 
@@ -183,6 +162,7 @@ fn stateLoadFiles(machine: *UninstallerMachine) anyerror!void {
     return stateRemoveFiles(machine);
 }
 
+// State of file removal from mtree
 fn stateRemoveFiles(machine: *UninstallerMachine) anyerror!void {
     try machine.enter(.remove_files);
 
@@ -207,6 +187,7 @@ fn stateRemoveFiles(machine: *UninstallerMachine) anyerror!void {
     return stateRemoveDbFiles(machine);
 }
 
+// The state of removal from the global index, as well as of files belonging to the package in the database
 fn stateRemoveDbFiles(machine: *UninstallerMachine) anyerror!void {
     try machine.enter(.remove_db_files);
 
@@ -243,6 +224,7 @@ fn stateRemoveDbFiles(machine: *UninstallerMachine) anyerror!void {
     return stateCommit(machine);
 }
 
+// Creates a new commit in OSTree representing the system state without the files of this package
 fn stateCommit(machine: *UninstallerMachine) anyerror!void {
     try machine.enter(.commit);
 
@@ -258,11 +240,7 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
     );
     defer machine.allocator.free(branch_c);
 
-    const checkout_path_c = try std.fmt.allocPrintZ(
-        machine.allocator,
-        "{s}",
-        .{machine.data.checkout_path},
-    );
+    const checkout_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.checkout_path});
     defer machine.allocator.free(checkout_path_c);
 
     var parent_checksum: ?[*:0]u8 = null;
@@ -277,13 +255,7 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
         var prev_commit_variant: ?*c_libs.GVariant = null;
         defer if (prev_commit_variant) |variant| c_libs.g_variant_unref(variant);
 
-        if (c_libs.ostree_repo_load_variant(
-            repo,
-            c_libs.OSTREE_OBJECT_TYPE_COMMIT,
-            prev_checksum,
-            &prev_commit_variant,
-            &gerror,
-        ) != 0) {
+        if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, prev_checksum, &prev_commit_variant, &gerror) != 0) {
             var prev_body_variant: ?*c_libs.GVariant = null;
             defer if (prev_body_variant) |variant| c_libs.g_variant_unref(variant);
             prev_body_variant = c_libs.g_variant_get_child_value(prev_commit_variant, 4);
@@ -336,27 +308,13 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
         return stateCommit(machine);
     }
 
-    const subject_c = try std.fmt.allocPrintZ(
-        machine.allocator,
-        "remove: {s}",
-        .{machine.data.package_name},
-    );
+    const subject_c = try std.fmt.allocPrintZ(machine.allocator, "remove: {s}", .{machine.data.package_name});
     defer machine.allocator.free(subject_c);
 
     var commit_checksum: ?[*:0]u8 = null;
     defer if (commit_checksum) |checksum| c_libs.g_free(@ptrCast(checksum));
 
-    if (c_libs.ostree_repo_write_commit(
-        repo,
-        if (parent_checksum) |checksum| checksum else null,
-        subject_c.ptr,
-        body_c.ptr,
-        null,
-        @ptrCast(mtree_root),
-        &commit_checksum,
-        null,
-        &gerror,
-    ) == 0) {
+    if (c_libs.ostree_repo_write_commit(repo, if (parent_checksum) |checksum| checksum else null, subject_c.ptr, body_c.ptr, null, @ptrCast(mtree_root), &commit_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
         if (machine.exhausted()) {
@@ -383,15 +341,7 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
     checkout_options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     checkout_options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_libs.ostree_repo_checkout_at(
-        repo,
-        &checkout_options,
-        std.c.AT.FDCWD,
-        checkout_path_c.ptr,
-        commit_checksum,
-        null,
-        &gerror,
-    ) == 0) {
+    if (c_libs.ostree_repo_checkout_at(repo, &checkout_options, std.c.AT.FDCWD, checkout_path_c.ptr, commit_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         if (machine.exhausted()) {
             stateFailed(machine);
@@ -405,10 +355,12 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
     return stateDone(machine);
 }
 
+// State of successful completion of the package removal process and deployment of the new commit
 fn stateDone(machine: *UninstallerMachine) anyerror!void {
     try machine.enter(.done);
 }
 
+// A state of unsuccessful package removal, signaling the system that a rollback is required to revert the changes
 fn stateFailed(machine: *UninstallerMachine) void {
     _ = machine.enter(.failed) catch {};
     std.debug.print("uninstall failed '{s}', states: ", .{machine.data.package_name});
@@ -418,11 +370,9 @@ fn stateFailed(machine: *UninstallerMachine) void {
     std.debug.print("\n", .{});
 }
 
-fn removeFromMtree(
-    root: *c_libs.OstreeMutableTree,
-    relative_path: []const u8,
-    allocator: std.mem.Allocator,
-) !void {
+// ── Helpers functions ─────────────────────────────────────────────────────────────────────
+// Removes the file entry from the file table of the corresponding directory
+fn removeFromMtree(root: *c_libs.OstreeMutableTree, relative_path: []const u8, allocator: std.mem.Allocator) !void {
     var gerror: ?*c_libs.GError = null;
 
     var path_components = std.ArrayList([]const u8).init(allocator);
@@ -443,12 +393,7 @@ fn removeFromMtree(
         defer allocator.free(dir_name_c);
 
         var sub_dir: ?*c_libs.OstreeMutableTree = null;
-        if (c_libs.ostree_mutable_tree_ensure_dir(
-            current_mtree,
-            dir_name_c.ptr,
-            &sub_dir,
-            &gerror,
-        ) == 0) {
+        if (c_libs.ostree_mutable_tree_ensure_dir(current_mtree, dir_name_c.ptr, &sub_dir, &gerror) == 0) {
             if (gerror) |err| c_libs.g_error_free(err);
             return;
         }
