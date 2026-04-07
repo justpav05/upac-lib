@@ -28,7 +28,7 @@ build-backends:
 
 build-cli:
 	@echo "--- Building upac-cli ---"
-	cd $(ROOT_DIR)/upac-cli && RUSTFLAGS="-C prefer-dynamic=false" cargo build --target x86_64-unknown-linux-musl
+	cd $(ROOT_DIR)/upac-cli && RUSTFLAGS="-C prefer-dynamic=false" cargo build --target x86_64-unknown-linux-gnu
 
 # ── Arch пакет ────────────────────────────────────────────────────────────────
 pkg-arch: build
@@ -44,7 +44,7 @@ pkg-arch: build
 
 	@cp $(ROOT_DIR)/pkg-specs/arch/PKGBUILD $(PKG_DIR)/arch/
 	@echo "--- Copying cli v$(VERSION) ---"
-	@cp $(ROOT_DIR)/upac-cli/target/x86_64-unknown-linux-musl/debug/upac $(PKG_DIR)/arch/root/usr/bin/
+	@cp $(ROOT_DIR)/upac-cli/target/x86_64-unknown-linux-gnu/debug/upac $(PKG_DIR)/arch/root/usr/bin/
 	@echo "--- Copying core lib v$(VERSION) ---"
 	@cp $(ROOT_DIR)/upac-lib/zig-out/lib/libupac.so $(PKG_DIR)/arch/root/usr/lib/
 	@echo "--- Copying backends v$(VERSION) ---"
