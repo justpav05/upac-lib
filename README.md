@@ -12,6 +12,18 @@ Upac-lib is a low-level package management library written in Zig, designed to b
 
 The library is intentionally split into independent components: backends handle format-specific unpacking, the core library handles installation and database operations, and OStree integration is optional.
 
+## Usage
+
+**`upac install`** — Installs files into the system using the selected backend, with support for checksum verification.
+
+**`upac remove`** — Removes an installed package from the system by name.
+
+**`upac list`** — Lists packages, with optional display of versions, commit history, or full details.
+
+**`upac rollback`** — Reverts the system state to a specified commit ID.
+
+**`upac init`** — Initializes the upac working environment in a specified mode (default: archive).
+
 ## Components
 
 ### Core Library (`upac-lib`)
