@@ -1,24 +1,18 @@
-# upac configuration file
+# Upac configuration file
 # Copy to /etc/upac/config.toml and adjust paths as needed
 step_retries = 3
 verbose = false
 
 [paths]
 # Directory where package metadata is stored
-db_path     = "/var/db/upac"
+database_path = "/var/db/upac"
 
-# Directory where package files are stored (OStree content path)
+# OSTree repo
 repo_path   = "/var/repo"
 
 # Root of the filesystem where hardlinks are created
 root_path   = "/"
 
-# OStree repository directory
-ostree_path = "/var/ostree"
-
 [ostree]
-# Set to true to enable OStree snapshotting after each install/remove
-enabled = false
-
 # Branch name used for OStree commits
 branch  = "packages"
