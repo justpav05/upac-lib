@@ -6,11 +6,8 @@ zig-out/
 target/
 Cargo.lock
 
-# OS
-.DS_Store
-
 # Arch
 pkg/
 
-# CLion
-.idea
+Agents
+AGENTS.md
