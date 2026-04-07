@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 const posix = std.posix;
 
@@ -11,7 +12,7 @@ const c_libs = @cImport({
     @cInclude("archive_entry.h");
 });
 
-// ── Состояния ─────────────────────────────────────────────────────────────────
+// ── States ─────────────────────────────────────────────────────────────────
 pub fn stateVerifying(machine: *Machine) anyerror!void {
     try machine.enter(.verifying);
 
