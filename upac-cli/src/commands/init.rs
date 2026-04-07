@@ -62,7 +62,7 @@ fn state_validating(init_machine: &mut InitMachine) -> Result<()> {
              enabled = false\n\
              branch  = \"packages\"",
             init_machine.config.paths.config_path
-        ); //TODO: Вынести это в отдельный код
+        );
     }
 
     state_initializing(init_machine)
@@ -76,12 +76,11 @@ fn state_initializing(init_machine: &mut InitMachine) -> Result<()> {
     let upac_lib = UpacLib::load()?;
 
     let c_system_paths = CSystemPaths {
-        ostree_path: CSlice::from_str(&init_machine.config.paths.ostree_path),
-        repo_path: CSlice::from_str(&init_machine.config.paths.repo_path),
-        db_path: CSlice::from_str(&init_machine.config.paths.database_path),
+        repo_path: CSlice::from_str(&init_machine.config.paths.ostree_path),
+        root_path: CSlice::from_str(&init_machine.config.paths.root_path),
     };
 
-    let return_code = unsafe { (upac_lib.init_system)(c_system_paths, init_machine.c_repo_mode) };
+    let return_code = unsafe { (upac_lib.init)(c_system_paths, init_machine.c_repo_mode) };
 
     progress_bar.finish_and_clear();
     UpacLib::check(return_code, "init")?;

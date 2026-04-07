@@ -2,7 +2,6 @@ use anyhow::{bail, Result};
 
 use libloading::{Library, Symbol};
 
-use std::ptr;
 use std::slice;
 use std::str;
 
@@ -22,12 +21,7 @@ impl CSlice {
         }
     }
 
-    pub fn empty() -> Self {
-        Self {
-            ptr: ptr::null(),
-            len: 0,
-        }
-    }
+
 
     pub unsafe fn as_str(&self) -> &str {
         let slice = slice::from_raw_parts(self.ptr, self.len);
@@ -36,13 +30,6 @@ impl CSlice {
 }
 
 #[repr(C)]
-pub struct CSliceArray {
-    pub ptr: *mut CSlice,
-    pub len: usize,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
 pub struct CPackageMeta {
     pub name: CSlice,
     pub version: CSlice,
@@ -54,39 +41,68 @@ pub struct CPackageMeta {
     pub checksum: CSlice,
 }
 
-#[repr(C)]
-pub struct CPackageFiles {
-    pub name: CSlice,
-    pub paths: CSliceArray,
-}
-
+// ── Запросы ───────────────────────────────────────────────────────────────────
 #[repr(C)]
 pub struct CInstallRequest {
     pub meta: CPackageMeta,
-    pub root_path: CSlice,
+
+    pub package_temp_path: CSlice,
+    pub package_checksum: CSlice,
+
     pub repo_path: CSlice,
-    pub package_path: CSlice,
+    pub root_path: CSlice,
     pub db_path: CSlice,
+
+    pub branch: CSlice,
+
     pub max_retries: u8,
 }
 
 #[repr(C)]
 pub struct CUninstallRequest {
     pub package_name: CSlice,
-    pub root_path: CSlice,
+
     pub repo_path: CSlice,
+    pub root_path: CSlice,
     pub db_path: CSlice,
+
+    pub branch: CSlice,
+
     pub max_retries: u8,
 }
 
-#[repr(u8)]
-#[derive(Clone, Copy)]
-pub enum COstreeOperation {
-    Install = 0,
-    Remove = 1,
-    Manual = 2,
+#[repr(C)]
+pub struct CRollbackRequest {
+    pub root_path: CSlice,
+    pub repo_path: CSlice,
+
+    pub branch: CSlice,
+
+    pub commit_hash: CSlice,
 }
 
+// ── Diff ──────────────────────────────────────────────────────────────────────
+#[repr(u8)]
+#[derive(Clone, Copy, Debug)]
+pub enum CDiffKind {
+    Added = 0,
+    Removed = 1,
+    Modified = 2,
+}
+
+#[repr(C)]
+pub struct CDiffEntry {
+    pub path: CSlice,
+    pub kind: CDiffKind,
+}
+
+#[repr(C)]
+pub struct CDiffArray {
+    pub ptr: *mut CDiffEntry,
+    pub len: usize,
+}
+
+// ── Commits ───────────────────────────────────────────────────────────────────
 #[repr(C)]
 pub struct CCommitEntry {
     pub checksum: CSlice,
@@ -99,31 +115,11 @@ pub struct CCommitArray {
     pub len: usize,
 }
 
-#[repr(C)]
-pub struct CCommitRequest {
-    pub repo_path: CSlice,
-    pub content_path: CSlice,
-    pub branch: CSlice,
-    pub operation: COstreeOperation,
-    pub packages: *const CPackageMeta,
-    pub packages_len: usize,
-    pub db_path: CSlice,
-}
-
-#[repr(C)]
-pub struct CRefreshRequest {
-    pub repo_path: CSlice,
-    pub content_path: CSlice,
-    pub root_path: CSlice,
-    pub branch: CSlice,
-    pub database_path: CSlice,
-}
-
+// ── Init ──────────────────────────────────────────────────────────────────────
 #[repr(C)]
 pub struct CSystemPaths {
-    pub ostree_path: CSlice,
     pub repo_path: CSlice,
-    pub db_path: CSlice,
+    pub root_path: CSlice,
 }
 
 #[repr(u8)]
@@ -138,26 +134,20 @@ pub enum CRepoMode {
 pub struct UpacLib {
     _lib: Library,
 
-    pub db_add_package: unsafe extern "C" fn(CSlice, CPackageMeta, CPackageFiles) -> i32,
-    pub db_remove_package: unsafe extern "C" fn(CSlice, CSlice) -> i32,
-    pub db_get_meta: unsafe extern "C" fn(CSlice, CSlice, *mut CPackageMeta) -> i32,
-    pub db_get_files: unsafe extern "C" fn(CSlice, CSlice, *mut CPackageFiles) -> i32,
-    pub db_list_packages: unsafe extern "C" fn(CSlice, *mut CSliceArray) -> i32,
-
-    pub meta_free: unsafe extern "C" fn(*mut CPackageMeta),
-    pub list_free: unsafe extern "C" fn(*mut CSliceArray),
-    pub files_free: unsafe extern "C" fn(*mut CPackageFiles),
-
     pub install: unsafe extern "C" fn(CInstallRequest) -> i32,
     pub uninstall: unsafe extern "C" fn(CUninstallRequest) -> i32,
+    pub rollback: unsafe extern "C" fn(CRollbackRequest) -> i32,
 
-    pub ostree_commit: unsafe extern "C" fn(CCommitRequest) -> i32,
-    pub ostree_list_commits: unsafe extern "C" fn(CSlice, CSlice, *mut CCommitArray) -> i32,
-    pub refresh: unsafe extern "C" fn(CSlice, CSlice, CSlice, CSlice, CSlice) -> i32,
+    pub diff: unsafe extern "C" fn(CSlice, CSlice, CSlice, *mut CDiffArray) -> i32,
+    pub diff_free: unsafe extern "C" fn(*mut CDiffArray),
+
+    pub list_commits: unsafe extern "C" fn(CSlice, CSlice, *mut CCommitArray) -> i32,
     pub commits_free: unsafe extern "C" fn(*mut CCommitArray),
-    pub ostree_rollback: unsafe extern "C" fn(CSlice, CSlice, CSlice, CSlice) -> i32,
 
-    pub init_system: unsafe extern "C" fn(CSystemPaths, CRepoMode) -> i32,
+    pub init: unsafe extern "C" fn(CSystemPaths, CRepoMode) -> i32,
+
+    pub free: unsafe extern "C" fn(*mut u8, usize),
+    pub deinit: unsafe extern "C" fn(),
 }
 
 impl UpacLib {
@@ -177,26 +167,21 @@ impl UpacLib {
         }
 
         Ok(Self {
-            db_add_package: sym!(b"upac_db_add_package"),
-            db_remove_package: sym!(b"upac_db_remove_package"),
-            db_get_meta: sym!(b"upac_db_get_meta"),
-            db_get_files: sym!(b"upac_db_get_files"),
-            db_list_packages: sym!(b"upac_db_list_packages"),
-
-            meta_free: sym!(b"upac_meta_free"),
-            list_free: sym!(b"upac_list_free"),
-            files_free: sym!(b"upac_files_free"),
-
             install: sym!(b"upac_install"),
             uninstall: sym!(b"upac_uninstall"),
+            rollback: sym!(b"upac_rollback"),
 
-            ostree_commit: sym!(b"upac_ostree_commit"),
-            ostree_list_commits: sym!(b"upac_ostree_list_commits"),
-            refresh: sym!(b"upac_refresh"),
+            diff: sym!(b"upac_diff"),
+            diff_free: sym!(b"upac_diff_free"),
+
+            list_commits: sym!(b"upac_list_commits"),
             commits_free: sym!(b"upac_commits_free"),
-            ostree_rollback: sym!(b"upac_ostree_rollback"),
 
-            init_system: sym!(b"upac_init_system"),
+            init: sym!(b"upac_init"),
+
+            free: sym!(b"upac_free"),
+            deinit: sym!(b"upac_deinit"),
+
             _lib: lib,
         })
     }
@@ -211,23 +196,29 @@ impl UpacLib {
             3 => "invalid path",
             4 => "file not found",
             5 => "access denied",
+
             10 => "lock would block — another process is running",
+
             20 => "database: missing field",
             21 => "database: missing section",
             22 => "database: invalid entry",
             23 => "database: parse error",
-            30 => "installer: copy failed",
-            31 => "installer: link failed",
-            32 => "installer: permissions failed",
-            33 => "installer: registration failed",
-            40 => "ostree: failed to open repository",
-            41 => "ostree: commit failed",
-            42 => "ostree: diff failed",
-            43 => "ostree: rollback failed",
-            44 => "ostree: no previous commit",
-            50 => "already initialized",
-            51 => "failed to create directory",
-            52 => "ostree: init failed",
+
+            30 => "package already installed",
+            31 => "install failed",
+
+            40 => "package not found for uninstall",
+            41 => "uninstall failed",
+
+            50 => "ostree: failed to open repository",
+            51 => "ostree: commit failed",
+            52 => "ostree: diff failed",
+            53 => "ostree: rollback failed",
+            54 => "ostree: no previous commit",
+
+            60 => "already initialized",
+            61 => "failed to create directory",
+            62 => "ostree: init failed",
             _ => "unknown error",
         };
         bail!("{context}: {msg} (code {code})");

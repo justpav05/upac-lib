@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::config::Config;
 
-use crate::ffi::{CSlice, UpacLib};
+use crate::ffi::{CRollbackRequest, CSlice, UpacLib};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -75,32 +75,17 @@ fn state_rolling_back(rolling_machine: &mut RollbackMachine) -> Result<()> {
 
     let upac_lib = UpacLib::load()?;
 
-    let result_code = unsafe {
-        (upac_lib.ostree_rollback)(
-            CSlice::from_str(&rolling_machine.config.paths.ostree_path),
-            CSlice::from_str(&rolling_machine.config.paths.repo_path),
-            CSlice::from_str(&rolling_machine.config.ostree.branch),
-            CSlice::from_str(&rolling_machine.commit_hash),
-        )
+    let c_rollback_request = CRollbackRequest {
+        root_path: CSlice::from_str(&rolling_machine.config.paths.root_path),
+        repo_path: CSlice::from_str(&rolling_machine.config.paths.ostree_path),
+        branch: CSlice::from_str(&rolling_machine.config.ostree.branch),
+        commit_hash: CSlice::from_str(&rolling_machine.commit_hash),
     };
 
-    progress_bar.finish_and_clear();
-    UpacLib::check(result_code, "rollback")?;
-
-    let progress_bar = spinner("Refreshing links and database...");
-
-    let refresh_code = unsafe {
-        (upac_lib.refresh)(
-            CSlice::from_str(&rolling_machine.config.paths.ostree_path),
-            CSlice::from_str(&rolling_machine.config.paths.repo_path),
-            CSlice::from_str(&rolling_machine.config.paths.root_path),
-            CSlice::from_str(&rolling_machine.config.ostree.branch),
-            CSlice::from_str(&rolling_machine.config.paths.database_path),
-        )
-    };
+    let return_code = unsafe { (upac_lib.rollback)(c_rollback_request) };
 
     progress_bar.finish_and_clear();
-    UpacLib::check(refresh_code, "refresh")?;
+    UpacLib::check(return_code, "rollback")?;
 
     state_done(rolling_machine)
 }

@@ -9,15 +9,12 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
 use std::process;
-use std::ptr;
 use std::time::Duration;
 
 use crate::backends::{Backend, BackendKind, PackageMeta};
 
 use crate::config::Config;
-use crate::ffi::{
-    CCommitRequest, CInstallRequest, COstreeOperation, CPackageMeta, CSlice, CSliceArray, UpacLib,
-};
+use crate::ffi::{CInstallRequest, CSlice, UpacLib};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -25,8 +22,6 @@ enum State {
     DetectingBackend,
     PreparingPackage,
     Installing,
-    Committing,
-    RollingBack,
     Done,
     Failed(String),
 }
@@ -36,7 +31,6 @@ struct InstallMachine {
     file: String,
     backend: Option<String>,
     checksum: String,
-    retries: u8,
 
     kind: Option<BackendKind>,
     tmp_dir: Option<String>,
@@ -52,7 +46,6 @@ impl InstallMachine {
             file,
             backend,
             checksum,
-            retries: 0,
             kind: None,
             tmp_dir: None,
             package_meta: None,
@@ -62,10 +55,6 @@ impl InstallMachine {
 
     fn enter(&mut self, state: State) {
         self.stack.push(state);
-    }
-
-    fn exhausted(&self) -> bool {
-        self.retries >= self.config.step_retries
     }
 }
 
@@ -142,132 +131,37 @@ fn state_preparing_package(install_machine: &mut InstallMachine) -> Result<()> {
 fn state_installing(install_machine: &mut InstallMachine) -> Result<()> {
     install_machine.enter(State::Installing);
 
-    let progress_bar = spinner(&format!(
-        "Installing{}...",
-        if install_machine.retries > 0 {
-            format!(
-                " (retry {}/{})",
-                install_machine.retries, install_machine.config.step_retries
-            )
-        } else {
-            String::new()
-        }
-    ));
+    let progress_bar = spinner("Installing...");
 
     let upac_lib = UpacLib::load()?;
 
     let package_meta = install_machine.package_meta.as_ref().unwrap();
-
     let tmp_dir_string_path = install_machine.tmp_dir.as_ref().unwrap();
-
     let c_package_meta = package_meta.as_c();
+
+    let branch = if install_machine.config.ostree.enabled {
+        &install_machine.config.ostree.branch
+    } else {
+        ""
+    };
 
     let c_install_request = CInstallRequest {
         meta: c_package_meta,
-        root_path: CSlice::from_str(&install_machine.config.paths.root_path),
+        package_temp_path: CSlice::from_str(tmp_dir_string_path),
+        package_checksum: CSlice::from_str(&install_machine.checksum),
         repo_path: CSlice::from_str(&install_machine.config.paths.repo_path),
-        package_path: CSlice::from_str(tmp_dir_string_path),
+        root_path: CSlice::from_str(&install_machine.config.paths.root_path),
         db_path: CSlice::from_str(&install_machine.config.paths.database_path),
+        branch: CSlice::from_str(branch),
         max_retries: install_machine.config.step_retries,
     };
 
     let return_code = unsafe { (upac_lib.install)(c_install_request) };
 
     progress_bar.finish_and_clear();
-
-    if let Err(err) = UpacLib::check(return_code, "install") {
-        return state_rolling_back(install_machine, err.to_string());
-    }
-
-    if install_machine.config.ostree.enabled {
-        return state_committing(install_machine);
-    }
+    UpacLib::check(return_code, "install")?;
 
     state_done(install_machine)
-}
-
-fn state_committing(install_machine: &mut InstallMachine) -> Result<()> {
-    install_machine.enter(State::Committing);
-
-    let progress_bar = spinner("Creating OStree snapshot...");
-
-    let upac_lib = UpacLib::load()?;
-    let package_meta = install_machine.package_meta.as_ref().unwrap();
-    let c_package_meta = package_meta.as_c();
-
-    let c_commit_request = CCommitRequest {
-        repo_path: CSlice::from_str(&install_machine.config.paths.ostree_path),
-        content_path: CSlice::from_str(&install_machine.config.paths.repo_path),
-        branch: CSlice::from_str(&install_machine.config.ostree.branch),
-        operation: COstreeOperation::Install,
-        packages: &c_package_meta as *const _,
-        packages_len: 1,
-        db_path: CSlice::from_str(&install_machine.config.paths.database_path),
-    };
-
-    let return_code = unsafe { (upac_lib.ostree_commit)(c_commit_request) };
-
-    progress_bar.finish_and_clear();
-
-    if let Err(err) = UpacLib::check(return_code, "ostree commit") {
-        eprintln!("{} ostree snapshot failed: {err}", "⚠".yellow().bold());
-
-        return state_rolling_back(install_machine, err.to_string());
-    }
-
-    println!("{} snapshot created", "✓".green().bold());
-
-    state_done(install_machine)
-}
-
-fn state_rolling_back(install_machine: &mut InstallMachine, reason: String) -> Result<()> {
-    install_machine.enter(State::RollingBack);
-
-    let progress_bar = spinner("Rolling back...");
-
-    if let Some(package_meta) = install_machine.package_meta.as_ref() {
-        let repo_package_string_path = format!(
-            "{}/{}",
-            install_machine.config.paths.repo_path, package_meta.name
-        );
-        fs::remove_dir_all(&repo_package_string_path).ok();
-
-        if let Ok(upac_lib) = UpacLib::load() {
-            let c_database_path = CSlice::from_str(&install_machine.config.paths.database_path);
-            let c_package_name = CSlice::from_str(&package_meta.name);
-
-            let mut c_list = CSliceArray {
-                ptr: ptr::null_mut(),
-                len: 0,
-            };
-            let return_code = unsafe { (upac_lib.db_list_packages)(c_database_path, &mut c_list) };
-            if return_code == 0 {
-                unsafe { (upac_lib.list_free)(&mut c_list) };
-                let _ = unsafe { (upac_lib.db_remove_package)(c_database_path, c_package_name) };
-            }
-        }
-    }
-
-    progress_bar.finish_and_clear();
-
-    if install_machine.exhausted() {
-        let message = format!(
-            "install failed after {} retries: {reason}",
-            install_machine.config.step_retries
-        );
-        install_machine.enter(State::Failed(message.clone()));
-        anyhow::bail!("{message}");
-    }
-
-    install_machine.retries += 1;
-    eprintln!(
-        "{} retry {}/{}: {reason}",
-        "⚠".yellow().bold(),
-        install_machine.retries,
-        install_machine.config.step_retries
-    );
-
-    state_preparing_package(install_machine)
 }
 
 fn state_done(install_machine: &mut InstallMachine) -> Result<()> {
@@ -299,11 +193,6 @@ pub fn run(
         );
     }
 
-    let mut config_no_ostree = config.clone();
-    config_no_ostree.ostree.enabled = false;
-
-    let mut installed_packages: Vec<PackageMeta> = Vec::new();
-
     for (index, file) in files.iter().enumerate() {
         let checksum = if checksums.is_empty() {
             compute_checksum(file)?
@@ -312,7 +201,7 @@ pub fn run(
         };
 
         let mut install_machine = InstallMachine::new(
-            config_no_ostree.clone(),
+            config.clone(),
             file.clone(),
             backend.clone(),
             checksum,
@@ -331,35 +220,6 @@ pub fn run(
             }
             err
         })?;
-
-        if let Some(meta) = install_machine.package_meta.take() {
-            installed_packages.push(meta);
-        }
-    }
-
-    if config.ostree.enabled && !installed_packages.is_empty() {
-        let upac_lib = UpacLib::load()?;
-        let c_packages_metas: Vec<CPackageMeta> = installed_packages
-            .iter()
-            .map(|package_meta| package_meta.as_c())
-            .collect();
-
-        let c_commit_request = CCommitRequest {
-            repo_path: CSlice::from_str(&config.paths.ostree_path),
-            content_path: CSlice::from_str(&config.paths.repo_path),
-            branch: CSlice::from_str(&config.ostree.branch),
-            operation: COstreeOperation::Install,
-            packages: c_packages_metas.as_ptr(),
-            packages_len: c_packages_metas.len(),
-            db_path: CSlice::from_str(&config.paths.database_path),
-        };
-
-        let return_code = unsafe { (upac_lib.ostree_commit)(c_commit_request) };
-        if let Err(err) = UpacLib::check(return_code, "ostree commit") {
-            eprintln!("{} ostree snapshot failed: {err}", "⚠".yellow().bold());
-        } else {
-            println!("{} snapshot created", "✓".green().bold());
-        }
     }
 
     Ok(())

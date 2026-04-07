@@ -46,12 +46,6 @@ enum Command {
 
     List {
         #[arg(long)]
-        versions: bool,
-
-        #[arg(long)]
-        commit: bool,
-
-        #[arg(long)]
         full: bool,
     },
 
@@ -92,12 +86,8 @@ fn run() -> Result<()> {
         Command::Remove { name } => {
             commands::remove::run(config, name)?;
         }
-        Command::List {
-            versions,
-            commit,
-            full,
-        } => {
-            commands::list::run(config, versions, commit, full)?;
+        Command::List { full } => {
+            commands::list::run(config, full)?;
         }
         Command::Commit => {
             commands::commit::run(config)?;
