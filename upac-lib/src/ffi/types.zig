@@ -154,6 +154,12 @@ pub const ErrorCode = enum(i32) {
 
     install_already_installed = 30,
     install_failed = 31,
+    install_package_path_not_found = 32,
+    install_repo_path_not_found = 33,
+    install_checksum_failed = 34,
+    install_repo_write_failed = 35,
+    install_mtree_insert_failed = 36,
+    install_file_already_exists = 37,
 
     uninstall_not_found = 40,
     uninstall_failed = 41,
@@ -186,6 +192,7 @@ pub fn fromError(err: anyerror) ErrorCode {
         error.ParseError => .db_parse_error,
 
         // Init Sequence
+        error.RootNotFound => .file_not_found,
         error.AlreadyInitialized => .already_initialized,
         error.CreateDirFailed => .create_dir_failed,
         error.OstreeInitFailed => .ostree_init_failed,
@@ -193,8 +200,15 @@ pub fn fromError(err: anyerror) ErrorCode {
         // Package Management (Install/Uninstall)
         error.AlreadyInstalled => .install_already_installed,
         error.InstallFailed, error.MaxRetriesExceeded => .install_failed,
+        error.PackagePathNotFound => .install_package_path_not_found,
+        error.RepoPathNotFound => .install_repo_path_not_found,
+        error.ChecksumFailed => .install_checksum_failed,
+        error.RepoWriteFailed => .install_repo_write_failed,
+        error.MtreeInsertFailed => .install_mtree_insert_failed,
+        error.FileAlreadyExists => .install_file_already_exists,
         error.PackageNotFound => .uninstall_not_found,
         error.UninstallFailed => .uninstall_failed,
+        error.MissingRepository => .ostree_repo_open,
 
         // OSTree Operations
         error.RepoOpenFailed => .ostree_repo_open,

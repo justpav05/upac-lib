@@ -26,9 +26,11 @@ pub const InitError = error{
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn initSystem(system_paths: SystemPaths, repo_mode: RepoMode, allocator: std.mem.Allocator) !void {
     try checkExists(system_paths.root_path);
-    try checkExists(system_paths.root_path);
 
-    std.fs.makeDirAbsolute(system_paths.repo_path) catch return InitError.CreateDirFailed;
+    std.fs.makeDirAbsolute(system_paths.repo_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return InitError.CreateDirFailed,
+    };
 
     try initOstreeRepo(system_paths.repo_path, repo_mode, allocator);
 }
@@ -36,10 +38,9 @@ pub fn initSystem(system_paths: SystemPaths, repo_mode: RepoMode, allocator: std
 // ── Helpers funchtions ────────────────────────────────────────────────────────
 fn checkExists(path: []const u8) !void {
     std.fs.accessAbsolute(path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return error.FileNotFound,
+        error.FileNotFound => return InitError.RootNotFound,
         else => return err,
     };
-    return InitError.RootNotFound;
 }
 
 fn initOstreeRepo(repo_path: []const u8, repo_mode: RepoMode, allocator: std.mem.Allocator) !void {

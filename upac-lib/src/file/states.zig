@@ -43,6 +43,8 @@ fn stateChecksum(machine: *FileFSM) !void {
 fn stateWriteObject(machine: *FileFSM) !void {
     try machine.enter(.write_object);
 
+    std.debug.print("[upac] write_object: {s}\n", .{machine.data.relative_path});
+
     var gerror: ?*c_libs.GError = null;
 
     const gfile = c_libs.g_file_new_for_path(machine.data.temp_path.ptr);
@@ -79,16 +81,17 @@ fn stateWriteObject(machine: *FileFSM) !void {
 
     var object_exists: c_libs.gboolean = 0;
     _ = c_libs.ostree_repo_has_object(machine.data.repo, c_libs.OSTREE_OBJECT_TYPE_FILE, expected_c.ptr, &object_exists, null, null);
-    if (object_exists != 0) return FileFSMError.FileAlreadyExists;
 
-    var written_file_checksum: ?[*]c_libs.guchar = null;
-    if (c_libs.ostree_repo_write_content(machine.data.repo, expected_c.ptr, file_content_stream, file_content_length, &written_file_checksum, null, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        if (machine.exhausted()) return FileFSMError.RepoWriteFailed;
-        machine.retries += 1;
-        return stateWriteObject(machine);
+    if (object_exists == 0) {
+        var written_file_checksum: ?[*]c_libs.guchar = null;
+        if (c_libs.ostree_repo_write_content(machine.data.repo, expected_c.ptr, file_content_stream, file_content_length, &written_file_checksum, null, &gerror) == 0) {
+            if (gerror) |err| c_libs.g_error_free(err);
+            if (machine.exhausted()) return FileFSMError.RepoWriteFailed;
+            machine.retries += 1;
+            return stateWriteObject(machine);
+        }
+        if (written_file_checksum) |file_checksum| c_libs.g_free(@ptrCast(file_checksum));
     }
-    if (written_file_checksum) |file_checksum| c_libs.g_free(@ptrCast(file_checksum));
 
     machine.resetRetries();
     return stateInsertMtree(machine);

@@ -206,6 +206,12 @@ impl UpacLib {
 
             30 => "package already installed",
             31 => "install failed",
+            32 => "install: package temp path not found",
+            33 => "install: repository path not found",
+            34 => "install: checksum calculation failed",
+            35 => "install: failed to write object to ostree repo",
+            36 => "install: failed to insert file into mutable tree",
+            37 => "install: file object already exists in repo",
 
             40 => "package not found for uninstall",
             41 => "uninstall failed",

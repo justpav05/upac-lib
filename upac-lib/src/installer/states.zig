@@ -61,6 +61,13 @@ fn stateOpenRepo(machine: *InstallerMachine) anyerror!void {
 
     machine.repo = repo;
 
+    var transaction_gerror: ?*c_libs.GError = null;
+    if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &transaction_gerror) == 0) {
+        if (transaction_gerror) |err| c_libs.g_error_free(err);
+        stateFailed(machine);
+        return InstallerError.RepoOpenFailed;
+    }
+
     const branch_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch}) catch |err| {
         stateFailed(machine);
         return err;
@@ -79,13 +86,16 @@ fn stateOpenRepo(machine: *InstallerMachine) anyerror!void {
         if (c_libs.ostree_repo_read_commit(repo, checksum, &mtree_root, null, null, &gerror) != 0) {
             defer if (mtree_root) |root| c_libs.g_object_unref(root);
             _ = c_libs.ostree_repo_write_directory_to_mtree(repo, mtree_root, mtree, null, null, &gerror);
+            // std.debug.print("{any}", .{gerror}); - Temporary debugging information
             if (gerror) |err| c_libs.g_error_free(err);
         } else {
+            // std.debug.print("{any}", .{gerror}); - Temporary debugging information
             if (gerror) |err| c_libs.g_error_free(err);
         }
     }
 
     machine.mtree = mtree;
+
     machine.resetRetries();
     return stateCheckInstalled(machine);
 }
@@ -271,16 +281,6 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
     const body_c = try machine.allocator.dupeZ(u8, body_buf.items);
     defer machine.allocator.free(body_c);
 
-    if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        if (machine.exhausted()) {
-            stateFailed(machine);
-            return InstallerError.MaxRetriesExceeded;
-        }
-        machine.retries += 1;
-        return stateCommit(machine);
-    }
-
     var mtree_root: ?*c_libs.GFile = null;
     defer if (mtree_root) |root| c_libs.g_object_unref(root);
 
@@ -383,8 +383,7 @@ fn processDirectory(machine: *InstallerMachine, dir: std.fs.Dir, dir_path: []con
                 const entry_path_z = try machine.allocator.dupeZ(u8, entry_path);
                 defer machine.allocator.free(entry_path_z);
 
-                var relative = entry_path[machine.data.package_temp_path.len..];
-                if (relative.len > 0 and relative[0] == '/') relative = relative[1..];
+                const relative = entry_path[machine.data.package_temp_path.len..];
 
                 const checksum = try FileFSM.run(.{ .temp_path = entry_path_z, .relative_path = relative, .repo = machine.repo.?, .mtree = machine.mtree.? }, machine.data.max_retries, machine.allocator);
                 machine.allocator.free(checksum);
@@ -424,9 +423,7 @@ fn collectFileChecksums(machine: *InstallerMachine, dir_path: []const u8, prefix
                 }
                 defer c_libs.g_free(@ptrCast(raw_checksum));
 
-                var relative = entry_path[prefix.len..];
-                if (relative.len > 0 and relative[0] == '/') relative = relative[1..];
-
+                const relative = entry_path[prefix.len..];
                 try file_map.put(
                     try machine.allocator.dupe(u8, relative),
                     try machine.allocator.dupe(u8, std.mem.span(raw_checksum.?)),
