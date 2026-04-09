@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::ffi::{CRepoMode, CSlice, CSystemPaths, UpacLib};
+use crate::ffi::{CInitRequest, CRepoMode, CSlice, CSystemPaths, UpacLib};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -77,8 +77,15 @@ fn state_initializing(init_machine: &mut InitMachine) -> Result<()> {
         root_path: CSlice::from_str(&init_machine.config.paths.root_path),
     };
 
-    let return_code = unsafe { (upac_lib.init)(c_system_paths, init_machine.c_repo_mode) };
+    let c_branch = CSlice::from_str(&init_machine.config.ostree.branch);
 
+    let c_init_request = CInitRequest {
+        system_paths: c_system_paths,
+        repo_mode: init_machine.c_repo_mode,
+        branch: c_branch,
+    };
+
+    let return_code = unsafe { (upac_lib.init)(c_init_request) };
     progress_bar.finish_and_clear();
     UpacLib::check(return_code, "init")?;
 

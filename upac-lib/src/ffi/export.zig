@@ -20,6 +20,7 @@ const CDiffEntry = types.CDiffEntry;
 const CCommitArray = types.CCommitArray;
 const CCommitEntry = types.CCommitEntry;
 const CSystemPaths = types.CSystemPaths;
+const CInitRequest = types.CInitRequest;
 const CRepoMode = types.CRepoMode;
 
 const ErrorCode = types.ErrorCode;
@@ -162,19 +163,21 @@ pub export fn upac_commits_free(c_commits: *CCommitArray) callconv(.C) void {
 }
 
 // Initializes system paths and the OSTree repository in the selected mode (archive, bare, etc.)
-pub export fn upac_init(c_system_paths: CSystemPaths, c_repo_mode: CRepoMode) callconv(.C) i32 {
+pub export fn upac_init(c_init_request: CInitRequest) callconv(.C) i32 {
     const system_paths = init.SystemPaths{
-        .repo_path = c_system_paths.repo_path.toSlice(),
-        .root_path = c_system_paths.root_path.toSlice(),
+        .repo_path = c_init_request.system_paths.repo_path.toSlice(),
+        .root_path = c_init_request.system_paths.root_path.toSlice(),
     };
 
-    const repo_mode: init.RepoMode = switch (c_repo_mode) {
+    const repo_mode: init.RepoMode = switch (c_init_request.repo_mode) {
         .archive => .archive,
         .bare => .bare,
         .bare_user => .bare_user,
     };
 
-    init.initSystem(system_paths, repo_mode, types.allocator()) catch |err|
+    const branch = c_init_request.branch.toSlice();
+
+    init.initSystem(system_paths, repo_mode, branch, types.allocator()) catch |err|
         return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);

@@ -122,10 +122,19 @@ pub const CRollbackRequest = extern struct {
     commit_hash: CSlice,
 };
 
+
+
 // A set of paths required to initialize the system
 pub const CSystemPaths = extern struct {
     repo_path: CSlice,
     root_path: CSlice,
+};
+
+// Request structure for initializing the system with branch specification
+pub const CInitRequest = extern struct {
+    system_paths: CSystemPaths,
+    repo_mode: CRepoMode,
+    branch: CSlice,
 };
 
 // Defines the operating mode of the OSTree repository

@@ -122,6 +122,13 @@ pub struct CSystemPaths {
     pub root_path: CSlice,
 }
 
+#[repr(C)]
+pub struct CInitRequest {
+    pub system_paths: CSystemPaths,
+    pub repo_mode: CRepoMode,
+    pub branch: CSlice,
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy)]
 pub enum CRepoMode {
@@ -144,7 +151,7 @@ pub struct UpacLib {
     pub list_commits: unsafe extern "C" fn(CSlice, CSlice, *mut CCommitArray) -> i32,
     pub commits_free: unsafe extern "C" fn(*mut CCommitArray),
 
-    pub init: unsafe extern "C" fn(CSystemPaths, CRepoMode) -> i32,
+    pub init: unsafe extern "C" fn(CInitRequest) -> i32,
 
     pub free: unsafe extern "C" fn(*mut u8, usize),
     pub deinit: unsafe extern "C" fn(),
