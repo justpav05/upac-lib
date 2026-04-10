@@ -5,7 +5,8 @@ pkgrel=1
 pkgdesc="A modular Linux package manager with OStree integration"
 arch=('x86_64')
 url="https://github.com/justpav05/upac"
-license=('TBD')
+license=('GNUv3')
+backup=('etc/upac/config.toml')
 depends=(
     'ostree'
     'glib2'
@@ -13,29 +14,19 @@ depends=(
 )
 options=('!strip')
 
-# Не скачиваем исходники — используем уже собранные файлы из pkg/arch/root/
 source=()
 sha256sums=()
 
 package() {
-    # Бинарь
-    install -Dm755 "${srcdir}/../root/usr/bin/upac" \
-        "${pkgdir}/usr/bin/upac"
+    # Bin
+    install -Dm755 "${srcdir}/../root/usr/bin/upac" "${pkgdir}/usr/bin/upac"
 
-    # Библиотеки
-    install -Dm755 "${srcdir}/../root/usr/lib/libupac.so" \
-        "${pkgdir}/usr/lib/libupac.so"
+    # Libs
+    install -Dm755 "${srcdir}/../root/usr/lib/libupac.so" "${pkgdir}/usr/lib/libupac.so"
+    install -Dm755 "${srcdir}/../root/usr/lib/libupac-arch.so" "${pkgdir}/usr/lib/libupac-arch.so"
+    install -Dm755 "${srcdir}/../root/usr/lib/libupac-rpm.so" "${pkgdir}/usr/lib/libupac-rpm.so"
+    install -Dm755 "${srcdir}/../root/usr/lib/libupac-deb.so" "${pkgdir}/usr/lib/libupac-deb.so"
 
-    install -Dm755 "${srcdir}/../root/usr/lib/libupac-backend-arch.so" \
-        "${pkgdir}/usr/lib/libupac-backend-arch.so"
-
-    install -Dm755 "${srcdir}/../root/usr/lib/libupac-backend-rpm.so" \
-        "${pkgdir}/usr/lib/libupac-backend-rpm.so"
-
-    install -Dm755 "${srcdir}/../root/usr/lib/libupac-backend-deb.so" \
-        "${pkgdir}/usr/lib/libupac-backend-deb.so"
-
-    # Пример конфига
-    install -Dm644 "${srcdir}/../root/etc/upac/config.toml.example" \
-        "${pkgdir}/etc/upac/config.toml.example"
+    # Config
+    install -Dm644 "${srcdir}/../root/etc/upac/config.toml"  "${pkgdir}/etc/upac/config.toml"
 }
