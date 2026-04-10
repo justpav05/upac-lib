@@ -93,7 +93,7 @@ pkg-rpm: build
 	@echo "--- Package built: $(PKG_DIR)/rpm/RPMS/x86_64/upac-$(VERSION)-1.x86_64.rpm ---"
 
 # ── Очистка ───────────────────────────────────────────────────────────────────
-clean:
+clean-build:
 	@echo "--- Cleaning build artifacts ---"
 	@echo "--- Cleaning upac-lib build artifacts ---"
 	rm -rf $(ROOT_DIR)/upac-lib/zig-out
@@ -107,5 +107,11 @@ clean:
 	@echo "--- Cleaning upac-deb build artifacts ---"
 	rm -rf $(ROOT_DIR)/upac-deb/.zig-cache
 	rm -rf $(ROOT_DIR)/upac-deb/zig-out
+	@echo "--- Cleaning global .zig-cache ---"
+	rm -rf $(ROOT_DIR)/.zig-cache
 	@echo "--- Cleaning upac-cli build artifacts ---"
 	cd $(ROOT_DIR)/upac-cli && cargo clean
+
+clean-pkg:
+	@echo "--- Cleaning package building artifacts ---"
+	rm -rf $(PKG_DIR)
