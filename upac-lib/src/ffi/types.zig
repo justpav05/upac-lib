@@ -178,6 +178,8 @@ pub const ErrorCode = enum(i32) {
     ostree_diff = 52,
     ostree_rollback = 53,
     ostree_no_parent = 54,
+    ostree_staging_failed = 55,
+    ostree_swap_failed = 56,
 
     already_initialized = 60,
     create_dir_failed = 61,
@@ -225,6 +227,8 @@ pub fn fromError(err: anyerror) ErrorCode {
         error.DiffFailed => .ostree_diff,
         error.RollbackFailed => .ostree_rollback,
         error.NoPreviousCommit => .ostree_no_parent,
+        error.StagingFailed => .ostree_staging_failed,
+        error.SwapFailed => .ostree_swap_failed,
 
         // Fallback for unmapped errors
         else => .unexpected,

@@ -11,6 +11,9 @@ pub const RollbackError = error{
     CommitNotFound,
     RollbackFailed,
     DiffFailed,
+    StagingFailed,
+    SwapFailed,
+    CleanupFailed,
 };
 
 // A structure for storing information about a specific "restore point"
@@ -28,7 +31,8 @@ pub const DiffEntry = struct {
     kind: DiffKind,
 };
 
-// The primary function of the coordinator is to switch the system to a different state
+// ── Rollback ────────────────────────────────────────────────────────────────────
+// The primary function of the coordinator — performs an atomic rollback to a target commit.
 pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const u8, root_path: []const u8, allocator: std.mem.Allocator) !void {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
@@ -52,35 +56,20 @@ pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const 
         return RollbackError.RepoOpenFailed;
     }
 
-    var resolved_checksum: ?[*:0]u8 = null;
-    defer if (resolved_checksum) |cs| c_libs.g_free(@ptrCast(cs));
+    const resolved_checksum = try resolveCommit(repo.?, commit_hash_c);
+    defer c_libs.g_free(@ptrCast(resolved_checksum));
 
-    if (c_libs.ostree_repo_resolve_rev(repo, commit_hash_c.ptr, 0, &resolved_checksum, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        return RollbackError.CommitNotFound;
-    }
+    const staging_path = try createStagingDir(root_path_c, allocator);
+    defer allocator.free(staging_path);
+    errdefer std.fs.deleteTreeAbsolute(staging_path) catch {};
 
-    if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        return RollbackError.RollbackFailed;
-    }
+    try checkoutToStaging(repo.?, resolved_checksum, staging_path);
 
-    c_libs.ostree_repo_transaction_set_ref(repo, null, branch_c.ptr, resolved_checksum);
+    try atomicSwap(root_path_c, staging_path);
 
-    if (c_libs.ostree_repo_commit_transaction(repo, null, null, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
-        return RollbackError.RollbackFailed;
-    }
+    try cleanupOldRoot(staging_path);
 
-    var checkout_options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
-    checkout_options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
-    checkout_options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
-
-    if (c_libs.ostree_repo_checkout_at(repo, &checkout_options, std.c.AT.FDCWD, root_path_c.ptr, resolved_checksum, null, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        return RollbackError.RollbackFailed;
-    }
+    try updateBranchRef(repo.?, branch_c, resolved_checksum);
 }
 
 // Allows retrieving the change history for a specific branch
@@ -150,6 +139,7 @@ pub fn listCommits(repo_path: []const u8, branch: []const u8, allocator: std.mem
     return entries.toOwnedSlice();
 }
 
+// ── Diff ────────────────────────────────────────────────────────────────────────
 // Compares two repository states
 pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, allocator: std.mem.Allocator) ![]DiffEntry {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
@@ -233,6 +223,90 @@ pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, all
     }
 
     return diff_entries.toOwnedSlice();
+}
+
+// ── Helpers functions ───────────────────────────────────────────────────────
+// Resolves a commit hash string to a full checksum via ostree_repo_resolve_rev
+fn resolveCommit(repo: *c_libs.OstreeRepo, commit_hash_c: [:0]const u8) ![*:0]u8 {
+    var gerror: ?*c_libs.GError = null;
+    var resolved: ?[*:0]u8 = null;
+
+    if (c_libs.ostree_repo_resolve_rev(repo, commit_hash_c.ptr, 0, &resolved, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        return RollbackError.CommitNotFound;
+    }
+
+    return resolved orelse RollbackError.CommitNotFound;
+}
+
+// Creates a temporary directory adjacent to root_path (e.g. /usr → /usr-rollback-<timestamp>)
+fn createStagingDir(root_path_c: [:0]const u8, allocator: std.mem.Allocator) ![:0]const u8 {
+    const timestamp = std.time.milliTimestamp();
+    const staging_path = try std.fmt.allocPrintZ(allocator, "{s}-rollback-{d}", .{ root_path_c, timestamp });
+    errdefer allocator.free(staging_path);
+
+    std.fs.makeDirAbsolute(staging_path) catch {
+        return RollbackError.StagingFailed;
+    };
+
+    return staging_path;
+}
+
+// Performs a clean OSTree checkout of the resolved commit into the staging directory
+fn checkoutToStaging(repo: *c_libs.OstreeRepo, resolved_checksum: [*:0]const u8, staging_path: [:0]const u8) !void {
+    var gerror: ?*c_libs.GError = null;
+
+    var checkout_options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
+    checkout_options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
+    checkout_options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_NONE;
+
+    if (c_libs.ostree_repo_checkout_at(repo, &checkout_options, std.c.AT.FDCWD, staging_path.ptr, resolved_checksum, null, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        return RollbackError.StagingFailed;
+    }
+}
+
+// Atomically exchanges two directory paths using the Linux renameat2 syscall with RENAME_EXCHANGE.
+fn atomicSwap(root_path_c: [:0]const u8, staging_path: [:0]const u8) !void {
+    const RENAME_EXCHANGE = 2;
+    const AT_FDCWD = -100;
+
+    const result = std.os.linux.syscall5(
+        .renameat2,
+        @bitCast(@as(isize, AT_FDCWD)),
+        @intFromPtr(staging_path.ptr),
+        @bitCast(@as(isize, AT_FDCWD)),
+        @intFromPtr(root_path_c.ptr),
+        RENAME_EXCHANGE,
+    );
+
+    const errno_value = std.os.linux.E.init(result);
+    if (errno_value != .SUCCESS) {
+        return RollbackError.SwapFailed;
+    }
+}
+
+// Removes the old root tree which now resides at the staging path after the swap.
+fn cleanupOldRoot(staging_path: [:0]const u8) !void {
+    std.fs.deleteTreeAbsolute(staging_path) catch |err| return err;
+}
+
+// Moves the OSTree branch ref to point at the target commit via a transaction
+fn updateBranchRef(repo: *c_libs.OstreeRepo, branch_c: [:0]const u8, resolved_checksum: [*:0]const u8) !void {
+    var gerror: ?*c_libs.GError = null;
+
+    if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        return RollbackError.RollbackFailed;
+    }
+
+    c_libs.ostree_repo_transaction_set_ref(repo, null, branch_c.ptr, resolved_checksum);
+
+    if (c_libs.ostree_repo_commit_transaction(repo, null, null, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
+        return RollbackError.RollbackFailed;
+    }
 }
 
 // A low-level function for "deploying" a commit to a live system
