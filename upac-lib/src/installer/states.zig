@@ -161,6 +161,14 @@ fn stateProcessFiles(machine: *InstallerMachine) anyerror!void {
 fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.write_database);
 
+    const database_dir_path = try std.fmt.allocPrint(machine.allocator, "{s}/usr/share/upac/db", .{machine.data.package_temp_path});
+    defer machine.allocator.free(database_dir_path);
+
+    std.fs.cwd().makePath(database_dir_path) catch |err| {
+        stateFailed(machine);
+        return err;
+    };
+
     var file_map = data.FileMap.init(machine.allocator);
     defer data.freeFileMap(&file_map, machine.allocator);
 
@@ -169,7 +177,7 @@ fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
         return err;
     };
 
-    data.writePackage(machine.data.package_temp_path, machine.data.package_checksum, machine.data.package_meta, file_map, machine.allocator) catch |err| {
+    data.writePackage(database_dir_path, machine.data.package_checksum, machine.data.package_meta, file_map, machine.allocator) catch |err| {
         if (machine.exhausted()) {
             stateFailed(machine);
             return err;
@@ -191,15 +199,7 @@ fn stateProcessDbFiles(machine: *InstallerMachine) anyerror!void {
 
     // Let OSTree import the whole extracted tree (including generated .meta/.files)
     // so directory metadata and dirtree objects are always valid for write_mtree().
-    if (c_libs.ostree_repo_write_dfd_to_mtree(
-        machine.repo.?,
-        std.c.AT.FDCWD,
-        temp_path_c.ptr,
-        machine.mtree.?,
-        null,
-        null,
-        &gerror,
-    ) == 0) {
+    if (c_libs.ostree_repo_write_dfd_to_mtree(machine.repo.?, std.c.AT.FDCWD, temp_path_c.ptr, machine.mtree.?, null, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         stateFailed(machine);
         return InstallerError.RepoOpenFailed;

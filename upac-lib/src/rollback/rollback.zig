@@ -36,10 +36,13 @@ pub const DiffEntry = struct {
 pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const u8, root_path: []const u8, allocator: std.mem.Allocator) !void {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
+
     const branch_c = try std.fmt.allocPrintZ(allocator, "{s}", .{branch});
     defer allocator.free(branch_c);
+
     const commit_hash_c = try std.fmt.allocPrintZ(allocator, "{s}", .{commit_hash});
     defer allocator.free(commit_hash_c);
+
     const root_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{root_path});
     defer allocator.free(root_path_c);
 
@@ -59,13 +62,19 @@ pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const 
     const resolved_checksum = try resolveCommit(repo.?, commit_hash_c);
     defer c_libs.g_free(@ptrCast(resolved_checksum));
 
-    const staging_path = try createStagingDir(root_path_c, allocator);
+    const staging_path = try resolveStagingDir(root_path_c, allocator);
     defer allocator.free(staging_path);
     errdefer std.fs.deleteTreeAbsolute(staging_path) catch {};
 
+    const staging_root_path = try resolveStagingRootDir(root_path_c, allocator);
+    defer allocator.free(staging_root_path);
+
+    const staging_usr_path = try resolveStagingUsrDir(staging_path, allocator);
+    defer allocator.free(staging_usr_path);
+
     try checkoutToStaging(repo.?, resolved_checksum, staging_path);
 
-    try atomicSwap(root_path_c, staging_path);
+    try atomicSwap(staging_root_path, staging_usr_path);
 
     try cleanupOldRoot(staging_path);
 
@@ -239,17 +248,35 @@ fn resolveCommit(repo: *c_libs.OstreeRepo, commit_hash_c: [:0]const u8) ![*:0]u8
     return resolved orelse RollbackError.CommitNotFound;
 }
 
-// Creates a temporary directory adjacent to root_path (e.g. /usr → /usr-rollback-<timestamp>)
-fn createStagingDir(root_path_c: [:0]const u8, allocator: std.mem.Allocator) ![:0]const u8 {
+// Resolve a temporary directory adjacent to root_path (e.g. /usr → /usr-rollback-<timestamp>)
+fn resolveStagingDir(root_path_c: [:0]const u8, allocator: std.mem.Allocator) ![:0]const u8 {
     const timestamp = std.time.milliTimestamp();
-    const staging_path = try std.fmt.allocPrintZ(allocator, "{s}-rollback-{d}", .{ root_path_c, timestamp });
-    errdefer allocator.free(staging_path);
+    const staging_path_c = if (root_path_c[root_path_c.len - 1] == '/')
+        try std.fmt.allocPrintZ(allocator, "{s}usr-rollback-{d}", .{ root_path_c[0 .. root_path_c.len - 1], timestamp })
+    else
+        try std.fmt.allocPrintZ(allocator, "{s}/usr-rollback-{d}", .{ root_path_c, timestamp });
+    errdefer allocator.free(staging_path_c);
 
-    std.fs.makeDirAbsolute(staging_path) catch {
-        return RollbackError.StagingFailed;
-    };
+    return staging_path_c;
+}
 
-    return staging_path;
+// Resolve a root dir (e.g. /usr → /usr-rollback-<timestamp>)
+fn resolveStagingRootDir(root_path_c: [:0]const u8, allocator: std.mem.Allocator) ![:0]const u8 {
+    const staging_root_path_c = if (root_path_c[root_path_c.len - 1] == '/')
+        try std.fmt.allocPrintZ(allocator, "{s}usr", .{root_path_c[0 .. root_path_c.len - 1]})
+    else
+        try std.fmt.allocPrintZ(allocator, "{s}/usr", .{root_path_c});
+    errdefer allocator.free(staging_root_path_c);
+
+    return staging_root_path_c;
+}
+
+// Resolve a temp dir with usr dir (e.g. /usr → /usr-rollback-<timestamp>)
+fn resolveStagingUsrDir(staging_path: []const u8, allocator: std.mem.Allocator) ![:0]const u8 {
+    const staging_usr_path_c = try std.fmt.allocPrintZ(allocator, "{s}/usr", .{staging_path});
+    errdefer allocator.free(staging_usr_path_c);
+
+    return staging_usr_path_c;
 }
 
 // Performs a clean OSTree checkout of the resolved commit into the staging directory
@@ -271,19 +298,10 @@ fn atomicSwap(root_path_c: [:0]const u8, staging_path: [:0]const u8) !void {
     const RENAME_EXCHANGE = 2;
     const AT_FDCWD = -100;
 
-    const result = std.os.linux.syscall5(
-        .renameat2,
-        @bitCast(@as(isize, AT_FDCWD)),
-        @intFromPtr(staging_path.ptr),
-        @bitCast(@as(isize, AT_FDCWD)),
-        @intFromPtr(root_path_c.ptr),
-        RENAME_EXCHANGE,
-    );
+    const result = std.os.linux.syscall5(.renameat2, @bitCast(@as(isize, AT_FDCWD)), @intFromPtr(staging_path.ptr), @bitCast(@as(isize, AT_FDCWD)), @intFromPtr(root_path_c.ptr), RENAME_EXCHANGE);
 
     const errno_value = std.os.linux.E.init(result);
-    if (errno_value != .SUCCESS) {
-        return RollbackError.SwapFailed;
-    }
+    if (errno_value != .SUCCESS) return RollbackError.SwapFailed;
 }
 
 // Removes the old root tree which now resides at the staging path after the swap.
