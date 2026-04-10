@@ -228,6 +228,8 @@ impl UpacLib {
             52 => "ostree: diff failed",
             53 => "ostree: rollback failed",
             54 => "ostree: no previous commit",
+            55 => "ostree: staging checkout failed",
+            56 => "ostree: atomic swap failed (renameat2)",
 
             60 => "already initialized",
             61 => "failed to create directory",

@@ -14,5 +14,7 @@ pub fn build(b: *std.Build) void {
     });
 
     shared_lib.linkLibC();
+    shared_lib.linkSystemLibrary("archive");
+
     b.installArtifact(shared_lib);
 }
