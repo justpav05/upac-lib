@@ -2,7 +2,7 @@ Name:           upac
 Version:        %{version}
 Release:        1%{?dist}
 Summary:        A modular Linux package manager
-License:        TBD
+License:        GPL-3.0
 URL:            https://github.com/justpav05/upac
 
 BuildArch:      x86_64
@@ -17,19 +17,16 @@ mkdir -p %{buildroot}/etc/upac
 
 cp %{_topdir}/root/usr/bin/upac         %{buildroot}/usr/bin/
 cp %{_topdir}/root/usr/lib/libupac.so   %{buildroot}/usr/lib/
-cp %{_topdir}/root/usr/lib/libupac-backend-arch.so \
-                                         %{buildroot}/usr/lib/
-cp %{_topdir}/root/usr/lib/libupac-backend-rpm.so \
-                                         %{buildroot}/usr/lib/
-cp %{_topdir}/root/etc/upac/config.toml.example \
-                                         %{buildroot}/etc/upac/
+cp %{_topdir}/root/usr/lib/libupac-arch.so %{buildroot}/usr/lib/
+cp %{_topdir}/root/usr/lib/libupac-rpm.so %{buildroot}/usr/lib/
+cp %{_topdir}/root/etc/upac/config.toml %{buildroot}/etc/upac/
 
 %files
 /usr/bin/upac
 /usr/lib/libupac.so
-/usr/lib/libupac-backend-arch.so
-/usr/lib/libupac-backend-rpm.so
-%config(noreplace) /etc/upac/config.toml.example
+/usr/lib/libupac-arch.so
+/usr/lib/libupac-rpm.so
+%config(noreplace) /etc/upac/config.toml
 
 %post
 ldconfig
