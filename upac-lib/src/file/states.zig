@@ -86,7 +86,11 @@ fn stateWriteObject(machine: *FileFSM) !void {
         null,
         null,
     );
-    if (object_exists != 0) return FileFSMError.FileAlreadyExists;
+
+    if (object_exists != 0) {
+        machine.resetRetries();
+        return stateInsertMtree(machine);
+    }
 
     var written_checksum_bin: ?[*]c_libs.guchar = null;
     if (c_libs.ostree_repo_write_content(machine.data.repo, null, file_content_stream, file_content_length, &written_checksum_bin, null, &gerror) == 0) {
@@ -166,5 +170,17 @@ fn insertIntoMtree(root: *c_libs.OstreeMutableTree, relative_path: []const u8, c
     const checksum_c = try allocator.dupeZ(u8, checksum);
     defer allocator.free(checksum_c);
 
-    _ = c_libs.g_hash_table_insert(c_libs.ostree_mutable_tree_get_files(current), @ptrCast(c_libs.g_strdup(filename_c.ptr)), @ptrCast(c_libs.g_strdup(checksum_c.ptr)));
+    if (c_libs.ostree_mutable_tree_replace_file(current, filename_c.ptr, checksum_c.ptr, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        return FileFSMError.MtreeInsertFailed;
+    }
+
+    var lookup_checksum: ?[*:0]u8 = null;
+    defer if (lookup_checksum) |cs| c_libs.g_free(@ptrCast(cs));
+    var lookup_subdir: ?*c_libs.OstreeMutableTree = null;
+    if (c_libs.ostree_mutable_tree_lookup(current, filename_c.ptr, &lookup_checksum, &lookup_subdir, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        return FileFSMError.MtreeInsertFailed;
+    }
+    if (lookup_checksum == null) return FileFSMError.MtreeInsertFailed;
 }

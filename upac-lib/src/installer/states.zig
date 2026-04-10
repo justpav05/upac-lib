@@ -78,22 +78,6 @@ fn stateOpenRepo(machine: *InstallerMachine) anyerror!void {
     _ = c_libs.ostree_repo_resolve_rev(repo, branch_c.ptr, 1, &parent_checksum, null);
 
     const mtree = c_libs.ostree_mutable_tree_new();
-
-    if (parent_checksum) |checksum| {
-        defer c_libs.g_free(@ptrCast(checksum));
-
-        var mtree_root: ?*c_libs.GFile = null;
-        if (c_libs.ostree_repo_read_commit(repo, checksum, &mtree_root, null, null, &gerror) != 0) {
-            defer if (mtree_root) |root| c_libs.g_object_unref(root);
-            _ = c_libs.ostree_repo_write_directory_to_mtree(repo, mtree_root, mtree, null, null, &gerror);
-            // std.debug.print("{any}", .{gerror}); - Temporary debugging information
-            if (gerror) |err| c_libs.g_error_free(err);
-        } else {
-            // std.debug.print("{any}", .{gerror}); - Temporary debugging information
-            if (gerror) |err| c_libs.g_error_free(err);
-        }
-    }
-
     machine.mtree = mtree;
 
     machine.resetRetries();
@@ -201,30 +185,25 @@ fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
 fn stateProcessDbFiles(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.process_db_files);
 
-    // .meta
-    const meta_filename = try std.fmt.allocPrint(machine.allocator, "{s}.meta", .{machine.data.package_checksum});
-    defer machine.allocator.free(meta_filename);
+    var gerror: ?*c_libs.GError = null;
+    const temp_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.package_temp_path});
+    defer machine.allocator.free(temp_path_c);
 
-    const meta_full_path = try std.fmt.allocPrintZ(machine.allocator, "{s}/{s}", .{ machine.data.package_temp_path, meta_filename });
-    defer machine.allocator.free(meta_full_path);
-
-    const meta_checksum = FileFSM.run(.{ .temp_path = meta_full_path, .relative_path = meta_filename, .repo = machine.repo.?, .mtree = machine.mtree.? }, machine.data.max_retries, machine.allocator) catch |err| {
+    // Let OSTree import the whole extracted tree (including generated .meta/.files)
+    // so directory metadata and dirtree objects are always valid for write_mtree().
+    if (c_libs.ostree_repo_write_dfd_to_mtree(
+        machine.repo.?,
+        std.c.AT.FDCWD,
+        temp_path_c.ptr,
+        machine.mtree.?,
+        null,
+        null,
+        &gerror,
+    ) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
         stateFailed(machine);
-        return err;
-    };
-    machine.allocator.free(meta_checksum);
-
-    const files_filename = try std.fmt.allocPrint(machine.allocator, "{s}.files", .{machine.data.package_checksum});
-    defer machine.allocator.free(files_filename);
-
-    const files_full_path = try std.fmt.allocPrintZ(machine.allocator, "{s}/{s}", .{ machine.data.package_temp_path, files_filename });
-    defer machine.allocator.free(files_full_path);
-
-    const files_checksum = FileFSM.run(.{ .temp_path = files_full_path, .relative_path = files_filename, .repo = machine.repo.?, .mtree = machine.mtree.? }, machine.data.max_retries, machine.allocator) catch |err| {
-        stateFailed(machine);
-        return err;
-    };
-    machine.allocator.free(files_checksum);
+        return InstallerError.RepoOpenFailed;
+    }
 
     machine.resetRetries();
     return stateCommit(machine);
@@ -239,11 +218,7 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
 
     var gerror: ?*c_libs.GError = null;
 
-    const branch_c = try std.fmt.allocPrintZ(
-        machine.allocator,
-        "{s}",
-        .{machine.data.branch},
-    );
+    const branch_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch});
     defer machine.allocator.free(branch_c);
 
     const root_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.root_path});
@@ -292,6 +267,12 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
             return InstallerError.MaxRetriesExceeded;
         }
         machine.retries += 1;
+        var reopen_gerror: ?*c_libs.GError = null;
+        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &reopen_gerror) == 0) {
+            if (reopen_gerror) |err| c_libs.g_error_free(err);
+            stateFailed(machine);
+            return InstallerError.MaxRetriesExceeded;
+        }
         return stateCommit(machine);
     }
 
@@ -309,6 +290,12 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
             return InstallerError.MaxRetriesExceeded;
         }
         machine.retries += 1;
+        var reopen_gerror: ?*c_libs.GError = null;
+        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &reopen_gerror) == 0) {
+            if (reopen_gerror) |err| c_libs.g_error_free(err);
+            stateFailed(machine);
+            return InstallerError.MaxRetriesExceeded;
+        }
         return stateCommit(machine);
     }
 
@@ -321,6 +308,12 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
             return InstallerError.MaxRetriesExceeded;
         }
         machine.retries += 1;
+        var reopen_gerror: ?*c_libs.GError = null;
+        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &reopen_gerror) == 0) {
+            if (reopen_gerror) |err| c_libs.g_error_free(err);
+            stateFailed(machine);
+            return InstallerError.MaxRetriesExceeded;
+        }
         return stateCommit(machine);
     }
 
@@ -350,19 +343,21 @@ fn stateDone(machine: *InstallerMachine) anyerror!void {
 // An automaton error state, signaling that a system rollback is required
 fn stateFailed(machine: *InstallerMachine) void {
     _ = machine.enter(.failed) catch {};
-    std.debug.print("✗ install failed '{s}', states: ", .{
-        machine.data.package_meta.name,
-    });
-    for (machine.stack.items) |state| {
-        std.debug.print("{s} ", .{@tagName(state)});
-    }
-    std.debug.print("\n", .{});
+    // std.debug.print("✗ install failed '{s}', states: ", .{
+    //     machine.data.package_meta.name,
+    // });
+    // for (machine.stack.items) |state| {
+    //     std.debug.print("{s} ", .{@tagName(state)});
+    // }
+    // std.debug.print("\n", .{}); - Debug information
 }
 
 // ── Helpers functions ───────────────────────────────────────────────────
 // Function for generating a list of files with their checksums
 fn processDirectory(machine: *InstallerMachine, dir: std.fs.Dir, dir_path: []const u8) !void {
     var dir_iter = dir.iterate();
+    var file_count: usize = 0;
+    var dir_count: usize = 0;
     while (try dir_iter.next()) |entry| {
         const entry_path = try std.fs.path.join(
             machine.allocator,
@@ -372,6 +367,7 @@ fn processDirectory(machine: *InstallerMachine, dir: std.fs.Dir, dir_path: []con
 
         switch (entry.kind) {
             .directory => {
+                dir_count += 1;
                 var sub_dir = try std.fs.openDirAbsolute(
                     entry_path,
                     .{ .iterate = true },
@@ -380,16 +376,45 @@ fn processDirectory(machine: *InstallerMachine, dir: std.fs.Dir, dir_path: []con
                 try processDirectory(machine, sub_dir, entry_path);
             },
             .file => {
+                file_count += 1;
                 const entry_path_z = try machine.allocator.dupeZ(u8, entry_path);
                 defer machine.allocator.free(entry_path_z);
 
                 const relative = entry_path[machine.data.package_temp_path.len..];
 
-                const checksum = try FileFSM.run(.{ .temp_path = entry_path_z, .relative_path = relative, .repo = machine.repo.?, .mtree = machine.mtree.? }, machine.data.max_retries, machine.allocator);
+                const checksum = FileFSM.run(.{ .temp_path = entry_path_z, .relative_path = relative, .repo = machine.repo.?, .mtree = machine.mtree.? }, machine.data.max_retries, machine.allocator) catch |err| return err;
                 machine.allocator.free(checksum);
             },
             else => {},
         }
+    }
+}
+
+fn debugMtreePath(root: *c_libs.OstreeMutableTree, relative_path: []const u8) void {
+    var gerror: ?*c_libs.GError = null;
+    var current = root;
+
+    var iter = std.mem.splitScalar(u8, relative_path, '/');
+    while (iter.next()) |part| {
+        if (part.len == 0) continue;
+        const part_c = std.fmt.allocPrintZ(std.heap.page_allocator, "{s}", .{part}) catch return;
+        defer std.heap.page_allocator.free(part_c);
+
+        var out_checksum: ?[*:0]u8 = null;
+        defer if (out_checksum) |cs| c_libs.g_free(@ptrCast(cs));
+        var out_subdir: ?*c_libs.OstreeMutableTree = null;
+
+        if (c_libs.ostree_mutable_tree_lookup(current, part_c.ptr, &out_checksum, &out_subdir, &gerror) == 0) {
+            if (gerror) |err| c_libs.g_error_free(err);
+            return;
+        }
+
+        if (out_subdir) |sub| {
+            current = sub;
+            continue;
+        }
+
+        return;
     }
 }
 

@@ -359,11 +359,11 @@ fn stateDone(machine: *UninstallerMachine) anyerror!void {
 // A state of unsuccessful package removal, signaling the system that a rollback is required to revert the changes
 fn stateFailed(machine: *UninstallerMachine) void {
     _ = machine.enter(.failed) catch {};
-    std.debug.print("uninstall failed '{s}', states: ", .{machine.data.package_name});
-    for (machine.stack.items) |state| {
-        std.debug.print("{s} ", .{@tagName(state)});
-    }
-    std.debug.print("\n", .{});
+    // std.debug.print("uninstall failed '{s}', states: ", .{machine.data.package_name});
+    // for (machine.stack.items) |state| {
+    //     std.debug.print("{s} ", .{@tagName(state)});
+    // }
+    // std.debug.print("\n", .{}); -- Debug information
 }
 
 // ── Helpers functions ─────────────────────────────────────────────────────────────────────
