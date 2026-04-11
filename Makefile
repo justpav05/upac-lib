@@ -14,6 +14,10 @@ LIBC ?= gnu
 RUSTFLAGS := -C prefer-dynamic=false
 CARGO_TARGET ?= $(ARCH)-unknown-linux-$(LIBC)
 
+ARCH_PKG_FLAGS	?= --nodeps --noconfirm -f
+RPM_PKG_FLAGS	?= -bb 	--define "_topdir $(PKG_DIR)/rpm" --define "_rpmdir $(PKG_DIR)/rpm/RPMS" --define "version $(VERSION)"
+DEB_PKG_FLAGS	?= --root-owner-group
+
 .PHONY: all build prepare build-lib build-backends build-cli build-removing pkg-arch pkg-rpm pkg-deb sync sync-build sync-pkg clean clean-build clean-pkg
 
 # ── Defining compilation flags ────────────────────────────────────────────────────────────────────
@@ -109,7 +113,7 @@ pkg-arch: build
 	@cp $(OUT_BUILD_DIR)/lib/libupac-deb.so $(PKG_DIR)/arch/root/usr/lib/
 
 	@echo "--- Building ARCH package v$(VERSION) ---"
-	@cd $(PKG_DIR)/arch && makepkg --nodeps --noconfirm -f
+	@cd $(PKG_DIR)/arch && makepkg $(ARCH_PKG_FLAGS)
 	@mv $(PKG_DIR)/arch/*.pkg.tar.zst $(PKG_DIR)/
 
 	@echo "--- Package built: $(PKG_DIR)/arch/$(PKG_NAME).pkg.tar.zst ---"
@@ -142,11 +146,7 @@ pkg-rpm: build
 	@cp $(OUT_BUILD_DIR)/lib/libupac*.so $(PKG_DIR)/rpm/root/usr/lib/
 
 	@echo "--- Building RPM package v$(VERSION) ---"
-	@rpmbuild -bb \
-		--define "_topdir $(PKG_DIR)/rpm" \
-		--define "_rpmdir $(PKG_DIR)/rpm/RPMS" \
-		--define "version $(VERSION)" \
-		$(PKG_DIR)/rpm/SPECS/upac.spec
+	@rpmbuild $(RPM_PKG_FLAGS) $(PKG_DIR)/rpm/SPECS/upac.spec
 	@echo "--- Package built: $(PKG_DIR)/rpm/RPMS/$(ARCH)/upac-$(VERSION)-1.$(ARCH).rpm ---"
 
 	@echo "--- RPM package moved to $(PKG_DIR)/ ---"
@@ -186,7 +186,7 @@ pkg-deb: build
 	@chmod +x $(PKG_DIR)/deb/DEBIAN/rules
 
 	@echo "--- Building DEB package v$(VERSION) ---"
-	@dpkg-deb --root-owner-group --build $(PKG_DIR)/deb $(PKG_DIR)/upac-$(VERSION).deb
+	@dpkg-deb $(DEB_PKG_FLAGS) --build $(PKG_DIR)/deb $(PKG_DIR)/upac-$(VERSION).deb
 
 	@echo "--- Package built: $(PKG_DIR)/deb/upac_$(VERSION)-1_$(ARCH).deb ---"
 

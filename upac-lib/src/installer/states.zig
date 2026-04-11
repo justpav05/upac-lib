@@ -441,17 +441,20 @@ fn collectFileChecksums(machine: *InstallerMachine, dir_path: []const u8, prefix
                 const gfile = c_libs.g_file_new_for_path(entry_path_z.ptr);
                 defer c_libs.g_object_unref(@ptrCast(gfile));
 
-                var raw_checksum: ?[*:0]u8 = null;
-                if (c_libs.ostree_checksum_file(gfile, c_libs.OSTREE_OBJECT_TYPE_FILE, &raw_checksum, null, &gerror) == 0) {
+                var raw_checksum_bin: ?[*:0]u8 = null;
+                if (c_libs.ostree_checksum_file(gfile, c_libs.OSTREE_OBJECT_TYPE_FILE, &raw_checksum_bin, null, &gerror) == 0) {
                     if (gerror) |err| c_libs.g_error_free(err);
                     continue;
                 }
-                defer c_libs.g_free(@ptrCast(raw_checksum));
+                defer c_libs.g_free(@ptrCast(raw_checksum_bin));
+
+                var hex_checksum_buf: [65]u8 = undefined;
+                c_libs.ostree_checksum_inplace_from_bytes(raw_checksum_bin.?, &hex_checksum_buf);
 
                 const relative = entry_path[prefix.len..];
                 try file_map.put(
                     try machine.allocator.dupe(u8, relative),
-                    try machine.allocator.dupe(u8, std.mem.span(raw_checksum.?)),
+                    try machine.allocator.dupe(u8, hex_checksum_buf[0..64]),
                 );
             },
             else => {},
