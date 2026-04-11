@@ -2,12 +2,12 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
-  build-and-release:
+  check-and-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -17,67 +17,68 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install dependencies without Zig
+      - name: Get version from Cargo.toml
+        id: get_version
         run: |
-          # В контейнере Arch нужно сначала обновить ключи и базу
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm git base-devel rust ostree glib2 libarchive zstd rpm-tools
+          VERSION=$(grep '^version' upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Install Zig 0.13.0
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop if version already released
+        if: steps.get_version.outputs.exists == 'true'
+        run: |
+          echo "Версия v${{ steps.get_version.outputs.version }} уже существует. Пропускаю сборку."
+          exit 0
+
+      - name: Install dependencies via pacman
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm git base-devel rust ostree glib2 libarchive zstd rpm-tools dpkg
+
+      - name: Install Zig 0.13.0 via curl
         run: |
           curl -L https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar -xJ
-          # Переносим содержимое в /usr/local, чтобы оно было в системном PATH
-          mv zig-linux-x86_64-0.13.0/* /usr/local/bin/
-          # Проверка
-          zig version
+          mv zig-linux-x86_64-0.13.0/zig /usr/local/bin/
+          mv zig-linux-x86_64-0.13.0/lib /usr/local/lib/zig
 
-      # Исправляем права доступа сразу для всего проекта
-      - name: Setup builder user
+      - name: Sync
+        run: |
+          make sync
+
+      - name: Build
         run: |
           useradd -m builder
           chown -R builder:builder .
+          su builder -c "make pkg-arch pkg-rpm pkg-deb"
 
-      - name: Build all packages
+      - name: Create Git tag
         run: |
-          # Убеждаемся, что у пользователя есть права на папку проекта
-          chown -R builder .
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Запускаем сборку.
-          # 1. Используем обычный su (сохраняем PATH для Zig).
-          # 2. Добавляем -C $(pwd), чтобы make точно знал, где искать Makefile.
-          # 3. Лучше вызывать 'make build' перед пакетниками, если они не в зависимостях.
-          su builder -c "make build pkg-arch pkg-rpm"
+          git tag "v${{ steps.get_version.outputs.version }}"
+          git push origin "v${{ steps.get_version.outputs.version }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get version metadata
-        id: version
-        run: |
-          VERSION=$(grep '^version' upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          # Читаем PKGBUILD из правильного места
-          PKGREL=$(grep '^pkgrel' pkg-specs/arch/PKGBUILD | head -1 | sed 's/pkgrel=//')
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          # Имя файла должно совпадать с тем, что генерирует makepkg
-          echo "pkg=upac-${VERSION}-${PKGREL}-x86_64.pkg.tar.zst" >> $GITHUB_OUTPUT
-
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: "upac v${{ steps.version.outputs.version }}"
+          tag_name: "v${{ steps.get_version.outputs.version }}"
+          name: "upac v${{ steps.get_version.outputs.version }}"
           body: |
-            ## Installation
-            ### Arch Linux
-            ```bash
-            pacman -U ${{ steps.version.outputs.pkg }}
-            ```
-
-            ### RPM
-            ```bash
-            rpm -Uvh pkg/rpm/RPMS/x86_64/upac-${{ steps.version.outputs.version }}-1.x86_64.rpm
-            ```
-
+            ## Релиз v${{ steps.get_version.outputs.version }}
           files: |
-            pkg/arch/${{ steps.version.outputs.pkg }}
-            pkg/rpm/RPMS/x86_64/upac-${{ steps.version.outputs.version }}-1.x86_64.rpm
+            pkg/*.pkg.tar.zst
+            pkg/*.rpm
+            pkg/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
