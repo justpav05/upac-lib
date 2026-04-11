@@ -161,7 +161,7 @@ fn stateProcessFiles(machine: *InstallerMachine) anyerror!void {
 fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.write_database);
 
-    const database_dir_path = try std.fmt.allocPrint(machine.allocator, "{s}/usr/share/upac/db", .{machine.data.package_temp_path});
+    const database_dir_path = try std.fmt.allocPrint(machine.allocator, "{s}", .{machine.data.database_path});
     defer machine.allocator.free(database_dir_path);
 
     std.fs.cwd().makePath(database_dir_path) catch |err| {

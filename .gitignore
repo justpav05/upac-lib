@@ -6,8 +6,8 @@ zig-out/
 target/
 Cargo.lock
 
-# Arch
-pkg/
+# Package building
+build
 
 Agents
 AGENTS.md
