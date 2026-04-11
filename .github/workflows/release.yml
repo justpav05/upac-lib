@@ -61,6 +61,8 @@ jobs:
 
       - name: Create Git tag
         run: |
+          git config --global --add safe.directory /github/workspace
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
