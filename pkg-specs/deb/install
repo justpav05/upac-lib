@@ -1,0 +1,6 @@
+usr/bin/upac
+usr/lib/libupac.so
+usr/lib/libupac-arch.so
+usr/lib/libupac-rpm.so
+usr/lib/libupac-deb.so
+etc/upac/config.toml

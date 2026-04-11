@@ -1,0 +1,11 @@
+Package: upac
+Version: 0.1.3-1
+Section: admin
+Priority: optional
+Architecture: amd64
+Maintainer: justpav05 <aksenovpaveldmitrievich@gmail.com>
+Depends: libostree-1-1, libglib2.0-0, libarchive13
+Homepage: https://github.com/justpav05/upac
+Description: A modular Linux package manager with OStree integration
+ Modular package manager written in Zig and Rust, featuring OStree integration
+ for reliable system state management.

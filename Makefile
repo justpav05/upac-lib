@@ -14,7 +14,7 @@ LIBC ?= gnu
 RUSTFLAGS := -C prefer-dynamic=false
 CARGO_TARGET ?= $(ARCH)-unknown-linux-$(LIBC)
 
-.PHONY: all build prepare build-lib build-backends build-cli build-removing pkg-arch pkg-rpm pkg-deb clean clean-build clean-pkg
+.PHONY: all build prepare build-lib build-backends build-cli build-removing pkg-arch pkg-rpm pkg-deb sync sync-build sync-pkg clean clean-build clean-pkg
 
 # ── Defining compilation flags ────────────────────────────────────────────────────────────────────
 ifeq ($(MODE), release)
@@ -46,32 +46,34 @@ endif
 build: prepare build-lib build-backends build-cli build-removing
 
 prepare:
-	@echo "--- Preparing directories for building ($(MODE)) ---"
+	@echo "--- Preparing directories for building in $(MODE) mode ---"
 	@mkdir -p $(OUT_BUILD_DIR)/bin
 	@mkdir -p $(OUT_BUILD_DIR)/lib
 
 build-lib:
-	@echo "--- Building upac-lib ($(MODE)) ---"
-	cd $(ROOT_DIR)/upac-lib && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
+	@echo "--- Building upac-lib in $(MODE) mode ---"
+	@cd $(ROOT_DIR)/upac-lib && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
 
 build-backends:
-	@echo "--- Building upac-alpm ($(MODE)) ---"
-	cd $(ROOT_DIR)/upac-alpm && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
-	@echo "--- Building upac-rpm ($(MODE)) ---"
-	cd $(ROOT_DIR)/upac-rpm && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
-	@echo "--- Building upac-deb ($(MODE)) ---"
-	cd $(ROOT_DIR)/upac-deb && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
+	@echo "--- Building upac-alpm in $(MODE) mode ---"
+	@cd $(ROOT_DIR)/upac-alpm && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
+
+	@echo "--- Building upac-rpm in $(MODE) mode ---"
+	@cd $(ROOT_DIR)/upac-rpm && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
+
+	@echo "--- Building upac-deb in $(MODE) mode ---"
+	@cd $(ROOT_DIR)/upac-deb && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
 
 build-cli:
-	@echo "--- Building upac-cli ($(MODE)) ($(CARGO_TARGET)) ---"
-	cd $(ROOT_DIR)/upac-cli && RUSTFLAGS="$(RUSTFLAGS)" cargo build --target $(CARGO_TARGET) --target-dir $(OUT_BUILD_DIR) $(CARGO_FLAGS)
-	cp $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(RB_DIR)/upac $(OUT_BUILD_DIR)/bin/
+	@echo "--- Building upac-cli in $(MODE) mode ($(CARGO_TARGET)) ---"
+	@cd $(ROOT_DIR)/upac-cli && RUSTFLAGS="$(RUSTFLAGS)" cargo build --target $(CARGO_TARGET) --target-dir $(OUT_BUILD_DIR) $(CARGO_FLAGS)
+	@cp $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(RB_DIR)/upac $(OUT_BUILD_DIR)/bin/
 
 build-removing:
-	@echo "--- Removing building temp directory ($(MODE)) ($(CARGO_TARGET)) ---"
-	rm -rf $(OUT_BUILD_DIR)/$(CARGO_TARGET)
-	rm -rf $(OUT_BUILD_DIR)/debug
-	rm -rf $(OUT_BUILD_DIR)/.rustc_info.json
+	@echo "--- Removing building temp directory in $(MODE) mode ($(CARGO_TARGET)) ---"
+	@rm -rf $(OUT_BUILD_DIR)/$(CARGO_TARGET)
+	@rm -rf $(OUT_BUILD_DIR)/debug
+	@rm -rf $(OUT_BUILD_DIR)/.rustc_info.json
 
 # ── ARCH package ────────────────────────────────────────────────────────────────
 pkg-arch: build
@@ -88,6 +90,9 @@ pkg-arch: build
 
 	@echo "--- Copying PKGBUILD v$(VERSION) ---"
 	@cp $(ROOT_DIR)/pkg-specs/arch/PKGBUILD $(PKG_DIR)/arch/
+
+	@echo "--- Syncing version: v$(VERSION) ---"
+	@sed -i "s/^pkgver=.*/pkgver=$(VERSION)/" $(PKG_DIR)/arch/PKGBUILD
 
 	@echo "--- Copying config example file v$(VERSION) ---"
 	@cp $(ROOT_DIR)/pkg-specs/config.toml $(PKG_DIR)/arch/root/etc/upac/
@@ -155,10 +160,15 @@ pkg-deb: build
 	@mkdir -p $(PKG_DIR)/deb/usr/{bin,lib}
 	@mkdir -p $(PKG_DIR)/deb/etc/upac
 
-	@echo "--- Copying deb files v$(VERSION) ---"
+	@echo "--- Copying DEB files v$(VERSION) ---"
 	@cp $(ROOT_DIR)/pkg-specs/deb/control $(PKG_DIR)/deb/DEBIAN/control
 	@cp $(ROOT_DIR)/pkg-specs/deb/install $(PKG_DIR)/deb/DEBIAN/install
 	@cp $(ROOT_DIR)/pkg-specs/deb/changelog $(PKG_DIR)/deb/DEBIAN/changelog
+
+	@echo "--- Syncing version: v$(VERSION) ---"
+	@sed -i "s/^Version: .*/Version: $(VERSION)-1/" $(PKG_DIR)/deb/DEBIAN/control
+	@sed -i -E "s/^upac \([0-9\.]+-1\)/upac ($(VERSION)-1)/" $(PKG_DIR)/deb/DEBIAN/changelog
+	@sed -i -E "s/>  .*/>  $(shell date -R)/" $(PKG_DIR)/deb/DEBIAN/changelog
 
 	@echo "--- Copying config.toml v$(VERSION) ---"
 	@cp $(ROOT_DIR)/pkg-specs/config.toml $(PKG_DIR)/deb/etc/upac/
@@ -169,7 +179,7 @@ pkg-deb: build
 	@echo "--- Copying libs v$(VERSION) ---"
 	@cp $(OUT_BUILD_DIR)/lib/libupac*.so $(PKG_DIR)/deb/usr/lib/
 
-	@echo "--- Making deb rules v$(VERSION) ---"
+	@echo "--- Making DEB rules v$(VERSION) ---"
 	@echo '#!/usr/bin/make -f' > $(PKG_DIR)/deb/DEBIAN/rules
 	@echo '%:' >> $(PKG_DIR)/deb/DEBIAN/rules
 	@echo '	dh $$@' >> $(PKG_DIR)/deb/DEBIAN/rules
@@ -179,6 +189,19 @@ pkg-deb: build
 	@dpkg-deb --root-owner-group --build $(PKG_DIR)/deb $(PKG_DIR)/upac-$(VERSION).deb
 
 	@echo "--- Package built: $(PKG_DIR)/deb/upac_$(VERSION)-1_$(ARCH).deb ---"
+
+# ── Version syncing ────────────────────────────────────────────────────────────
+sync: sync-build sync-pkg
+
+sync-pkg:
+	@echo "--- Syncing pkg-specs to v$(VERSION) from Cargo.toml ---"
+	@sed -i "s/^pkgver=.*/pkgver=$(VERSION)/" $(ROOT_DIR)/pkg-specs/arch/PKGBUILD
+	@sed -i "s/^Version: .*/Version: $(VERSION)-1/" $(ROOT_DIR)/pkg-specs/deb/control
+	@sed -i -E "s/^upac \([0-9\.]+-1\)/upac ($(VERSION)-1)/" $(ROOT_DIR)/pkg-specs/deb/changelog
+
+sync-build:
+	@echo "--- Syncing Zig modules to v$(VERSION) ---"
+	@sed -i -E 's/\.version[[:space:]]*=[[:space:]]*"[^"]*"/\.version = "$(VERSION)"/' $(ROOT_DIR)/upac-*/build.zig.zon
 
 # ── Cleaning ───────────────────────────────────────────────────────────────────
 clean: clean-build clean-pkg
