@@ -9,5 +9,8 @@ Cargo.lock
 # Package building
 build
 
+# Builded packages
+pkg/
+
 Agents
 AGENTS.md

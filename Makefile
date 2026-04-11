@@ -103,8 +103,9 @@ pkg-arch: build
 	@cp $(OUT_BUILD_DIR)/lib/libupac-rpm.so $(PKG_DIR)/arch/root/usr/lib/
 	@cp $(OUT_BUILD_DIR)/lib/libupac-deb.so $(PKG_DIR)/arch/root/usr/lib/
 
-	@echo "--- Building Arch package v$(VERSION) ---"
+	@echo "--- Building ARCH package v$(VERSION) ---"
 	@cd $(PKG_DIR)/arch && makepkg --nodeps --noconfirm -f
+	@mv $(PKG_DIR)/arch/*.pkg.tar.zst $(PKG_DIR)/
 
 	@echo "--- Package built: $(PKG_DIR)/arch/$(PKG_NAME).pkg.tar.zst ---"
 
@@ -135,16 +136,19 @@ pkg-rpm: build
 	@echo "--- Copying libs to temp directories v$(VERSION) ---"
 	@cp $(OUT_BUILD_DIR)/lib/libupac*.so $(PKG_DIR)/rpm/root/usr/lib/
 
-	@echo "--- Building RPM package ---"
+	@echo "--- Building RPM package v$(VERSION) ---"
 	@rpmbuild -bb \
 		--define "_topdir $(PKG_DIR)/rpm" \
 		--define "_rpmdir $(PKG_DIR)/rpm/RPMS" \
 		--define "version $(VERSION)" \
 		$(PKG_DIR)/rpm/SPECS/upac.spec
-	@echo "--- Package built: $(PKG_DIR)/rpm/RPMS/x86_64/upac-$(VERSION)-1.$(ARCH).rpm ---"
+	@echo "--- Package built: $(PKG_DIR)/rpm/RPMS/$(ARCH)/upac-$(VERSION)-1.$(ARCH).rpm ---"
+
+	@echo "--- RPM package moved to $(PKG_DIR)/ ---"
+	find $(PKG_DIR)/rpm/RPMS -name "*.rpm" -exec mv {} $(PKG_DIR)/ \;
 
 # ── DEB package ─────────────────────────────────────────────────────────────────
-pkg-deb:
+pkg-deb: build
 	@echo "--- Building DEB package v$(VERSION) ---"
 	@echo "--- Making temp directories ---"
 	@mkdir -p $(PKG_DIR)/deb/DEBIAN
@@ -171,10 +175,10 @@ pkg-deb:
 	@echo '	dh $$@' >> $(PKG_DIR)/deb/DEBIAN/rules
 	@chmod +x $(PKG_DIR)/deb/DEBIAN/rules
 
-	@echo "--- Copying upac files v$(VERSION) ---"
-	@cp -r $(ROOT_DIR)/upac-* $(PKG_DIR)/deb/
-	@cp $(ROOT_DIR)/Makefile $(PKG_DIR)/deb/
-	@cd $(PKG_DIR)/deb && dpkg-buildpackage -us -uc -b
+	@echo "--- Building DEB package v$(VERSION) ---"
+	@dpkg-deb --root-owner-group --build $(PKG_DIR)/deb $(PKG_DIR)/upac-$(VERSION).deb
+
+	@echo "--- Package built: $(PKG_DIR)/deb/upac_$(VERSION)-1_$(ARCH).deb ---"
 
 # ── Cleaning ───────────────────────────────────────────────────────────────────
 clean: clean-build clean-pkg
@@ -182,27 +186,30 @@ clean: clean-build clean-pkg
 clean-build:
 	@echo "--- Cleaning build artifacts ---"
 	@echo "--- Cleaning upac-lib build artifacts ---"
-	rm -rf $(ROOT_DIR)/upac-lib/zig-out
-	rm -rf $(ROOT_DIR)/upac-lib/.zig-cache
+	@rm -rf $(ROOT_DIR)/upac-lib/zig-out
+	@rm -rf $(ROOT_DIR)/upac-lib/.zig-cache
 
 	@echo "--- Cleaning upac-alpm build artifacts ---"
-	rm -rf $(ROOT_DIR)/upac-alpm/.zig-cache
-	rm -rf $(ROOT_DIR)/upac-alpm/zig-out
+	@rm -rf $(ROOT_DIR)/upac-alpm/.zig-cache
+	@rm -rf $(ROOT_DIR)/upac-alpm/zig-out
 
 	@echo "--- Cleaning upac-rpm build artifacts ---"
-	rm -rf $(ROOT_DIR)/upac-rpm/.zig-cache
-	rm -rf $(ROOT_DIR)/upac-rpm/zig-out
+	@rm -rf $(ROOT_DIR)/upac-rpm/.zig-cache
+	@rm -rf $(ROOT_DIR)/upac-rpm/zig-out
 
 	@echo "--- Cleaning upac-deb build artifacts ---"
-	rm -rf $(ROOT_DIR)/upac-deb/.zig-cache
-	rm -rf $(ROOT_DIR)/upac-deb/zig-out
+	@rm -rf $(ROOT_DIR)/upac-deb/.zig-cache
+	@rm -rf $(ROOT_DIR)/upac-deb/zig-out
 
 	@echo "--- Cleaning global .zig-cache ---"
-	rm -rf $(ROOT_DIR)/.zig-cache
+	@rm -rf $(ROOT_DIR)/.zig-cache
 
 	@echo "--- Cleaning upac-cli build artifacts ---"
-	cd $(ROOT_DIR)/upac-cli && cargo clean
+	@cd $(ROOT_DIR)/upac-cli && cargo clean
+
+	@echo "--- Cleaning build directory artifacts ---"
+	@rm -rf $(ROOT_DIR)/build
 
 clean-pkg:
 	@echo "--- Cleaning package building artifacts ---"
-	rm -rf $(PKG_DIR)
+	@rm -rf $(PKG_DIR)
