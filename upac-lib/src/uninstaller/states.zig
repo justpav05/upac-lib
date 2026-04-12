@@ -25,7 +25,7 @@ pub fn stateVerifying(machine: *UninstallerMachine) anyerror!void {
 }
 
 // The state of opening the repository and writing its data to the machine
-fn stateOpenRepo(machine: *UninstallerMachine) anyerror!void {
+fn stateOpenRepo(machine: *UninstallerMachine) !void {
     try machine.enter(.open_repo);
 
     const repo_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.repo_path}) catch |err| {
@@ -54,6 +54,16 @@ fn stateOpenRepo(machine: *UninstallerMachine) anyerror!void {
 
     machine.repo = repo;
 
+    if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        if (machine.exhausted()) {
+            stateFailed(machine);
+            return UninstallerError.MaxRetriesExceeded;
+        }
+        machine.retries += 1;
+        return stateCheckInstalled(machine);
+    }
+
     const branch_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch}) catch |err| {
         stateFailed(machine);
         return err;
@@ -63,28 +73,25 @@ fn stateOpenRepo(machine: *UninstallerMachine) anyerror!void {
     var parent_checksum: ?[*:0]u8 = null;
     _ = c_libs.ostree_repo_resolve_rev(repo, branch_c.ptr, 1, &parent_checksum, null);
 
-    const mtree = c_libs.ostree_mutable_tree_new();
+    var uninstaller_mtree: ?*c_libs.OstreeMutableTree = null;
 
     if (parent_checksum) |checksum| {
-        defer c_libs.g_free(@ptrCast(checksum));
-
-        var mtree_root: ?*c_libs.GFile = null;
-        if (c_libs.ostree_repo_read_commit(repo, checksum, &mtree_root, null, null, &gerror) != 0) {
-            defer if (mtree_root) |root| c_libs.g_object_unref(root);
-            _ = c_libs.ostree_repo_write_directory_to_mtree(repo, mtree_root, mtree, null, null, &gerror);
-            if (gerror) |err| c_libs.g_error_free(err);
-        } else {
-            if (gerror) |err| c_libs.g_error_free(err);
+        const existing_mtree = c_libs.ostree_mutable_tree_new_from_commit(repo, checksum, &gerror);
+        if (existing_mtree) |mtree| {
+            uninstaller_mtree = mtree;
         }
+        c_libs.g_free(@ptrCast(checksum));
+    } else {
+        uninstaller_mtree = c_libs.ostree_mutable_tree_new();
     }
 
-    machine.mtree = mtree;
+    machine.mtree = uninstaller_mtree.?;
     machine.resetRetries();
     return stateCheckInstalled(machine);
 }
 
 // Installation verification status, designed to prevent the removal of non-existent items
-fn stateCheckInstalled(machine: *UninstallerMachine) anyerror!void {
+fn stateCheckInstalled(machine: *UninstallerMachine) !void {
     try machine.enter(.check_installed);
 
     const branch_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch});
@@ -136,7 +143,7 @@ fn stateCheckInstalled(machine: *UninstallerMachine) anyerror!void {
 }
 
 // State for loading the list of paths created during installation, in order to precisely identify which OSTree tree nodes need to be removed
-fn stateLoadFiles(machine: *UninstallerMachine) anyerror!void {
+fn stateLoadFiles(machine: *UninstallerMachine) !void {
     try machine.enter(.load_files);
 
     const pkg_checksum = machine.package_checksum orelse {
@@ -144,13 +151,9 @@ fn stateLoadFiles(machine: *UninstallerMachine) anyerror!void {
         return UninstallerError.PackageNotFound;
     };
 
-    const file_map = data.readFiles(machine.data.db_path, pkg_checksum, machine.allocator) catch |err| {
-        if (machine.exhausted()) {
-            stateFailed(machine);
-            return err;
-        }
-        machine.retries += 1;
-        return stateLoadFiles(machine);
+    const file_map = data.readFiles(machine.data.db_path, pkg_checksum, machine.allocator) catch {
+        stateFailed(machine);
+        return UninstallerError.FileMapCorrupted;
     };
 
     machine.package_file_map = file_map;
@@ -159,23 +162,32 @@ fn stateLoadFiles(machine: *UninstallerMachine) anyerror!void {
 }
 
 // State of file removal from mtree
-fn stateRemoveFiles(machine: *UninstallerMachine) anyerror!void {
+fn stateRemoveFiles(machine: *UninstallerMachine) !void {
     try machine.enter(.remove_files);
+
+    const repo = machine.repo orelse {
+        stateFailed(machine);
+        return UninstallerError.RepoOpenFailed;
+    };
 
     const file_map = machine.package_file_map orelse {
         stateFailed(machine);
         return UninstallerError.PackageNotFound;
     };
+    const mtree = machine.mtree orelse {
+        stateFailed(machine);
+        return UninstallerError.PackageNotFound;
+    };
 
-    var file_map_iter = file_map.iterator();
-    while (file_map_iter.next()) |file_map_entry| {
-        removeFromMtree(
-            machine.mtree.?,
-            file_map_entry.key_ptr.*,
-            machine.allocator,
-        ) catch |err| {
-            stateFailed(machine);
-            return err;
+    var iter = file_map.iterator();
+    while (iter.next()) |entry| {
+        removeFromMtree(repo, mtree, entry.key_ptr.*, machine.allocator) catch {
+            if (machine.exhausted()) {
+                stateFailed(machine);
+                return UninstallerError.FileNotFound;
+            }
+            machine.retries += 1;
+            return stateRemoveFiles(machine);
         };
     }
 
@@ -184,36 +196,42 @@ fn stateRemoveFiles(machine: *UninstallerMachine) anyerror!void {
 }
 
 // The state of removal from the global index, as well as of files belonging to the package in the database
-fn stateRemoveDbFiles(machine: *UninstallerMachine) anyerror!void {
+fn stateRemoveDbFiles(machine: *UninstallerMachine) !void {
     try machine.enter(.remove_db_files);
+
+    const repo = machine.repo orelse {
+        stateFailed(machine);
+        return UninstallerError.RepoOpenFailed;
+    };
 
     const pkg_checksum = machine.package_checksum orelse {
         stateFailed(machine);
         return UninstallerError.PackageNotFound;
     };
-
-    const meta_filename = try std.fmt.allocPrint(
-        machine.allocator,
-        "{s}.meta",
-        .{pkg_checksum},
-    );
-    defer machine.allocator.free(meta_filename);
-
-    const files_filename = try std.fmt.allocPrint(
-        machine.allocator,
-        "{s}.files",
-        .{pkg_checksum},
-    );
-    defer machine.allocator.free(files_filename);
-
-    removeFromMtree(machine.mtree.?, meta_filename, machine.allocator) catch |err| {
+    const mtree = machine.mtree orelse {
         stateFailed(machine);
-        return err;
+        return UninstallerError.RepoOpenFailed;
     };
 
-    removeFromMtree(machine.mtree.?, files_filename, machine.allocator) catch |err| {
+    const relative_database_path = if (std.mem.startsWith(u8, machine.data.db_path, machine.data.root_path))
+        machine.data.db_path[machine.data.root_path.len..]
+    else
+        machine.data.db_path;
+
+    const meta_relative_path = try std.fmt.allocPrint(machine.allocator, "{s}/{s}.meta", .{ relative_database_path, pkg_checksum });
+    defer machine.allocator.free(meta_relative_path);
+
+    removeFromMtree(repo, mtree, meta_relative_path, machine.allocator) catch {
         stateFailed(machine);
-        return err;
+        return UninstallerError.FileNotFound;
+    };
+
+    const files_relative_path = try std.fmt.allocPrint(machine.allocator, "{s}/{s}.files", .{ relative_database_path, pkg_checksum });
+    defer machine.allocator.free(files_relative_path);
+
+    removeFromMtree(repo, mtree, files_relative_path, machine.allocator) catch {
+        stateFailed(machine);
+        return UninstallerError.FileNotFound;
     };
 
     machine.resetRetries();
@@ -229,11 +247,7 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
 
     var gerror: ?*c_libs.GError = null;
 
-    const branch_c = try std.fmt.allocPrintZ(
-        machine.allocator,
-        "{s}",
-        .{machine.data.branch},
-    );
+    const branch_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch});
     defer machine.allocator.free(branch_c);
 
     const root_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.root_path});
@@ -280,16 +294,6 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
     const body_c = try machine.allocator.dupeZ(u8, body_buf.items);
     defer machine.allocator.free(body_c);
 
-    if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        if (machine.exhausted()) {
-            stateFailed(machine);
-            return UninstallerError.MaxRetriesExceeded;
-        }
-        machine.retries += 1;
-        return stateCommit(machine);
-    }
-
     var mtree_root: ?*c_libs.GFile = null;
     defer if (mtree_root) |root| c_libs.g_object_unref(root);
 
@@ -301,6 +305,12 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
             return UninstallerError.MaxRetriesExceeded;
         }
         machine.retries += 1;
+
+        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
+            if (gerror) |err| c_libs.g_error_free(err);
+            stateFailed(machine);
+            return UninstallerError.MaxRetriesExceeded;
+        }
         return stateCommit(machine);
     }
 
@@ -308,7 +318,6 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
     defer machine.allocator.free(subject_c);
 
     var commit_checksum: ?[*:0]u8 = null;
-    defer if (commit_checksum) |checksum| c_libs.g_free(@ptrCast(checksum));
 
     if (c_libs.ostree_repo_write_commit(repo, if (parent_checksum) |checksum| checksum else null, subject_c.ptr, body_c.ptr, null, @ptrCast(mtree_root), &commit_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
@@ -318,6 +327,12 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
             return UninstallerError.MaxRetriesExceeded;
         }
         machine.retries += 1;
+
+        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
+            if (gerror) |err| c_libs.g_error_free(err);
+            stateFailed(machine);
+            return UninstallerError.MaxRetriesExceeded;
+        }
         return stateCommit(machine);
     }
 
@@ -325,29 +340,91 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
 
     if (c_libs.ostree_repo_commit_transaction(repo, null, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
+        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
         if (machine.exhausted()) {
             stateFailed(machine);
             return UninstallerError.MaxRetriesExceeded;
         }
         machine.retries += 1;
-        return stateCommit(machine);
-    }
 
-    var checkout_options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
-    checkout_options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
-    checkout_options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
-
-    if (c_libs.ostree_repo_checkout_at(repo, &checkout_options, std.c.AT.FDCWD, root_path_c.ptr, commit_checksum, null, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        if (machine.exhausted()) {
+        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
+            if (gerror) |err| c_libs.g_error_free(err);
             stateFailed(machine);
             return UninstallerError.MaxRetriesExceeded;
         }
-        machine.retries += 1;
         return stateCommit(machine);
     }
 
+    machine.commit_checksum = commit_checksum;
     machine.resetRetries();
+
+    return stateCheckoutStaging(machine);
+}
+
+fn stateCheckoutStaging(machine: *UninstallerMachine) !void {
+    try machine.enter(.checkout_staging);
+
+    const normalized_root_path = if (machine.data.root_path[machine.data.root_path.len - 1] == '/')
+        machine.data.root_path[0 .. machine.data.root_path.len - 1]
+    else
+        machine.data.root_path;
+
+    const staging_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}/usr-remove-{d}", .{ normalized_root_path, std.time.milliTimestamp() });
+
+    machine.staging_path = staging_path_c;
+
+    var gerror: ?*c_libs.GError = null;
+    var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
+    options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
+    options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_NONE;
+
+    if (c_libs.ostree_repo_checkout_at(machine.repo.?, &options, std.c.AT.FDCWD, staging_path_c.ptr, machine.commit_checksum.?, null, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        stateFailed(machine);
+        return UninstallerError.MaxRetriesExceeded;
+    }
+
+    return stateAtomicSwap(machine);
+}
+
+fn stateAtomicSwap(machine: *UninstallerMachine) !void {
+    try machine.enter(.atomic_swap);
+
+    const normalized_root_path = if (machine.data.root_path[machine.data.root_path.len - 1] == '/')
+        machine.data.root_path[0 .. machine.data.root_path.len - 1]
+    else
+        machine.data.root_path;
+
+    const staging_path = machine.staging_path.?;
+
+    const usr_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}/usr", .{normalized_root_path});
+    defer machine.allocator.free(usr_path_c);
+
+    const staging_usr_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}/usr", .{staging_path});
+    defer machine.allocator.free(staging_usr_path_c);
+
+    const RENAME_EXCHANGE = 2;
+    const AT_FDCWD: isize = -100;
+    const result = std.os.linux.syscall5(.renameat2, @bitCast(AT_FDCWD), @intFromPtr(staging_usr_path_c.ptr), @bitCast(AT_FDCWD), @intFromPtr(usr_path_c.ptr), RENAME_EXCHANGE);
+
+    if (std.os.linux.E.init(result) != .SUCCESS) {
+        std.fs.deleteTreeAbsolute(staging_path) catch {};
+        stateFailed(machine);
+        return UninstallerError.MaxRetriesExceeded;
+    }
+
+    return stateCleanupStaging(machine);
+}
+
+fn stateCleanupStaging(machine: *UninstallerMachine) !void {
+    try machine.enter(.cleanup_staging);
+
+    if (machine.staging_path) |staging_path| {
+        std.fs.deleteTreeAbsolute(staging_path) catch {};
+        machine.allocator.free(staging_path);
+        machine.staging_path = null;
+    }
+
     return stateDone(machine);
 }
 
@@ -363,12 +440,12 @@ fn stateFailed(machine: *UninstallerMachine) void {
     // for (machine.stack.items) |state| {
     //     std.debug.print("{s} ", .{@tagName(state)});
     // }
-    // std.debug.print("\n", .{}); -- Debug information
+    // std.debug.print("\n", .{}); // -- Debug information
 }
 
 // ── Helpers functions ─────────────────────────────────────────────────────────────────────
 // Removes the file entry from the file table of the corresponding directory
-fn removeFromMtree(root: *c_libs.OstreeMutableTree, relative_path: []const u8, allocator: std.mem.Allocator) !void {
+fn removeFromMtree(repo: *c_libs.OstreeRepo, root_mtree: *c_libs.OstreeMutableTree, relative_path: []const u8, allocator: std.mem.Allocator) !void {
     var gerror: ?*c_libs.GError = null;
 
     var path_components = std.ArrayList([]const u8).init(allocator);
@@ -380,25 +457,40 @@ fn removeFromMtree(root: *c_libs.OstreeMutableTree, relative_path: []const u8, a
     }
     if (path_components.items.len == 0) return;
 
-    const filename = path_components.items[path_components.items.len - 1];
-    const dir_parts = path_components.items[0 .. path_components.items.len - 1];
-
-    var current_mtree = root;
-    for (dir_parts) |dir_name| {
-        const dir_name_c = try allocator.dupeZ(u8, dir_name);
-        defer allocator.free(dir_name_c);
-
-        var sub_dir: ?*c_libs.OstreeMutableTree = null;
-        if (c_libs.ostree_mutable_tree_ensure_dir(current_mtree, dir_name_c.ptr, &sub_dir, &gerror) == 0) {
-            if (gerror) |err| c_libs.g_error_free(err);
-            return;
+    var current_subtree = root_mtree;
+    for (path_components.items[0 .. path_components.items.len - 1]) |directory_component| {
+        const contents_checksum = c_libs.ostree_mutable_tree_get_contents_checksum(current_subtree);
+        const metadata_checksum = c_libs.ostree_mutable_tree_get_metadata_checksum(current_subtree);
+        if (contents_checksum != null and metadata_checksum != null) {
+            _ = c_libs.ostree_mutable_tree_fill_empty_from_dirtree(current_subtree, repo, contents_checksum, metadata_checksum);
         }
-        current_mtree = sub_dir.?;
+
+        const directory_component_c = try allocator.dupeZ(u8, directory_component);
+        defer allocator.free(directory_component_c);
+
+        var out_file_checksum: [*c]u8 = null;
+        var out_subdir: ?*c_libs.OstreeMutableTree = null;
+
+        if (c_libs.ostree_mutable_tree_lookup(current_subtree, directory_component_c.ptr, &out_file_checksum, &out_subdir, &gerror) == 0) {
+            if (gerror) |err| c_libs.g_error_free(err);
+            return UninstallerError.FileNotFound;
+        }
+        if (out_subdir == null) return UninstallerError.FileNotFound;
+        current_subtree = out_subdir.?;
     }
 
-    const filename_c = try allocator.dupeZ(u8, filename);
-    defer allocator.free(filename_c);
+    const contents_checksum = c_libs.ostree_mutable_tree_get_contents_checksum(current_subtree);
+    const metadata_checksum = c_libs.ostree_mutable_tree_get_metadata_checksum(current_subtree);
+    if (contents_checksum != null and metadata_checksum != null) {
+        _ = c_libs.ostree_mutable_tree_fill_empty_from_dirtree(current_subtree, repo, contents_checksum, metadata_checksum);
+    }
 
-    _ = c_libs.ostree_mutable_tree_remove(current_mtree, filename_c.ptr, 0, &gerror);
-    if (gerror) |err| c_libs.g_error_free(err);
+    const file_name_c = try allocator.dupeZ(u8, path_components.items[path_components.items.len - 1]);
+    defer allocator.free(file_name_c);
+
+    if (c_libs.ostree_mutable_tree_remove(current_subtree, file_name_c.ptr, 0, &gerror) == 0) {
+        if (gerror) |err| std.debug.print("ostree_mutable_tree_remove failed for '{s}': {s}\n", .{ file_name_c.ptr, err.*.message });
+        if (gerror) |err| c_libs.g_error_free(err);
+        return UninstallerError.FileNotFound;
+    }
 }

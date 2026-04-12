@@ -25,7 +25,6 @@ pub const StateId = enum {
     verifying,
     check_installed,
     open_repo,
-    process_files,
     write_database,
     process_db_files,
     commit,

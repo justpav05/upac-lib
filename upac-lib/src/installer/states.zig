@@ -6,7 +6,6 @@ const data = @import("upac-data");
 const file = @import("upac-file");
 const c_libs = file.c_libs;
 
-const FileFSM = file.FileFSM;
 
 const installer_mod = @import("installer.zig");
 const InstallerMachine = installer_mod.InstallerMachine;
@@ -77,7 +76,18 @@ fn stateOpenRepo(machine: *InstallerMachine) anyerror!void {
     var parent_checksum: ?[*:0]u8 = null;
     _ = c_libs.ostree_repo_resolve_rev(repo, branch_c.ptr, 1, &parent_checksum, null);
 
-    const mtree = c_libs.ostree_mutable_tree_new();
+    const mtree = if (parent_checksum) |prev_cs| blk: {
+        var mtree_gerror: ?*c_libs.GError = null;
+        const existing_mtree = c_libs.ostree_mutable_tree_new_from_commit(repo, prev_cs, &mtree_gerror);
+        if (existing_mtree) |mt| {
+            c_libs.g_free(@ptrCast(prev_cs));
+            break :blk mt;
+        }
+        if (mtree_gerror) |err| c_libs.g_error_free(err);
+        c_libs.g_free(@ptrCast(prev_cs));
+        break :blk c_libs.ostree_mutable_tree_new();
+    } else c_libs.ostree_mutable_tree_new();
+
     machine.mtree = mtree;
 
     machine.resetRetries();
@@ -94,7 +104,7 @@ fn stateCheckInstalled(machine: *InstallerMachine) anyerror!void {
     var last_checksum: ?[*:0]u8 = null;
     if (c_libs.ostree_repo_resolve_rev(machine.repo.?, branch_c.ptr, 1, &last_checksum, null) == 0 or last_checksum == null) {
         machine.resetRetries();
-        return stateProcessFiles(machine);
+        return stateWriteDatabase(machine);
     }
     defer c_libs.g_free(@ptrCast(last_checksum));
 
@@ -105,7 +115,7 @@ fn stateCheckInstalled(machine: *InstallerMachine) anyerror!void {
     if (c_libs.ostree_repo_load_variant(machine.repo.?, c_libs.OSTREE_OBJECT_TYPE_COMMIT, last_checksum, &commit_variant, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         machine.resetRetries();
-        return stateProcessFiles(machine);
+        return stateWriteDatabase(machine);
     }
 
     var body_variant: ?*c_libs.GVariant = null;
@@ -131,29 +141,6 @@ fn stateCheckInstalled(machine: *InstallerMachine) anyerror!void {
     }
 
     machine.resetRetries();
-    return stateProcessFiles(machine);
-}
-
-// Initializes an empty mutable tree (mtree) and initiates a recursive file traversal to add files to the repository
-fn stateProcessFiles(machine: *InstallerMachine) anyerror!void {
-    try machine.enter(.process_files);
-
-    var dir = std.fs.openDirAbsolute(machine.data.package_temp_path, .{ .iterate = true }) catch |err| {
-        if (machine.exhausted()) {
-            stateFailed(machine);
-            return err;
-        }
-        machine.retries += 1;
-        return stateProcessFiles(machine);
-    };
-    defer dir.close();
-
-    processDirectory(machine, dir, machine.data.package_temp_path) catch |err| {
-        stateFailed(machine);
-        return err;
-    };
-
-    machine.resetRetries();
     return stateWriteDatabase(machine);
 }
 
@@ -161,10 +148,20 @@ fn stateProcessFiles(machine: *InstallerMachine) anyerror!void {
 fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.write_database);
 
-    const database_dir_path = try std.fmt.allocPrint(machine.allocator, "{s}", .{machine.data.database_path});
-    defer machine.allocator.free(database_dir_path);
+    // Вычисляем relative часть database_path относительно root_path
+    const relative_database_path = if (std.mem.startsWith(u8, machine.data.database_path, machine.data.root_path))
+        machine.data.database_path[machine.data.root_path.len..]
+    else
+        machine.data.database_path;
 
-    std.fs.cwd().makePath(database_dir_path) catch |err| {
+    const staged_database_dir_path = try std.fmt.allocPrint(
+        machine.allocator,
+        "{s}{s}",
+        .{ machine.data.package_temp_path, relative_database_path },
+    );
+    defer machine.allocator.free(staged_database_dir_path);
+
+    std.fs.cwd().makePath(staged_database_dir_path) catch |err| {
         stateFailed(machine);
         return err;
     };
@@ -177,7 +174,7 @@ fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
         return err;
     };
 
-    data.writePackage(database_dir_path, machine.data.package_checksum, machine.data.package_meta, file_map, machine.allocator) catch |err| {
+    data.writePackage(staged_database_dir_path, machine.data.package_checksum, machine.data.package_meta, file_map, machine.allocator) catch |err| {
         if (machine.exhausted()) {
             stateFailed(machine);
             return err;
@@ -353,71 +350,6 @@ fn stateFailed(machine: *InstallerMachine) void {
 }
 
 // ── Helpers functions ───────────────────────────────────────────────────
-// Function for generating a list of files with their checksums
-fn processDirectory(machine: *InstallerMachine, dir: std.fs.Dir, dir_path: []const u8) !void {
-    var dir_iter = dir.iterate();
-    var file_count: usize = 0;
-    var dir_count: usize = 0;
-    while (try dir_iter.next()) |entry| {
-        const entry_path = try std.fs.path.join(
-            machine.allocator,
-            &.{ dir_path, entry.name },
-        );
-        defer machine.allocator.free(entry_path);
-
-        switch (entry.kind) {
-            .directory => {
-                dir_count += 1;
-                var sub_dir = try std.fs.openDirAbsolute(
-                    entry_path,
-                    .{ .iterate = true },
-                );
-                defer sub_dir.close();
-                try processDirectory(machine, sub_dir, entry_path);
-            },
-            .file => {
-                file_count += 1;
-                const entry_path_z = try machine.allocator.dupeZ(u8, entry_path);
-                defer machine.allocator.free(entry_path_z);
-
-                const relative = entry_path[machine.data.package_temp_path.len..];
-
-                const checksum = FileFSM.run(.{ .temp_path = entry_path_z, .relative_path = relative, .repo = machine.repo.?, .mtree = machine.mtree.? }, machine.data.max_retries, machine.allocator) catch |err| return err;
-                machine.allocator.free(checksum);
-            },
-            else => {},
-        }
-    }
-}
-
-fn debugMtreePath(root: *c_libs.OstreeMutableTree, relative_path: []const u8) void {
-    var gerror: ?*c_libs.GError = null;
-    var current = root;
-
-    var iter = std.mem.splitScalar(u8, relative_path, '/');
-    while (iter.next()) |part| {
-        if (part.len == 0) continue;
-        const part_c = std.fmt.allocPrintZ(std.heap.page_allocator, "{s}", .{part}) catch return;
-        defer std.heap.page_allocator.free(part_c);
-
-        var out_checksum: ?[*:0]u8 = null;
-        defer if (out_checksum) |cs| c_libs.g_free(@ptrCast(cs));
-        var out_subdir: ?*c_libs.OstreeMutableTree = null;
-
-        if (c_libs.ostree_mutable_tree_lookup(current, part_c.ptr, &out_checksum, &out_subdir, &gerror) == 0) {
-            if (gerror) |err| c_libs.g_error_free(err);
-            return;
-        }
-
-        if (out_subdir) |sub| {
-            current = sub;
-            continue;
-        }
-
-        return;
-    }
-}
-
 // A recursive assistant. It traverses the directory structure, calculates checksums for all files, and populates the FileMap. It is precisely this data that is subsequently written to the `.files` file within the database
 fn collectFileChecksums(machine: *InstallerMachine, dir_path: []const u8, prefix: []const u8, file_map: *data.FileMap) !void {
     var dir = try std.fs.openDirAbsolute(dir_path, .{ .iterate = true });

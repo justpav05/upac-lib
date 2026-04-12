@@ -71,7 +71,10 @@ pub fn readFiles(database_path: []const u8, package_checksum: []const u8, alloca
     const package_files_path = try filesPath(database_path, package_checksum, allocator);
     defer allocator.free(package_files_path);
 
-    const package_files_content = std.fs.cwd().readFileAlloc(allocator, package_files_path, 16 * 1024 * 1024) catch return DatabaseError.PackageNotFound;
+    const package_files_file = std.fs.openFileAbsolute(package_files_path, .{}) catch return DatabaseError.PackageNotFound;
+    defer package_files_file.close();
+
+    const package_files_content = try package_files_file.readToEndAlloc(allocator, 16 * 1024 * 1024);
     defer allocator.free(package_files_content);
 
     return parseFiles(package_files_content, allocator);

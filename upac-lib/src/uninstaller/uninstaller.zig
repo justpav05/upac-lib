@@ -14,6 +14,8 @@ pub const UninstallerError = error{
     PackageNotFound,
     RepoPathNotFound,
     RepoOpenFailed,
+    FileNotFound,
+    FileMapCorrupted,
     MaxRetriesExceeded,
 };
 
@@ -27,6 +29,10 @@ pub const StateId = enum {
     remove_files,
     remove_db_files,
     commit,
+    checkout_staging,
+    atomic_swap,
+    cleanup_staging,
+
     done,
     failed,
 };
@@ -54,6 +60,9 @@ pub const UninstallerMachine = struct {
     repo: ?*c_libs.OstreeRepo,
     mtree: ?*c_libs.OstreeMutableTree,
 
+    staging_path: ?[:0]const u8 = null,
+    commit_checksum: ?[*:0]u8 = null,
+
     package_checksum: ?[]const u8,
     package_file_map: ?data_mod.FileMap,
 
@@ -77,10 +86,15 @@ pub const UninstallerMachine = struct {
 
     // Releases all resources: native Zig memory, the file hash map, and OSTree system C objects
     pub fn deinit(self: *UninstallerMachine) void {
+        if (self.staging_path) |path| self.allocator.free(path);
+        if (self.commit_checksum) |checksum| c_libs.g_free(@ptrCast(checksum));
+
         if (self.package_checksum) |checksum| self.allocator.free(checksum);
         if (self.package_file_map) |*file_map| data_mod.freeFileMap(file_map, self.allocator);
+
         if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
         if (self.repo) |repo| c_libs.g_object_unref(repo);
+
         self.stack.deinit();
     }
 
