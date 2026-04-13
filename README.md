@@ -1,8 +1,8 @@
-# upac
+# **Upac**
 
 A modular package management library for Linux systems with OSTree integration.
 
-## Overview
+## **Overview**
 
 Upac is a package manager for Linux-compatible systems. It manages the updating, removal, and installation of various package formats using different backends. It also supports OSTree for rolling back the state of binaries to specific commits.
 
@@ -12,19 +12,15 @@ Upac-lib is a low-level package management library written in Zig, designed to b
 
 The library is intentionally split into independent components: backends handle format-specific unpacking, the core library handles installation and database operations, and OStree integration is optional.
 
-## Usage
-
-**`upac install`** — Installs files into the system using the selected backend, with support for checksum verification.
-
-**`upac remove`** — Removes an installed package from the system by name.
-
-**`upac list`** — Lists packages, with optional display of versions, commit history, or full details.
-
-**`upac rollback`** — Reverts the system state to a specified commit ID.
-
-**`upac init`** — Initializes the upac working environment in a specified mode (default: archive).
-
-## Components
+## **Usage**
+```sh
+upac install # installs files into the system using the selected backend, with support for checksum verification.
+upac remove # removes an installed package from the system by name.
+upac rollback # reverts the system state to a specified commit ID.
+upac list # lists packages, with optional display of versions, commit history, or full details.
+upac init # initializes the upac working environment in a specified mode (default: archive).
+```
+## **Components**
 
 ### Core Library (`upac-lib`)
 
@@ -46,7 +42,7 @@ Adding support for a new package format means writing a new backend `.so` — th
 
 A command-line frontend written in Rust that dynamically loads `libupac.so` and the appropriate backend at runtime using `libloading`. The backend is selected by file extension or explicit `--backend` flag or automaticly.
 
-## Building
+## **Building**
 
 **Prerequisites**
 
@@ -68,11 +64,37 @@ make build
 make build-lib        # builds upac-lib → upac-lib/zig-out/lib/libupac.so
 make build-backends   # builds upac-alpm-backend → upac-alpm-backend/zig-out/lib/libupac-backend-arch.so
 make build-cli        # builds upac-cli → upac-cli/target/debug/upac
-make pkg-arch         # builds upac-package for Arch Linux → pkg/arch/upac-{vertion}-x86_64.pkg.tar.zst
 ```
 
-**Clean**
+## **Packaging**
+
+**Building packages requires the presence of the appropriate tools on your system!**
+
+Arch Linux-based (.pkg.tar.zst):
 
 ```sh
+make pkg-arch
+```
+
+RPM-based (.rpm):
+```sh
+make pkg-rpm
+```
+
+Debian-based (.deb):
+```sh
+make pkg-deb
+```
+
+## **Cleaning**
+
+Commands for removing build artifacts and temporary files:
+Complete Cleanup:
+```sh
 make clean
+```
+Partial cleaning:
+```sh
+make clean-build   # Only component compilation results
+make clean-pkg     # Only built packages and the package build tree
 ```
