@@ -5,6 +5,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const strip = b.option(bool, "strip", "Strip debug symbols") orelse false;
+    const stack_check = b.option(bool, "stack-check", "Check for stack overflows") orelse false;
+
     // ── Types ─────────────────────────────────────────────────────────────────
     const upac_types = b.addModule("upac-types", .{ .root_source_file = b.path("src/types.zig"), .target = target, .optimize = optimize });
 
@@ -39,7 +42,6 @@ pub fn build(b: *std.Build) void {
 
     // ── Init ──────────────────────────────────────────────────────────────────
     const upac_init = b.addModule("upac-init", .{ .root_source_file = b.path("src/init.zig"), .target = target, .optimize = optimize });
-
     upac_init.addImport("upac-file", upac_file);
 
     // ── Shared library ────────────────────────────────────────────────────────
@@ -59,6 +61,9 @@ pub fn build(b: *std.Build) void {
     shared_lib.root_module.addImport("upac-rollback", upac_rollback);
 
     shared_lib.root_module.addImport("upac-init", upac_init);
+
+    shared_lib.root_module.strip = strip;
+    shared_lib.root_module.stack_check = stack_check;
 
     b.installArtifact(shared_lib);
 }

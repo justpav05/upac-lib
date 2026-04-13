@@ -1,18 +1,22 @@
-ROOT_DIR  := $(shell pwd)
-PKG_DIR   := $(ROOT_DIR)/pkg
-
-MODE ?= debug
-ARCH		:= x86_64
 HOST_ARCH	:= $(shell uname -m)
-VERSION		:= $(shell grep '^version' $(ROOT_DIR)/upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
+ROOT_DIR	:= $(shell pwd)
+OUT_BUILD_DIR	:= $(ROOT_DIR)/build
+
+PKG_DIR   := $(ROOT_DIR)/pkg
 PKG_NAME	:= upac-$(VERSION)-$(ARCH)
+VERSION		:= $(shell grep '^version' $(ROOT_DIR)/upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
-OUT_BUILD_DIR	:= $(ROOT_DIR)/build/$(MODE)
+ARCH      ?= x86_64
+LIBC      ?= gnu
+MODE      ?= debug
 
-LIBC ?= gnu
-
-RUSTFLAGS := -C prefer-dynamic=false
+TARGET    := $(ARCH)-linux-$(LIBC)
+ZIG_TARGET := $(ARCH)-linux-$(LIBC)
 CARGO_TARGET ?= $(ARCH)-unknown-linux-$(LIBC)
+
+STACK_CHECK  ?= false
+CPU          ?= native
 
 ARCH_PKG_FLAGS	?= --nodeps --noconfirm -f
 RPM_PKG_FLAGS	?= -bb 	--define "_topdir $(PKG_DIR)/rpm" --define "_rpmdir $(PKG_DIR)/rpm/RPMS" --define "version $(VERSION)"
@@ -21,13 +25,20 @@ DEB_PKG_FLAGS	?= --root-owner-group
 .PHONY: all build prepare build-lib build-backends build-cli build-removing pkg-arch pkg-rpm pkg-deb sync sync-build sync-pkg clean clean-build clean-pkg
 
 # ── Defining compilation flags ────────────────────────────────────────────────────────────────────
-ifeq ($(MODE), release)
-    ZIG_FLAGS   := -Doptimize=ReleaseSafe --verbose-link
+ifeq ($(strip $(MODE)), release)
+    $(info --- INFO: Building in RELEASE mode ---)
+    STRIP       := true
+    STACK_CHECK := false
+    ZIG_FLAGS   := -Doptimize=ReleaseSafe -Dstrip=$(STRIP) -Dstack-check=$(STACK_CHECK) -Dcpu=$(CPU)
     CARGO_FLAGS := --release
+    RUSTFLAGS   += -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false -C target-cpu=$(subst _,-,$(strip $(CPU)))
     RB_DIR      := release
 else
-    ZIG_FLAGS   :=
-    CARGO_FLAGS :=
+    $(info --- INFO: Building in DEBUG mode ---)
+    STRIP       := false
+    ZIG_FLAGS   := -Doptimize=Debug -Dstrip=$(STRIP) -Dstack-check=$(STACK_CHECK) -Dcpu=$(CPU) --verbose-link
+    CARGO_FLAGS := --all-features
+    RUSTFLAGS   += -C debuginfo=2 -C force-frame-pointers=yes -C target-cpu=$(CPU)
     RB_DIR      := debug
 endif
 
@@ -47,9 +58,9 @@ else
 endif
 
 # ── Building ────────────────────────────────────────────────────────────────────
-build: prepare build-lib build-backends build-cli build-removing
+build: prepare-dirs build-lib build-backends build-cli build-removing
 
-prepare:
+prepare-dirs:
 	@echo "--- Preparing directories for building in $(MODE) mode ---"
 	@mkdir -p $(OUT_BUILD_DIR)/bin
 	@mkdir -p $(OUT_BUILD_DIR)/lib
@@ -71,7 +82,7 @@ build-backends:
 build-cli:
 	@echo "--- Building upac-cli in $(MODE) mode ($(CARGO_TARGET)) ---"
 	@cd $(ROOT_DIR)/upac-cli && RUSTFLAGS="$(RUSTFLAGS)" cargo build --target $(CARGO_TARGET) --target-dir $(OUT_BUILD_DIR) $(CARGO_FLAGS)
-	@cp $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(RB_DIR)/upac $(OUT_BUILD_DIR)/bin/
+	@cp $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
 
 build-removing:
 	@echo "--- Removing building temp directory in $(MODE) mode ($(CARGO_TARGET)) ---"
