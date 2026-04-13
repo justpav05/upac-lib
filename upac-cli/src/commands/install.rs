@@ -14,41 +14,50 @@ use std::time::Duration;
 use crate::backends::{Backend, BackendKind, PackageMeta};
 
 use crate::config::Config;
-use crate::ffi::{CInstallRequest, CSlice, UpacLib};
+use crate::ffi::{CInstallRequest, CPackageEntry, CSlice, UpacLib, UpacLibGuard};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
 enum State {
-    DetectingBackend,
+    DetectingBackend(String),
     PreparingPackage,
     Installing,
     Done,
     Failed(String),
 }
 
+struct PreparedPackage {
+    meta: PackageMeta,
+    temp_path: String,
+    checksum: String,
+}
+
 struct InstallMachine {
     config: Config,
-    file: String,
+    files: Vec<String>,
     backend: Option<String>,
-    checksum: String,
+    checksums: Vec<String>,
 
-    kind: Option<BackendKind>,
-    tmp_dir: Option<String>,
-    package_meta: Option<PackageMeta>,
+    prepared_packages: Vec<PreparedPackage>,
+    tmp_dirs: Vec<String>,
 
     stack: Vec<State>,
 }
 
 impl InstallMachine {
-    fn new(config: Config, file: String, backend: Option<String>, checksum: String) -> Self {
+    fn new(
+        config: Config,
+        files: Vec<String>,
+        backend: Option<String>,
+        checksums: Vec<String>,
+    ) -> Self {
         Self {
             config,
-            file,
+            files,
             backend,
-            checksum,
-            kind: None,
-            tmp_dir: None,
-            package_meta: None,
+            checksums,
+            prepared_packages: Vec::new(),
+            tmp_dirs: Vec::new(),
             stack: Vec::new(),
         }
     }
@@ -60,96 +69,97 @@ impl InstallMachine {
 
 impl Drop for InstallMachine {
     fn drop(&mut self) {
-        if let Some(tmp) = &self.tmp_dir {
-            let _ = std::fs::remove_dir_all(tmp);
+        for tmp_dir in &self.tmp_dirs {
+            let _ = fs::remove_dir_all(tmp_dir);
         }
     }
 }
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_detecting_backend(install_machine: &mut InstallMachine) -> Result<()> {
-    install_machine.enter(State::DetectingBackend);
+fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
+    machine.enter(State::PreparingPackage);
 
-    let kind = if let Some(flag) = &install_machine.backend.clone() {
-        BackendKind::from_flag(flag)?
-    } else {
-        BackendKind::detect(&install_machine.file).ok_or_else(|| {
-            anyhow::anyhow!(
-                "cannot detect backend for '{}'. Use --backend to specify one",
-                install_machine.file
-            )
-        })?
-    };
+    let files: Vec<String> = machine.files.clone();
 
-    println!("{} backend: {:?}", "→".cyan(), kind);
-    install_machine.kind = Some(kind);
+    for (index, file) in files.iter().enumerate() {
+        let kind = if let Some(flag) = &machine.backend {
+            BackendKind::from_flag(flag)?
+        } else {
+            BackendKind::detect(file).ok_or_else(|| {
+                anyhow::anyhow!("cannot detect backend for '{file}'. Use --backend to specify one")
+            })?
+        };
 
-    state_preparing_package(install_machine)
+        machine.enter(State::DetectingBackend(file.clone()));
+        println!("{} backend: {:?}", "→".cyan(), kind);
+
+        let progress_bar = spinner("Verifying and extracting package...");
+
+        let tmp_string_path = format!("/tmp/upac_install_{}_{}", process::id(), index);
+        fs::remove_dir_all(&tmp_string_path).ok();
+        fs::create_dir_all(&tmp_string_path)?;
+        machine.tmp_dirs.push(tmp_string_path.clone());
+
+        let backend = Backend::load(&kind)?;
+
+        let abs_file = fs::canonicalize(file)
+            .map_err(|err| anyhow::anyhow!("cannot resolve path '{file}': {err}"))?;
+        let abs_file_str = abs_file
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid path encoding"))?
+            .to_owned();
+
+        let checksum = if machine.checksums.is_empty() {
+            compute_checksum(&abs_file_str)?
+        } else {
+            machine.checksums[index].clone()
+        };
+
+        let package_meta = backend
+            .prepare(&abs_file_str, &tmp_string_path, &checksum)
+            .map_err(|err| {
+                progress_bar.finish_and_clear();
+                err
+            })?;
+
+        progress_bar.finish_and_clear();
+
+        machine.prepared_packages.push(PreparedPackage {
+            meta: package_meta,
+            temp_path: tmp_string_path,
+            checksum,
+        });
+    }
+
+    state_installing(machine)
 }
 
-fn state_preparing_package(install_machine: &mut InstallMachine) -> Result<()> {
-    install_machine.enter(State::PreparingPackage);
-
-    let progress_bar = spinner("Verifying and extracting package...");
-
-    let tmp_string_path = format!("/tmp/upac_install_{}", process::id());
-
-    fs::remove_dir_all(&tmp_string_path).ok();
-    fs::create_dir_all(&tmp_string_path)?;
-
-    install_machine.tmp_dir = Some(tmp_string_path.clone());
-
-    let backend = Backend::load(install_machine.kind.as_ref().unwrap())?;
-
-    let abs_file = fs::canonicalize(&install_machine.file)
-        .map_err(|err| anyhow::anyhow!("cannot resolve path '{}': {err}", install_machine.file))?;
-    let abs_file_str = abs_file
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid path encoding"))?
-        .to_owned();
-
-    let package_meta = backend
-        .prepare(&abs_file_str, &tmp_string_path, &install_machine.checksum)
-        .map_err(|err| {
-            progress_bar.finish_and_clear();
-            err
-        })?;
-
-    progress_bar.finish_and_clear();
-    println!(
-        "{} {} {}",
-        "✓".green().bold(),
-        package_meta.name.bold(),
-        package_meta.version.dimmed()
-    );
-
-    install_machine.package_meta = Some(package_meta);
-
-    state_installing(install_machine)
-}
-
-fn state_installing(install_machine: &mut InstallMachine) -> Result<()> {
-    install_machine.enter(State::Installing);
+fn state_installing(machine: &mut InstallMachine) -> Result<()> {
+    machine.enter(State::Installing);
 
     let progress_bar = spinner("Installing...");
 
-    let upac_lib = UpacLib::load()?;
+    let upac_lib = UpacLibGuard::load()?;
 
-    let package_meta = install_machine.package_meta.as_ref().unwrap();
-    let tmp_dir_string_path = install_machine.tmp_dir.as_ref().unwrap();
-    let c_package_meta = package_meta.as_c();
-
-    let branch = &install_machine.config.ostree.branch;
+    let c_entries: Vec<CPackageEntry> = machine
+        .prepared_packages
+        .iter()
+        .map(|pkg| CPackageEntry {
+            meta: pkg.meta.as_c(),
+            temp_path: CSlice::from_str(&pkg.temp_path),
+            checksum: CSlice::from_str(&pkg.checksum),
+        })
+        .collect();
 
     let c_install_request = CInstallRequest {
-        meta: c_package_meta,
-        package_temp_path: CSlice::from_str(tmp_dir_string_path),
-        package_checksum: CSlice::from_str(&install_machine.checksum),
-        repo_path: CSlice::from_str(&install_machine.config.paths.repo_path),
-        root_path: CSlice::from_str(&install_machine.config.paths.root_path),
-        db_path: CSlice::from_str(&install_machine.config.paths.database_path),
-        branch: CSlice::from_str(branch),
-        max_retries: install_machine.config.step_retries,
+        packages: c_entries.as_ptr(),
+        packages_len: c_entries.len(),
+
+        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
+        root_path: CSlice::from_str(&machine.config.paths.root_path),
+        db_path: CSlice::from_str(&machine.config.paths.database_path),
+        branch: CSlice::from_str(&machine.config.ostree.branch),
+        max_retries: machine.config.step_retries,
     };
 
     let return_code = unsafe { (upac_lib.install)(c_install_request) };
@@ -157,19 +167,20 @@ fn state_installing(install_machine: &mut InstallMachine) -> Result<()> {
     progress_bar.finish_and_clear();
     UpacLib::check(return_code, "install")?;
 
-    state_done(install_machine)
+    state_done(machine)
 }
 
-fn state_done(install_machine: &mut InstallMachine) -> Result<()> {
-    install_machine.enter(State::Done);
+fn state_done(machine: &mut InstallMachine) -> Result<()> {
+    machine.enter(State::Done);
 
-    let package_meta = install_machine.package_meta.as_ref().unwrap();
-    println!(
-        "{} installed {} {}",
-        "✓".green().bold(),
-        package_meta.name.bold(),
-        package_meta.version.dimmed()
-    );
+    for pkg in &machine.prepared_packages {
+        println!(
+            "{} installed {} {}",
+            "✓".green().bold(),
+            pkg.meta.name.bold(),
+            pkg.meta.version.dimmed()
+        );
+    }
 
     Ok(())
 }
@@ -189,32 +200,21 @@ pub fn run(
         );
     }
 
-    for (index, file) in files.iter().enumerate() {
-        let checksum = if checksums.is_empty() {
-            compute_checksum(file)?
-        } else {
-            checksums[index].clone()
-        };
+    let mut machine = InstallMachine::new(config, files, backend, checksums);
 
-        let mut install_machine =
-            InstallMachine::new(config.clone(), file.clone(), backend.clone(), checksum);
-
-        state_detecting_backend(&mut install_machine).map_err(|err| {
-            if !matches!(install_machine.stack.last(), Some(State::Failed(_))) {
-                install_machine.enter(State::Failed(err.to_string()));
-            }
-            if config.verbose {
-                eprintln!(
-                    "{} failed at state {:?}",
-                    "✗".red().bold(),
-                    install_machine.stack.last()
-                );
-            }
-            err
-        })?;
-    }
-
-    Ok(())
+    state_preparing_package(&mut machine).map_err(|err| {
+        if !matches!(machine.stack.last(), Some(State::Failed(_))) {
+            machine.enter(State::Failed(err.to_string()));
+        }
+        if machine.config.verbose {
+            eprintln!(
+                "{} failed at state {:?}",
+                "✗".red().bold(),
+                machine.stack.last()
+            );
+        }
+        err
+    })
 }
 
 // ── Хелперы ───────────────────────────────────────────────────────────────────

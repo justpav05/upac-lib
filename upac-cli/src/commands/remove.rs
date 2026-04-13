@@ -7,7 +7,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::ffi::{CSlice, CUninstallRequest, UpacLib};
+use crate::ffi::{CSlice, CUninstallRequest, UpacLib, UpacLibGuard};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -60,7 +60,7 @@ fn state_uninstalling(remove_machine: &mut RemoveMachine) -> Result<()> {
 
     let progress_bar = spinner("Removing package...");
 
-    let upac_lib = UpacLib::load()?;
+    let upac_lib = UpacLibGuard::load()?;
 
     let branch = &remove_machine.config.ostree.branch;
 

@@ -11,18 +11,24 @@ const rollback = @import("upac-rollback");
 const init = @import("upac-init");
 
 const CSlice = types.CSlice;
+
 const CPackageMeta = types.CPackageMeta;
+const CPackageEntry = types.CPackageEntry;
+
 const CInstallRequest = types.CInstallRequest;
 const CUninstallRequest = types.CUninstallRequest;
 const CRollbackRequest = types.CRollbackRequest;
+
 const CDiffArray = types.CDiffArray;
 const CDiffEntry = types.CDiffEntry;
+
 const CCommitArray = types.CCommitArray;
 const CCommitEntry = types.CCommitEntry;
 const CSystemPaths = types.CSystemPaths;
-const CInitRequest = types.CInitRequest;
-const CRepoMode = types.CRepoMode;
 
+const CInitRequest = types.CInitRequest;
+
+const CRepoMode = types.CRepoMode;
 const ErrorCode = types.ErrorCode;
 
 // An internal helper function that converts the C struct CPackageMeta to native PackageMeta, translating CSlices into regular slices ([]const u8)
@@ -41,21 +47,28 @@ fn toMeta(c_package_meta: CPackageMeta) global_types.PackageMeta {
 
 // The main entry point for package installation. It gathers installation data from the request, initializes the installation engine, and returns an error code as an i32
 pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 {
-    const install_data = installer.InstallData{
-        .package_meta = toMeta(c_install_request.meta),
-        .package_temp_path = c_install_request.package_temp_path.toSlice(),
-        .package_checksum = c_install_request.package_checksum.toSlice(),
+    const allocator = types.allocator();
 
+    const packages_c = c_install_request.packages[0..c_install_request.packages_len];
+
+    const install_entries = allocator.alloc(installer.InstallEntry, packages_c.len) catch
+        return @intFromEnum(ErrorCode.out_of_memory);
+    defer allocator.free(install_entries);
+
+    for (packages_c, 0..) |c_entry, index| {
+        install_entries[index] = .{ .package = .{ .meta = toMeta(c_entry.meta), .files = &.{} }, .temp_path = c_entry.temp_path.toSlice(), .checksum = c_entry.checksum.toSlice() };
+    }
+
+    const install_data = installer.InstallData{
+        .packages = install_entries,
         .repo_path = c_install_request.repo_path.toSlice(),
         .root_path = c_install_request.root_path.toSlice(),
         .database_path = c_install_request.db_path.toSlice(),
-
         .branch = c_install_request.branch.toSlice(),
-
         .max_retries = c_install_request.max_retries,
     };
 
-    installer.InstallerMachine.run(install_data, types.allocator()) catch |err|
+    installer.InstallerMachine.run(install_data, allocator) catch |err|
         return @intFromEnum(types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);

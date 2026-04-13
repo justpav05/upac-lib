@@ -32,6 +32,12 @@ pub const CSliceArray = extern struct {
     }
 };
 
+pub const CPackageEntry = extern struct {
+    meta: CPackageMeta,
+    temp_path: CSlice,
+    checksum: CSlice,
+};
+
 // A packet metadata structure adapted for transmission via C
 pub const CPackageMeta = extern struct {
     name: CSlice,
@@ -46,17 +52,13 @@ pub const CPackageMeta = extern struct {
 
 // Parameter sets for the сorresponding operation — Installation
 pub const CInstallRequest = extern struct {
-    meta: CPackageMeta,
-
-    package_temp_path: CSlice,
-    package_checksum: CSlice,
+    packages: [*]const CPackageEntry,
+    packages_len: usize,
 
     repo_path: CSlice,
     root_path: CSlice,
     db_path: CSlice,
-
     branch: CSlice,
-
     max_retries: u8,
 };
 
@@ -121,8 +123,6 @@ pub const CRollbackRequest = extern struct {
 
     commit_hash: CSlice,
 };
-
-
 
 // A set of paths required to initialize the system
 pub const CSystemPaths = extern struct {

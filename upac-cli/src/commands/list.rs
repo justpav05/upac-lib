@@ -5,7 +5,7 @@ use colored::Colorize;
 use std::slice;
 
 use crate::config::Config;
-use crate::ffi::{CCommitArray, CSlice, UpacLib};
+use crate::ffi::{CCommitArray, CSlice, UpacLib, UpacLibGuard};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -49,7 +49,7 @@ impl ListMachine {
 fn state_fetching_commits(machine: &mut ListMachine) -> Result<()> {
     machine.enter(State::FetchingCommits);
 
-    let upac_lib = UpacLib::load()?;
+    let upac_lib = UpacLibGuard::load()?;
     let c_repo_path = CSlice::from_str(&machine.config.paths.repo_path);
     let c_branch = CSlice::from_str(&machine.config.ostree.branch);
 

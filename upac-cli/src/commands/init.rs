@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::ffi::{CInitRequest, CRepoMode, CSlice, CSystemPaths, UpacLib};
+use crate::ffi::{CInitRequest, CRepoMode, CSlice, CSystemPaths, UpacLib, UpacLibGuard};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -70,7 +70,7 @@ fn state_initializing(init_machine: &mut InitMachine) -> Result<()> {
 
     let progress_bar = spinner("Initializing system directories...");
 
-    let upac_lib = UpacLib::load()?;
+    let upac_lib = UpacLibGuard::load()?;
 
     let c_system_paths = CSystemPaths {
         repo_path: CSlice::from_str(&init_machine.config.paths.repo_path),

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::config::Config;
 
-use crate::ffi::{CRollbackRequest, CSlice, UpacLib};
+use crate::ffi::{CRollbackRequest, CSlice, UpacLib, UpacLibGuard};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -69,7 +69,7 @@ fn state_rolling_back(rolling_machine: &mut RollbackMachine) -> Result<()> {
 
     let progress_bar = spinner("Rolling back...");
 
-    let upac_lib = UpacLib::load()?;
+    let upac_lib = UpacLibGuard::load()?;
 
     let c_rollback_request = CRollbackRequest {
         root_path: CSlice::from_str(&rolling_machine.config.paths.root_path),

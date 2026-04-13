@@ -1,8 +1,9 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
-const database = @import("upac-types");
-const PackageMeta = database.PackageMeta;
+const types = @import("upac-types");
+const Package = types.Package;
+const PackageMeta = types.PackageMeta;
 
 const file = @import("upac-file");
 const c_libs = file.c_libs;
@@ -33,13 +34,16 @@ pub const StateId = enum {
     failed,
 };
 
+pub const InstallEntry = struct {
+    package: Package,
+    temp_path: []const u8,
+    checksum: []const u8,
+};
+
 // ── InstallData ───────────────────────────────────────────────────────────────
 // A container structure holding all installation parameters: package metadata, paths to the repository and database, as well as retry limits
 pub const InstallData = struct {
-    package_meta: PackageMeta,
-
-    package_temp_path: []const u8,
-    package_checksum: []const u8,
+    packages: []const InstallEntry,
 
     repo_path: []const u8,
     root_path: []const u8,
@@ -58,6 +62,8 @@ pub const InstallerMachine = struct {
 
     repo: ?*c_libs.OstreeRepo,
     mtree: ?*c_libs.OstreeMutableTree,
+
+    current_package_index: usize = 0,
 
     stack: std.ArrayList(StateId),
     allocator: std.mem.Allocator,
@@ -94,6 +100,8 @@ pub const InstallerMachine = struct {
 
             .repo = null,
             .mtree = null,
+
+            .current_package_index = 0,
 
             .stack = std.ArrayList(StateId).init(allocator),
             .allocator = allocator,

@@ -21,12 +21,17 @@ impl CSlice {
         }
     }
 
-
-
     pub unsafe fn as_str(&self) -> &str {
         let slice = slice::from_raw_parts(self.ptr, self.len);
         str::from_utf8_unchecked(slice)
     }
+}
+
+#[repr(C)]
+pub struct CPackageEntry {
+    pub meta: CPackageMeta,
+    pub temp_path: CSlice,
+    pub checksum: CSlice,
 }
 
 #[repr(C)]
@@ -44,10 +49,8 @@ pub struct CPackageMeta {
 // ── Запросы ───────────────────────────────────────────────────────────────────
 #[repr(C)]
 pub struct CInstallRequest {
-    pub meta: CPackageMeta,
-
-    pub package_temp_path: CSlice,
-    pub package_checksum: CSlice,
+    pub packages: *const CPackageEntry,
+    pub packages_len: usize,
 
     pub repo_path: CSlice,
     pub root_path: CSlice,
@@ -237,5 +240,30 @@ impl UpacLib {
             _ => "unknown error",
         };
         bail!("{context}: {msg} (code {code})");
+    }
+}
+
+pub struct UpacLibGuard {
+    lib: UpacLib,
+}
+
+impl UpacLibGuard {
+    pub fn load() -> Result<Self> {
+        Ok(Self {
+            lib: UpacLib::load()?,
+        })
+    }
+}
+
+impl std::ops::Deref for UpacLibGuard {
+    type Target = UpacLib;
+    fn deref(&self) -> &Self::Target {
+        &self.lib
+    }
+}
+
+impl Drop for UpacLibGuard {
+    fn drop(&mut self) {
+        unsafe { (self.lib.deinit)() };
     }
 }

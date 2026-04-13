@@ -6,7 +6,6 @@ const data = @import("upac-data");
 const file = @import("upac-file");
 const c_libs = file.c_libs;
 
-
 const installer_mod = @import("installer.zig");
 const InstallerMachine = installer_mod.InstallerMachine;
 const InstallerError = installer_mod.InstallerError;
@@ -16,10 +15,12 @@ const InstallerError = installer_mod.InstallerError;
 pub fn stateVerifying(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.verifying);
 
-    std.fs.accessAbsolute(machine.data.package_temp_path, .{}) catch {
-        stateFailed(machine);
-        return InstallerError.PackagePathNotFound;
-    };
+    for (machine.data.packages) |entry| {
+        std.fs.accessAbsolute(entry.temp_path, .{}) catch {
+            stateFailed(machine);
+            return InstallerError.PackagePathNotFound;
+        };
+    }
 
     std.fs.accessAbsolute(machine.data.repo_path, .{}) catch {
         stateFailed(machine);
@@ -134,9 +135,11 @@ fn stateCheckInstalled(machine: *InstallerMachine) anyerror!void {
         const separator_index = std.mem.indexOfScalar(u8, trimmed_line, ' ') orelse continue;
         const package_name = trimmed_line[0..separator_index];
 
-        if (std.ascii.eqlIgnoreCase(package_name, machine.data.package_meta.name)) {
-            stateFailed(machine);
-            return InstallerError.AlreadyInstalled;
+        for (machine.data.packages[0..machine.current_package_index]) |already_queued| {
+            if (std.ascii.eqlIgnoreCase(already_queued.package.meta.name, package_name)) {
+                stateFailed(machine);
+                return InstallerError.AlreadyInstalled;
+            }
         }
     }
 
@@ -148,17 +151,14 @@ fn stateCheckInstalled(machine: *InstallerMachine) anyerror!void {
 fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.write_database);
 
-    // Вычисляем relative часть database_path относительно root_path
+    const current_install_entry = machine.data.packages[machine.current_package_index];
+
     const relative_database_path = if (std.mem.startsWith(u8, machine.data.database_path, machine.data.root_path))
         machine.data.database_path[machine.data.root_path.len..]
     else
         machine.data.database_path;
 
-    const staged_database_dir_path = try std.fmt.allocPrint(
-        machine.allocator,
-        "{s}{s}",
-        .{ machine.data.package_temp_path, relative_database_path },
-    );
+    const staged_database_dir_path = try std.fmt.allocPrint(machine.allocator, "{s}{s}", .{ current_install_entry.temp_path, relative_database_path });
     defer machine.allocator.free(staged_database_dir_path);
 
     std.fs.cwd().makePath(staged_database_dir_path) catch |err| {
@@ -169,12 +169,12 @@ fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
     var file_map = data.FileMap.init(machine.allocator);
     defer data.freeFileMap(&file_map, machine.allocator);
 
-    collectFileChecksums(machine, machine.data.package_temp_path, machine.data.package_temp_path, &file_map) catch |err| {
+    collectFileChecksums(machine, current_install_entry.temp_path, current_install_entry.temp_path, &file_map) catch |err| {
         stateFailed(machine);
         return err;
     };
 
-    data.writePackage(staged_database_dir_path, machine.data.package_checksum, machine.data.package_meta, file_map, machine.allocator) catch |err| {
+    data.writePackage(staged_database_dir_path, current_install_entry.checksum, current_install_entry.package.meta, file_map, machine.allocator) catch |err| {
         if (machine.exhausted()) {
             stateFailed(machine);
             return err;
@@ -191,15 +191,21 @@ fn stateProcessDbFiles(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.process_db_files);
 
     var gerror: ?*c_libs.GError = null;
-    const temp_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.package_temp_path});
+
+    const current_install_entry = machine.data.packages[machine.current_package_index];
+    const temp_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{current_install_entry.temp_path});
     defer machine.allocator.free(temp_path_c);
 
-    // Let OSTree import the whole extracted tree (including generated .meta/.files)
-    // so directory metadata and dirtree objects are always valid for write_mtree().
     if (c_libs.ostree_repo_write_dfd_to_mtree(machine.repo.?, std.c.AT.FDCWD, temp_path_c.ptr, machine.mtree.?, null, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         stateFailed(machine);
         return InstallerError.RepoOpenFailed;
+    }
+
+    machine.current_package_index += 1;
+    if (machine.current_package_index < machine.data.packages.len) {
+        machine.resetRetries();
+        return stateCheckInstalled(machine);
     }
 
     machine.resetRetries();
@@ -248,7 +254,9 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
         }
     }
 
-    try body_writer.print("{s} {s}\n", .{ machine.data.package_meta.name, machine.data.package_checksum });
+    for (machine.data.packages) |entry| {
+        try body_writer.print("{s} {s}\n", .{ entry.package.meta.name, entry.checksum });
+    }
 
     const body_c = try machine.allocator.dupeZ(u8, body_buf.items);
     defer machine.allocator.free(body_c);
@@ -273,7 +281,16 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
         return stateCommit(machine);
     }
 
-    const subject_c = try std.fmt.allocPrintZ(machine.allocator, "install: {s} {s}", .{ machine.data.package_meta.name, machine.data.package_meta.version });
+    var subject_buf = std.ArrayList(u8).init(machine.allocator);
+    defer subject_buf.deinit();
+
+    try subject_buf.appendSlice("install:");
+    for (machine.data.packages, 0..) |entry, index| {
+        const separator = if (index == 0) " " else ", ";
+        try subject_buf.writer().print("{s}{s} {s}", .{ separator, entry.package.meta.name, entry.package.meta.version });
+    }
+
+    const subject_c = try machine.allocator.dupeZ(u8, subject_buf.items);
     defer machine.allocator.free(subject_c);
 
     var commit_checksum: ?[*:0]u8 = null;
@@ -341,7 +358,7 @@ fn stateDone(machine: *InstallerMachine) anyerror!void {
 fn stateFailed(machine: *InstallerMachine) void {
     _ = machine.enter(.failed) catch {};
     // std.debug.print("✗ install failed '{s}', states: ", .{
-    //     machine.data.package_meta.name,
+    //     machine.data.packages[machine.current_package_index].package_meta.name,
     // });
     // for (machine.stack.items) |state| {
     //     std.debug.print("{s} ", .{@tagName(state)});

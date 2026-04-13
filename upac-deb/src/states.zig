@@ -200,7 +200,6 @@ fn stateVerifyingFiles(backend_machine: *Machine) anyerror!void {
         _ = try std.fmt.bufPrint(&actual_hex, "{}", .{std.fmt.fmtSliceHexLower(&digest)});
 
         if (!std.mem.eql(u8, &actual_hex, expected_hash_hex)) {
-            std.debug.print("MD5 mismatch for {s}\n", .{file_path});
             stateFailed(backend_machine);
             return BackendError.ChecksumMismatch;
         }
