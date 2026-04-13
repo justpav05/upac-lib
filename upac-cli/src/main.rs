@@ -41,10 +41,13 @@ enum Command {
     },
 
     Remove {
-        name: String,
+        name: Vec<String>,
     },
 
     List {
+        #[arg(long)]
+        commit: bool,
+
         #[arg(long)]
         full: bool,
     },
@@ -86,8 +89,8 @@ fn run() -> Result<()> {
         Command::Remove { name } => {
             commands::remove::run(config, name)?;
         }
-        Command::List { full } => {
-            commands::list::run(config, full)?;
+        Command::List { commit, full } => {
+            commands::list::run(config, commit, full)?;
         }
         Command::Commit => {
             commands::commit::run(config)?;

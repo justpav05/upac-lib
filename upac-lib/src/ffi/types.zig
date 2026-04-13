@@ -50,6 +50,15 @@ pub const CPackageMeta = extern struct {
     checksum: CSlice,
 };
 
+pub const CPackageMetaArray = extern struct {
+    ptr: [*]CPackageMeta,
+    len: usize,
+
+    pub fn toSlice(self: CPackageMetaArray) []CPackageMeta {
+        return self.ptr[0..self.len];
+    }
+};
+
 // Parameter sets for the сorresponding operation — Installation
 pub const CInstallRequest = extern struct {
     packages: [*]const CPackageEntry,
@@ -64,7 +73,8 @@ pub const CInstallRequest = extern struct {
 
 // // Parameter sets for the сorresponding operation — Uninstallation
 pub const CUninstallRequest = extern struct {
-    package_name: CSlice,
+    package_names: [*]const CSlice,
+    package_names_len: usize,
 
     repo_path: CSlice,
     root_path: CSlice,

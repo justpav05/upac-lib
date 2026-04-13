@@ -20,15 +20,15 @@ enum State {
 
 struct RemoveMachine {
     config: Config,
-    package_name: String,
+    package_names: Vec<String>,
     stack: Vec<State>,
 }
 
 impl RemoveMachine {
-    fn new(config: Config, package_name: String) -> Self {
+    fn new(config: Config, package_names: Vec<String>) -> Self {
         Self {
             config,
-            package_name,
+            package_names,
             stack: Vec::new(),
         }
     }
@@ -39,40 +39,40 @@ impl RemoveMachine {
 }
 
 // ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_validating(remove_machine: &mut RemoveMachine) -> Result<()> {
-    remove_machine.enter(State::Validating);
+fn state_validating(machine: &mut RemoveMachine) -> Result<()> {
+    machine.enter(State::Validating);
 
-    if remove_machine.package_name.is_empty() {
-        anyhow::bail!("package name cannot be empty");
+    for name in &machine.package_names {
+        if name.is_empty() {
+            anyhow::bail!("package name cannot be empty");
+        }
+        println!("{} removing {}", "→".cyan(), name.bold());
     }
 
-    println!(
-        "{} removing {}",
-        "→".cyan(),
-        remove_machine.package_name.bold()
-    );
-
-    state_uninstalling(remove_machine)
+    state_uninstalling(machine)
 }
 
-fn state_uninstalling(remove_machine: &mut RemoveMachine) -> Result<()> {
-    remove_machine.enter(State::Uninstalling);
+fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
+    machine.enter(State::Uninstalling);
 
-    let progress_bar = spinner("Removing package...");
+    let progress_bar = spinner("Removing packages...");
 
     let upac_lib = UpacLibGuard::load()?;
 
-    let branch = &remove_machine.config.ostree.branch;
+    let c_names: Vec<CSlice> = machine
+        .package_names
+        .iter()
+        .map(|name| CSlice::from_str(name))
+        .collect();
 
     let c_remove_request = CUninstallRequest {
-        package_name: CSlice::from_str(&remove_machine.package_name),
-
-        repo_path: CSlice::from_str(&remove_machine.config.paths.repo_path),
-        root_path: CSlice::from_str(&remove_machine.config.paths.root_path),
-        db_path: CSlice::from_str(&remove_machine.config.paths.database_path),
-
-        branch: CSlice::from_str(branch),
-        max_retries: remove_machine.config.step_retries,
+        package_names: c_names.as_ptr(),
+        package_names_len: c_names.len(),
+        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
+        root_path: CSlice::from_str(&machine.config.paths.root_path),
+        db_path: CSlice::from_str(&machine.config.paths.database_path),
+        branch: CSlice::from_str(&machine.config.ostree.branch),
+        max_retries: machine.config.step_retries,
     };
 
     let return_code = unsafe { (upac_lib.uninstall)(c_remove_request) };
@@ -80,22 +80,20 @@ fn state_uninstalling(remove_machine: &mut RemoveMachine) -> Result<()> {
     progress_bar.finish_and_clear();
     UpacLib::check(return_code, "uninstall")?;
 
-    state_done(remove_machine)
+    state_done(machine)
 }
 
-fn state_done(remove_machine: &mut RemoveMachine) -> Result<()> {
-    remove_machine.enter(State::Done);
-    println!(
-        "{} removed {}",
-        "✓".green().bold(),
-        remove_machine.package_name.bold()
-    );
+fn state_done(machine: &mut RemoveMachine) -> Result<()> {
+    machine.enter(State::Done);
+    for name in &machine.package_names {
+        println!("{} removed {}", "✓".green().bold(), name.bold());
+    }
     Ok(())
 }
 
 // ── Публичное API ─────────────────────────────────────────────────────────────
-pub fn run(config: Config, package_name: String) -> Result<()> {
-    let mut remove_machine = RemoveMachine::new(config, package_name);
+pub fn run(config: Config, package_names: Vec<String>) -> Result<()> {
+    let mut remove_machine = RemoveMachine::new(config, package_names);
 
     state_validating(&mut remove_machine).map_err(|err| {
         if !matches!(remove_machine.stack.last(), Some(State::Failed(_))) {

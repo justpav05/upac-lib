@@ -1,7 +1,7 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
-const data_mod = @import("upac-data");
+const data = @import("upac-data");
 
 const file_mod = @import("upac-file");
 const c_libs = file_mod.c_libs;
@@ -40,7 +40,7 @@ pub const StateId = enum {
 // ── UninstallerFSM data ─────────────────────────────────────────────────────────────────────
 // Set of input parameters: package name, paths to the repository and database, as well as the target branch for the commit
 pub const UninstallData = struct {
-    package_name: []const u8,
+    package_names: []const []const u8,
 
     repo_path: []const u8,
     root_path: []const u8,
@@ -63,8 +63,10 @@ pub const UninstallerMachine = struct {
     staging_path: ?[:0]const u8 = null,
     commit_checksum: ?[*:0]u8 = null,
 
+    current_package_index: usize,
+
+    package_file_map: ?data.FileMap,
     package_checksum: ?[]const u8,
-    package_file_map: ?data_mod.FileMap,
 
     stack: std.ArrayList(StateId),
     allocator: std.mem.Allocator,
@@ -89,8 +91,8 @@ pub const UninstallerMachine = struct {
         if (self.staging_path) |path| self.allocator.free(path);
         if (self.commit_checksum) |checksum| c_libs.g_free(@ptrCast(checksum));
 
+        if (self.package_file_map) |*map| data.freeFileMap(@constCast(map), self.allocator);
         if (self.package_checksum) |checksum| self.allocator.free(checksum);
-        if (self.package_file_map) |*file_map| data_mod.freeFileMap(file_map, self.allocator);
 
         if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
         if (self.repo) |repo| c_libs.g_object_unref(repo);
@@ -98,15 +100,20 @@ pub const UninstallerMachine = struct {
         self.stack.deinit();
     }
 
-    // Main entry point: initializes the uninstallation engine and launches the package removal process
+    // Entry point: initializes the uninstallation engine and launches the package removal process
     pub fn run(uninstall_data: UninstallData, allocator: std.mem.Allocator) !void {
         var machine = UninstallerMachine{
             .data = uninstall_data,
             .retries = 0,
+
             .repo = null,
             .mtree = null,
-            .package_checksum = null,
+
+            .current_package_index = 0,
+
             .package_file_map = null,
+            .package_checksum = null,
+
             .stack = std.ArrayList(StateId).init(allocator),
             .allocator = allocator,
         };

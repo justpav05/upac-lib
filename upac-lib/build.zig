@@ -55,6 +55,7 @@ pub fn build(b: *std.Build) void {
 
     shared_lib.root_module.addImport("upac-types", upac_types);
     shared_lib.root_module.addImport("upac-data", upac_data);
+    shared_lib.root_module.addImport("upac-file", upac_file);
 
     shared_lib.root_module.addImport("upac-installer", upac_installer);
     shared_lib.root_module.addImport("upac-uninstaller", upac_uninstaller);

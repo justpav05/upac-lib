@@ -131,7 +131,7 @@ fn stateCheckInstalled(machine: *UninstallerMachine) !void {
         const pkg_name = trimmed_line[0..space_index];
         const pkg_checksum = std.mem.trim(u8, trimmed_line[space_index + 1 ..], " \t");
 
-        if (std.ascii.eqlIgnoreCase(pkg_name, machine.data.package_name)) {
+        if (std.ascii.eqlIgnoreCase(pkg_name, machine.data.package_names[machine.current_package_index])) {
             machine.package_checksum = try machine.allocator.dupe(u8, pkg_checksum);
             machine.resetRetries();
             return stateLoadFiles(machine);
@@ -234,6 +234,21 @@ fn stateRemoveDbFiles(machine: *UninstallerMachine) !void {
         return UninstallerError.FileNotFound;
     };
 
+    if (machine.package_file_map) |*file_map| {
+        data.freeFileMap(file_map, machine.allocator);
+        machine.package_file_map = null;
+    }
+    if (machine.package_checksum) |checksum| {
+        machine.allocator.free(checksum);
+        machine.package_checksum = null;
+    }
+
+    machine.current_package_index += 1;
+    if (machine.current_package_index < machine.data.package_names.len) {
+        machine.resetRetries();
+        return stateCheckInstalled(machine);
+    }
+
     machine.resetRetries();
     return stateCommit(machine);
 }
@@ -282,7 +297,14 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
                 const space_index = std.mem.indexOfScalar(u8, trimmed_line, ' ') orelse continue;
                 const pkg_name = trimmed_line[0..space_index];
 
-                if (!std.ascii.eqlIgnoreCase(pkg_name, machine.data.package_name)) {
+                var should_remove = false;
+                for (machine.data.package_names) |name| {
+                    if (std.ascii.eqlIgnoreCase(pkg_name, name)) {
+                        should_remove = true;
+                        break;
+                    }
+                }
+                if (!should_remove) {
                     try body_writer.print("{s}\n", .{trimmed_line});
                 }
             }
@@ -314,7 +336,17 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
         return stateCommit(machine);
     }
 
-    const subject_c = try std.fmt.allocPrintZ(machine.allocator, "remove: {s}", .{machine.data.package_name});
+    var subject_buf = std.ArrayList(u8).init(machine.allocator);
+    defer subject_buf.deinit();
+
+    try subject_buf.appendSlice("remove:");
+
+    for (machine.data.package_names, 0..) |name, index| {
+        const separator = if (index == 0) " " else ", ";
+        try subject_buf.writer().print("{s}{s}", .{ separator, name });
+    }
+
+    const subject_c = try machine.allocator.dupeZ(u8, subject_buf.items);
     defer machine.allocator.free(subject_c);
 
     var commit_checksum: ?[*:0]u8 = null;

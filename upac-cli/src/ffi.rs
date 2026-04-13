@@ -35,6 +35,7 @@ pub struct CPackageEntry {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CPackageMeta {
     pub name: CSlice,
     pub version: CSlice,
@@ -44,6 +45,12 @@ pub struct CPackageMeta {
     pub url: CSlice,
     pub installed_at: i64,
     pub checksum: CSlice,
+}
+
+#[repr(C)]
+pub struct CPackageMetaArray {
+    pub ptr: *mut CPackageMeta,
+    pub len: usize,
 }
 
 // ── Запросы ───────────────────────────────────────────────────────────────────
@@ -63,7 +70,8 @@ pub struct CInstallRequest {
 
 #[repr(C)]
 pub struct CUninstallRequest {
-    pub package_name: CSlice,
+    pub package_names: *const CSlice,
+    pub package_names_len: usize,
 
     pub repo_path: CSlice,
     pub root_path: CSlice,
@@ -144,6 +152,9 @@ pub enum CRepoMode {
 pub struct UpacLib {
     _lib: Library,
 
+    pub list_packages: unsafe extern "C" fn(CSlice, CSlice, CSlice, *mut CPackageMetaArray) -> i32,
+    pub packages_free: unsafe extern "C" fn(*mut CPackageMetaArray),
+
     pub install: unsafe extern "C" fn(CInstallRequest) -> i32,
     pub uninstall: unsafe extern "C" fn(CUninstallRequest) -> i32,
     pub rollback: unsafe extern "C" fn(CRollbackRequest) -> i32,
@@ -177,6 +188,9 @@ impl UpacLib {
         }
 
         Ok(Self {
+            list_packages: sym!(b"upac_list_packages"),
+            packages_free: sym!(b"upac_packages_free"),
+
             install: sym!(b"upac_install"),
             uninstall: sym!(b"upac_uninstall"),
             rollback: sym!(b"upac_rollback"),
