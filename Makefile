@@ -38,7 +38,7 @@ else
     STRIP       := false
     ZIG_FLAGS   := -Doptimize=Debug -Dstrip=$(STRIP) -Dstack-check=$(STACK_CHECK) -Dcpu=$(CPU) --verbose-link
     CARGO_FLAGS := --all-features
-    RUSTFLAGS   += -C debuginfo=2 -C force-frame-pointers=yes -C target-cpu=$(CPU)
+    RUSTFLAGS   += -C debuginfo=2 -C force-frame-pointers=yes -C target-cpu=$(subst _,-,$(strip $(CPU)))
     RB_DIR      := debug
 endif
 
