@@ -65,6 +65,7 @@ pub fn build(b: *std.Build) void {
 
     shared_lib.root_module.strip = strip;
     shared_lib.root_module.stack_check = stack_check;
+    shared_lib.bundle_compiler_rt = true;
 
     b.installArtifact(shared_lib);
 }

@@ -36,7 +36,7 @@ ifeq ($(strip $(MODE)), release)
 else
     $(info --- INFO: Building in DEBUG mode ---)
     STRIP       := false
-    ZIG_FLAGS   := -Doptimize=Debug -Dstrip=$(STRIP) -Dstack-check=$(STACK_CHECK) -Dcpu=$(CPU) --verbose-link
+    ZIG_FLAGS   := -Doptimize=Debug -Dstrip=$(STRIP) -Dstack-check=$(STACK_CHECK) -Dcpu=$(CPU)
     CARGO_FLAGS := --all-features
     RUSTFLAGS   += -C debuginfo=2 -C force-frame-pointers=yes -C target-cpu=$(subst _,-,$(strip $(CPU)))
     RB_DIR      := debug
