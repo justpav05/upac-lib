@@ -11,11 +11,15 @@ mod config;
 mod ffi;
 mod commands {
     pub mod commit;
-    pub mod init;
+
     pub mod install;
-    pub mod list;
     pub mod remove;
     pub mod rollback;
+
+    pub mod diff;
+    pub mod list;
+
+    pub mod init;
 }
 
 const CONFIG_PATH: &str = "/etc/upac/config.toml";
@@ -44,6 +48,10 @@ enum Command {
         name: Vec<String>,
     },
 
+    Rollback {
+        commit: String,
+    },
+
     List {
         #[arg(long)]
         commit: bool,
@@ -52,11 +60,12 @@ enum Command {
         full: bool,
     },
 
-    Commit,
-
-    Rollback {
-        commit: String,
+    Diff {
+        from: Option<String>,
+        to: Option<String>,
     },
+
+    Commit,
 
     Init {
         #[arg(long, default_value = "archive")]
@@ -89,11 +98,14 @@ fn run() -> Result<()> {
         Command::Remove { name } => {
             commands::remove::run(config, name)?;
         }
+        Command::Commit => {
+            commands::commit::run(config)?;
+        }
         Command::List { commit, full } => {
             commands::list::run(config, commit, full)?;
         }
-        Command::Commit => {
-            commands::commit::run(config)?;
+        Command::Diff { from, to } => {
+            commands::diff::run(config, from, to)?;
         }
         Command::Rollback { commit } => {
             commands::rollback::run(config, commit)?;

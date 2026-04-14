@@ -213,21 +213,36 @@ pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, all
     var index: usize = 0;
     while (index < added_entries.*.len) : (index += 1) {
         const diff_item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(added_entries.*.pdata[index]));
-        const file_path = std.mem.span(@as([*:0]u8, @ptrCast(c_libs.g_file_get_path(diff_item.target))));
+        const raw_path = c_libs.g_file_get_path(diff_item.target);
+        defer c_libs.g_free(@ptrCast(raw_path));
+
+        if (raw_path == null) continue;
+
+        const file_path = std.mem.span(raw_path.?);
         try diff_entries.append(.{ .path = try allocator.dupe(u8, file_path), .kind = .added });
     }
 
     index = 0;
     while (index < removed_entries.*.len) : (index += 1) {
         const diff_item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(removed_entries.*.pdata[index]));
-        const file_path = std.mem.span(@as([*:0]u8, @ptrCast(c_libs.g_file_get_path(diff_item.src))));
+        const raw_path = c_libs.g_file_get_path(diff_item.src);
+        defer c_libs.g_free(@ptrCast(raw_path));
+
+        if (raw_path == null) continue;
+
+        const file_path = std.mem.span(raw_path.?);
         try diff_entries.append(.{ .path = try allocator.dupe(u8, file_path), .kind = .removed });
     }
 
     index = 0;
     while (index < modified_entries.*.len) : (index += 1) {
         const diff_item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(modified_entries.*.pdata[index]));
-        const file_path = std.mem.span(@as([*:0]u8, @ptrCast(c_libs.g_file_get_path(diff_item.target))));
+        const raw_path = c_libs.g_file_get_path(diff_item.target);
+        defer c_libs.g_free(@ptrCast(raw_path));
+
+        if (raw_path == null) continue;
+
+        const file_path = std.mem.span(raw_path.?);
         try diff_entries.append(.{ .path = try allocator.dupe(u8, file_path), .kind = .modified });
     }
 

@@ -167,7 +167,6 @@ pub struct UpacLib {
 
     pub init: unsafe extern "C" fn(CInitRequest) -> i32,
 
-    pub free: unsafe extern "C" fn(*mut u8, usize),
     pub deinit: unsafe extern "C" fn(),
 }
 
@@ -203,7 +202,6 @@ impl UpacLib {
 
             init: sym!(b"upac_init"),
 
-            free: sym!(b"upac_free"),
             deinit: sym!(b"upac_deinit"),
 
             _lib: lib,

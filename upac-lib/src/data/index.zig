@@ -57,13 +57,13 @@ const IndexFSM = struct {
 
     // Returns the current character from the content being processed, or null if the end has been reached
     fn currentChar(self: *const IndexFSM) ?u8 {
-        if (self.current_character_position >= self.content.len) return null;
-        return self.content[self.current_character_position];
+        if (self.current_character_position >= self.package_content.len) return null;
+        return self.package_content[self.current_character_position];
     }
 
     // Advances the current position pointer by one character
     fn advance(self: *IndexFSM) void {
-        if (self.current_character_position < self.content.len)
+        if (self.current_character_position < self.package_content.len)
             self.current_character_position += 1;
     }
 
@@ -135,9 +135,9 @@ fn stateReadingName(machine: *IndexFSM) !void {
     machine.name_end = machine.current_character_position;
     machine.advance();
 
-    const name_slice = machine.content[machine.name_start..machine.name_end];
+    const name_slice = machine.package_content[machine.name_start..machine.name_end];
 
-    if (asciiEqlLower(name_slice, machine.target)) {
+    if (asciiEqlLower(name_slice, machine.target_package_name)) {
         return stateReadingChecksum(machine);
     }
     return stateSkipLine(machine);
@@ -174,8 +174,8 @@ fn stateReadingChecksum(machine: *IndexFSM) !void {
     const source_len = machine.current_character_position - machine.line_start_offset;
 
     machine.result = IndexEntry{
-        .name = machine.content[machine.name_start..machine.name_end],
-        .checksum = machine.content[checksum_start..checksum_end],
+        .name = machine.package_content[machine.name_start..machine.name_end],
+        .checksum = machine.package_content[checksum_start..checksum_end],
         .source_offset = machine.line_start_offset,
         .source_len = source_len,
     };
