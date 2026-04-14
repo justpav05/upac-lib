@@ -1,93 +1,97 @@
-HOST_ARCH	:= $(shell uname -m)
+ROOT_DIR    := $(shell pwd)
+PKG_DIR     := $(ROOT_DIR)/pkg
+OUT_BUILD_DIR := $(ROOT_DIR)/build
 
-ROOT_DIR	:= $(shell pwd)
-OUT_BUILD_DIR	:= $(ROOT_DIR)/build
+VERSION     := $(shell grep '^version' $(ROOT_DIR)/upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+PKG_NAME    := upac-$(VERSION)-$(ARCH)
 
-PKG_DIR   := $(ROOT_DIR)/pkg
-PKG_NAME	:= upac-$(VERSION)-$(ARCH)
-VERSION		:= $(shell grep '^version' $(ROOT_DIR)/upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+ARCH        ?= x86_64
+LIBC        ?= gnu
+MODE        ?= release
+CPU         ?= native
 
-ARCH      ?= x86_64
-LIBC      ?= gnu
-MODE      ?= debug
+ZIG_TARGET      := $(ARCH)-linux-$(LIBC)
+CARGO_TARGET    ?= $(ARCH)-unknown-linux-$(LIBC)
 
-TARGET    := $(ARCH)-linux-$(LIBC)
-ZIG_TARGET := $(ARCH)-linux-$(LIBC)
-CARGO_TARGET ?= $(ARCH)-unknown-linux-$(LIBC)
+RUSTFLAGS_COMMON := -C target-cpu=$(subst _,-,$(strip $(CPU)))
 
-STACK_CHECK  ?= false
-CPU          ?= native
+ARCH_PKG_FLAGS  ?= --nodeps --noconfirm -f
+RPM_PKG_FLAGS   ?= -bb --define "_topdir $(PKG_DIR)/rpm" \
+                       --define "_rpmdir $(PKG_DIR)/rpm/RPMS" \
+                       --define "version $(VERSION)"
+DEB_PKG_FLAGS   ?= --root-owner-group
 
-ARCH_PKG_FLAGS	?= --nodeps --noconfirm -f
-RPM_PKG_FLAGS	?= -bb 	--define "_topdir $(PKG_DIR)/rpm" --define "_rpmdir $(PKG_DIR)/rpm/RPMS" --define "version $(VERSION)"
-DEB_PKG_FLAGS	?= --root-owner-group
+.PHONY: all build prepare-dirs prepare-deps \
+        build-lib build-backends build-cli build-removing \
+        pkg-arch pkg-rpm pkg-deb \
+        sync sync-build sync-pkg \
+        clean clean-build clean-pkg
 
-.PHONY: all build prepare build-lib build-backends build-cli build-removing pkg-arch pkg-rpm pkg-deb sync sync-build sync-pkg clean clean-build clean-pkg
+# ── Compilation flags ──────────────────────────────────────────────────────────
 
-# ── Defining compilation flags ────────────────────────────────────────────────────────────────────
 ifeq ($(strip $(MODE)), release)
     $(info --- INFO: Building in RELEASE mode ---)
-    STRIP       := true
-    STACK_CHECK := false
-    ZIG_FLAGS   := -Doptimize=ReleaseSafe -Dstrip=$(STRIP) -Dstack-check=$(STACK_CHECK) -Dcpu=$(CPU)
-    CARGO_FLAGS := --release
-    RUSTFLAGS   += -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false -C target-cpu=$(subst _,-,$(strip $(CPU)))
-    RB_DIR      := release
+    RUSTFLAGS_MODE  := -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false
+    ZIG_MODE_FLAGS  := -Doptimize=ReleaseSafe -Dstrip=true -Dstack-check=false
 else
     $(info --- INFO: Building in DEBUG mode ---)
-    STRIP       := false
-    ZIG_FLAGS   := -Doptimize=Debug -Dstrip=$(STRIP) -Dstack-check=$(STACK_CHECK) -Dcpu=$(CPU)
-    CARGO_FLAGS := --all-features
-    RUSTFLAGS   += -C debuginfo=2 -C force-frame-pointers=yes -C target-cpu=$(subst _,-,$(strip $(CPU)))
-    RB_DIR      := debug
+    RUSTFLAGS_MODE  := -C debuginfo=2 -C force-frame-pointers=yes
+    ZIG_MODE_FLAGS  := -Doptimize=Debug -Dstrip=false -Dstack-check=true
 endif
 
 ifeq ($(LIBC), musl)
-    RUSTFLAGS += -C target-feature=+crt-static
+    MUSL_LDPATH     := /lib/ld-musl-$(ARCH).so.1
+    RUSTFLAGS_LIBC  := -C target-feature=-crt-static \
+                       -C link-arg=-dynamic-linker=$(MUSL_LDPATH)
 endif
 
-ifeq ($(ARCH), aarch64)
-    export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = aarch64-linux-gnu-gcc
-    export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = aarch64-linux-gnu-gcc
+# Для Zig CPU-флаг нужен только если не native (native — умолчание Zig)
+ifneq ($(CPU), native)
+    ZIG_CPU_FLAGS := -Dcpu=$(CPU)
 endif
 
-ifeq ($(ARCH), $(HOST_ARCH))
-    ZIG_TARGET := native
-else
-    ZIG_TARGET := $(ARCH)-linux-$(LIBC)
-endif
+RUSTFLAGS := $(RUSTFLAGS_COMMON) $(RUSTFLAGS_MODE) $(RUSTFLAGS_LIBC)
 
-# ── Building ────────────────────────────────────────────────────────────────────
-build: prepare-dirs build-lib build-backends build-cli build-removing
+# ZIG_SYS_FLAGS остаётся для внешней передачи (пути к системным либам и т.п.)
+ZIG_BUILD_FLAGS := -Dtarget=$(ZIG_TARGET) $(ZIG_MODE_FLAGS) $(ZIG_CPU_FLAGS) $(ZIG_SYS_FLAGS)
+
+# ── Prepare ───────────────────────────────────────────────────────────────────
 
 prepare-dirs:
-	@echo "--- Preparing directories for building in $(MODE) mode ---"
-	@mkdir -p $(OUT_BUILD_DIR)/bin
-	@mkdir -p $(OUT_BUILD_DIR)/lib
+	@echo "--- Preparing directories ($(MODE) / $(ARCH)-linux-$(LIBC) / cpu=$(CPU)) ---"
+	@mkdir -p $(OUT_BUILD_DIR)/bin $(OUT_BUILD_DIR)/lib
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+
+build: prepare-dirs build-lib build-backends build-cli build-removing
 
 build-lib:
-	@echo "--- Building upac-lib in $(MODE) mode ---"
-	@cd $(ROOT_DIR)/upac-lib && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
+	@echo "--- Building upac-lib ---"
+	@cd $(ROOT_DIR)/upac-lib && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-backends:
-	@echo "--- Building upac-alpm in $(MODE) mode ---"
-	@cd $(ROOT_DIR)/upac-alpm && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
+	@echo "--- Building upac-alpm ---"
+	@cd $(ROOT_DIR)/upac-alpm && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
-	@echo "--- Building upac-rpm in $(MODE) mode ---"
-	@cd $(ROOT_DIR)/upac-rpm && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
+	@echo "--- Building upac-rpm ---"
+	@cd $(ROOT_DIR)/upac-rpm && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
-	@echo "--- Building upac-deb in $(MODE) mode ---"
-	@cd $(ROOT_DIR)/upac-deb && zig build --prefix $(OUT_BUILD_DIR) -Dtarget=$(ZIG_TARGET) $(ZIG_FLAGS)
+	@echo "--- Building upac-deb ---"
+	@cd $(ROOT_DIR)/upac-deb && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-cli:
-	@echo "--- Building upac-cli in $(MODE) mode ($(CARGO_TARGET)) ---"
-	@cd $(ROOT_DIR)/upac-cli && RUSTFLAGS="$(RUSTFLAGS)" cargo build --target $(CARGO_TARGET) --target-dir $(OUT_BUILD_DIR) $(CARGO_FLAGS)
+	@echo "--- Building upac-cli ($(CARGO_TARGET) / cpu=$(CPU)) ---"
+	@cd $(ROOT_DIR)/upac-cli && \
+	    RUSTFLAGS="$(RUSTFLAGS)" cargo zigbuild \
+	        --target $(CARGO_TARGET) \
+	        --target-dir $(OUT_BUILD_DIR) \
+	        $(CARGO_FLAGS)
 	@cp $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
 
 build-removing:
-	@echo "--- Removing building temp directory in $(MODE) mode ($(CARGO_TARGET)) ---"
+	@echo "--- Cleaning cargo temp dirs ---"
 	@rm -rf $(OUT_BUILD_DIR)/$(CARGO_TARGET)
-	@rm -rf $(OUT_BUILD_DIR)/debug
+	@rm -rf $(OUT_BUILD_DIR)/debug $(OUT_BUILD_DIR)/release
 	@rm -rf $(OUT_BUILD_DIR)/.rustc_info.json
 
 # ── ARCH package ────────────────────────────────────────────────────────────────
