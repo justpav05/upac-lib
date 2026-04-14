@@ -127,19 +127,19 @@ fn stateCheckInstalled(machine: *InstallerMachine) anyerror!void {
     const body_ptr = c_libs.g_variant_get_string(body_variant, &body_len);
     const body = body_ptr[0..body_len];
 
+    const current_package_name = machine.data.packages[machine.current_package_index].package.meta.name;
+
     var split_lines_iter = std.mem.splitScalar(u8, body, '\n');
     while (split_lines_iter.next()) |line| {
         const trimmed_line = std.mem.trim(u8, line, " \t\r");
         if (trimmed_line.len == 0) continue;
 
         const separator_index = std.mem.indexOfScalar(u8, trimmed_line, ' ') orelse continue;
-        const package_name = trimmed_line[0..separator_index];
+        const installed_package_name = trimmed_line[0..separator_index];
 
-        for (machine.data.packages[0..machine.current_package_index]) |already_queued| {
-            if (std.ascii.eqlIgnoreCase(already_queued.package.meta.name, package_name)) {
-                stateFailed(machine);
-                return InstallerError.AlreadyInstalled;
-            }
+        if (std.ascii.eqlIgnoreCase(installed_package_name, current_package_name)) {
+            stateFailed(machine);
+            return InstallerError.AlreadyInstalled;
         }
     }
 
