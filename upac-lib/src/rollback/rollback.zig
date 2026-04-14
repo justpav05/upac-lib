@@ -150,7 +150,7 @@ pub fn listCommits(repo_path: []const u8, branch: []const u8, allocator: std.mem
 
 // ── Diff ────────────────────────────────────────────────────────────────────────
 // Compares two repository states
-pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, allocator: std.mem.Allocator) ![]DiffEntry {
+pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, root_path: []const u8, allocator: std.mem.Allocator) ![]DiffEntry {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
 
@@ -173,13 +173,16 @@ pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, all
         return RollbackError.RepoOpenFailed;
     }
 
+    const root_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{root_path});
+    defer allocator.free(root_path_c);
+
     const timestamp = std.time.milliTimestamp();
 
-    const from_checkout_path = try std.fmt.allocPrintZ(allocator, "/tmp/upac_diff_from_{d}", .{timestamp});
+    const from_checkout_path = try std.fmt.allocPrintZ(allocator, "{s}/tmp/upac_diff_from_{d}", .{ root_path_c, timestamp });
     defer allocator.free(from_checkout_path);
     defer std.fs.deleteTreeAbsolute(from_checkout_path) catch {};
 
-    const to_checkout_path = try std.fmt.allocPrintZ(allocator, "/tmp/upac_diff_to_{d}", .{timestamp + 1});
+    const to_checkout_path = try std.fmt.allocPrintZ(allocator, "{s}/tmp/upac_diff_to_{d}", .{ root_path_c, timestamp + 1 });
     defer allocator.free(to_checkout_path);
     defer std.fs.deleteTreeAbsolute(to_checkout_path) catch {};
 
@@ -210,28 +213,33 @@ pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, all
         diff_entries.deinit();
     }
 
+    const to_prefix = @as([]const u8, to_checkout_path);
+    const from_prefix = @as([]const u8, from_checkout_path);
+
     var index: usize = 0;
     while (index < added_entries.*.len) : (index += 1) {
-        const diff_item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(added_entries.*.pdata[index]));
-        const raw_path = c_libs.g_file_get_path(diff_item.target);
+        const gfile_ptr: *c_libs.GFile = @ptrCast(@alignCast(added_entries.*.pdata[index]));
+        const raw_path = c_libs.g_file_get_path(gfile_ptr);
         defer c_libs.g_free(@ptrCast(raw_path));
 
         if (raw_path == null) continue;
 
         const file_path = std.mem.span(raw_path.?);
-        try diff_entries.append(.{ .path = try allocator.dupe(u8, file_path), .kind = .added });
+        const rel_path = if (std.mem.startsWith(u8, file_path, to_prefix)) file_path[to_prefix.len..] else file_path;
+        try diff_entries.append(.{ .path = try allocator.dupe(u8, rel_path), .kind = .added });
     }
 
     index = 0;
     while (index < removed_entries.*.len) : (index += 1) {
-        const diff_item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(removed_entries.*.pdata[index]));
-        const raw_path = c_libs.g_file_get_path(diff_item.src);
+        const gfile_ptr: *c_libs.GFile = @ptrCast(@alignCast(removed_entries.*.pdata[index]));
+        const raw_path = c_libs.g_file_get_path(gfile_ptr);
         defer c_libs.g_free(@ptrCast(raw_path));
 
         if (raw_path == null) continue;
 
         const file_path = std.mem.span(raw_path.?);
-        try diff_entries.append(.{ .path = try allocator.dupe(u8, file_path), .kind = .removed });
+        const rel_path = if (std.mem.startsWith(u8, file_path, from_prefix)) file_path[from_prefix.len..] else file_path;
+        try diff_entries.append(.{ .path = try allocator.dupe(u8, rel_path), .kind = .removed });
     }
 
     index = 0;
@@ -243,7 +251,8 @@ pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, all
         if (raw_path == null) continue;
 
         const file_path = std.mem.span(raw_path.?);
-        try diff_entries.append(.{ .path = try allocator.dupe(u8, file_path), .kind = .modified });
+        const rel_path = if (std.mem.startsWith(u8, file_path, to_prefix)) file_path[to_prefix.len..] else file_path;
+        try diff_entries.append(.{ .path = try allocator.dupe(u8, rel_path), .kind = .modified });
     }
 
     return diff_entries.toOwnedSlice();
@@ -358,6 +367,15 @@ fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [:0]const u8, destination_path: 
 
     std.fs.makeDirAbsolute(destination_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
+        error.FileNotFound => {
+            // Parent directories don't exist — create the entire chain
+            const path_slice: []const u8 = destination_path;
+            // Strip leading '/' to make it relative, then use root dir as base
+            const rel = if (path_slice.len > 0 and path_slice[0] == '/') path_slice[1..] else path_slice;
+            var root = std.fs.openDirAbsolute("/", .{}) catch return error.FileNotFound;
+            defer root.close();
+            root.makePath(rel) catch return error.FileNotFound;
+        },
         else => return err,
     };
 

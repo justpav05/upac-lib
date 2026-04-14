@@ -133,6 +133,7 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
             CSlice::from_str(&machine.config.paths.repo_path),
             CSlice::from_str(&machine.resolved_from),
             CSlice::from_str(&machine.resolved_to),
+            CSlice::from_str(&machine.config.paths.root_path),
             &mut c_diff,
         )
     };

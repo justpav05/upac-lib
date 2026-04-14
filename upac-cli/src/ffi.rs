@@ -159,7 +159,7 @@ pub struct UpacLib {
     pub uninstall: unsafe extern "C" fn(CUninstallRequest) -> i32,
     pub rollback: unsafe extern "C" fn(CRollbackRequest) -> i32,
 
-    pub diff: unsafe extern "C" fn(CSlice, CSlice, CSlice, *mut CDiffArray) -> i32,
+    pub diff: unsafe extern "C" fn(CSlice, CSlice, CSlice, CSlice, *mut CDiffArray) -> i32,
     pub diff_free: unsafe extern "C" fn(*mut CDiffArray),
 
     pub list_commits: unsafe extern "C" fn(CSlice, CSlice, *mut CCommitArray) -> i32,

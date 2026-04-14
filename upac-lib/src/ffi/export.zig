@@ -217,10 +217,10 @@ pub export fn upac_rollback(c_rollback_request: CRollbackRequest) callconv(.C) i
 }
 
 // Compares two states (refs) in a repository and returns an array of changes (CDiffArray). Allocates memory for the entries, which must be freed later
-pub export fn upac_diff(c_repo_path: CSlice, c_from_ref: CSlice, c_to_ref: CSlice, c_diff_out: *CDiffArray) callconv(.C) i32 {
+pub export fn upac_diff(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, root_path_c: CSlice, c_diff_out: *CDiffArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    const diff_entries = rollback.diff(c_repo_path.toSlice(), c_from_ref.toSlice(), c_to_ref.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
+    const diff_entries = rollback.diff(repo_path_c.toSlice(), from_ref_c.toSlice(), to_ref_c.toSlice(), root_path_c.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
 
     const c_entries = allocator.alloc(CDiffEntry, diff_entries.len) catch {
         for (diff_entries) |entry| allocator.free(entry.path);
