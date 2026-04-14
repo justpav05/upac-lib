@@ -218,6 +218,13 @@ fn stateReadingMeta(machine: *Machine) anyerror!void {
         .checksum = try machine.allocator.dupe(u8, machine.request.checksum),
     };
 
+    const alpm_junk_files = [_][]const u8{ ".BUILDINFO", ".MTREE", ".PKGINFO", ".INSTALL", ".CHANGELOG" };
+    for (alpm_junk_files) |filename| {
+        const junk_file_path = std.fs.path.join(machine.allocator, &.{ machine.request.out_path, filename }) catch continue;
+        defer machine.allocator.free(junk_file_path);
+        std.fs.cwd().deleteFile(junk_file_path) catch {};
+    }
+
     return stateDone(machine);
 }
 
