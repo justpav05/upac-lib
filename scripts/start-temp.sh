@@ -10,7 +10,6 @@ ERR_PATH_FAILED=12
 ERR_CONFIG_MISSING=13
 ERR_SED_FAILED=14
 ERR_WRITE_FAILED=15
-ERR_NOT_ROOT=16
 
 error_exit() {
     printf "\033[31m[ERROR]\033[0m %s\n" "$1" >&2
@@ -36,7 +35,6 @@ NEW_PATHS=$(find /tmp/root -type d 2>/dev/null | paste -sd ":" -)
 
 export PATH="${NEW_PATHS}:${PATH}"
 
-# POSIX-compliant path check
 case "$PATH" in
     "${NEW_PATHS}"*) ;;
     *) error_exit "Failed to apply new paths to PATH variable" $ERR_PATH_FAILED ;;
@@ -48,17 +46,19 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 printf '%s%s%s\n' "--- Updating paths in " "$CONFIG_FILE" "---"
-if [ "$(id -u)" -ne 0 ]; then
-    error_exit "For changing $CONFIG_FILE, root privileges are required. Run the script with sudo." $ERR_NOT_ROOT
-fi
 
 UPDATED_CONFIG=$(sed -E \
-    -e 's|^(database_path[ \t]*=[ \t]*).*|\1"/tmp/var/db/upac"|' \
+    -e 's|^(database_path[ \t]*=[ \t]*).*|\1"/tmp/root/usr/upac/db"|' \
     -e 's|^(repo_path[ \t]*=[ \t]*).*|\1"/tmp/var/repo"|' \
     -e 's|^(root_path[ \t]*=[ \t]*).*|\1"/tmp/root"|' \
     "$CONFIG_FILE") || error_exit "Error parsing configuration file" $ERR_SED_FAILED
 
-printf "%s\n" "$UPDATED_CONFIG" > "$CONFIG_FILE" || error_exit "Error writing updated config file" $ERR_WRITE_FAILED
+if [ "$(id -u)" -ne 0 ]; then
+    printf '%s\n' "Root privileges are required to modify $CONFIG_FILE. Requesting sudo..."
+    printf "%s\n" "$UPDATED_CONFIG" | sudo tee "$CONFIG_FILE" > /dev/null || error_exit "Error writing updated config file" $ERR_WRITE_FAILED
+else
+    printf "%s\n" "$UPDATED_CONFIG" > "$CONFIG_FILE" || error_exit "Error writing updated config file" $ERR_WRITE_FAILED
+fi
 
 printf "\033[32m--- Done! Exit. ---\033[0m\n"
 exit 0
