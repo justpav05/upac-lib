@@ -39,7 +39,7 @@ export PKG_CONFIG_ALLOW_CROSS = 1
 
 # ── Prepare ───────────────────────────────────────────────────────────────────
 prepare-dirs:
-	@echo "--- Preparing directories ($(MODE) / $(ARCH)-linux-$(LIBC) / cpu=$(CPU)) ---"
+	@echo "--- Preparing directories ($(MODE) / cpu=$(CPU)) ---"
 	@mkdir -p $(OUT_BUILD_DIR)/bin $(OUT_BUILD_DIR)/lib
 
 # ── Build ─────────────────────────────────────────────────────────────────────
