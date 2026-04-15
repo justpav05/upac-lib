@@ -14,7 +14,7 @@
         cargoVendorDir = pkgs.rustPlatform.fetchCargoVendor {
             src = ./upac-cli;
             name = "upac-deps";
-            hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+            hash = "sha256-UtQlxkKR/zsS2ltB9HoXlOYAx2PdAsgA2QzXgLDfIYs=";
           };
 
         crossPackageSets = {
@@ -50,16 +50,16 @@
             ];
 
             buildPhase = ''
-              export HOME=$TMPDIR
-              export CARGO_HOME=$TMPDIR/cargo-home
-              export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
+              mkdir -p .cargo
+              cat > .cargo/config.toml <<EOF
+              [source.crates-io]
+              replace-with = "nix-sources"
 
-              mkdir -p $CARGO_HOME
-              ln -s ${cargoVendorDir} $CARGO_HOME/registry
+              [source.nix-sources]
+              directory = "${cargoVendorDir}"
+              EOF
 
               make build \
-                ARCH=${crossPkgs.stdenv.hostPlatform.linuxArch} \
-                LIBC=${if crossPkgs.stdenv.hostPlatform.isMusl then "musl" else "gnu"} \
                 MODE=release \
                 CPU=${cpu} \
                 CARGO_FLAGS="--offline --frozen"
@@ -71,7 +71,6 @@
               cp build/lib/*.so   $out/lib/
             '';
           };
-
 
         upac-x86_64       = makeUpac { crossPkgs = crossPackageSets.x86_64-gnu;  };
         upac-x86_64-musl  = makeUpac { crossPkgs = crossPackageSets.x86_64-musl; };

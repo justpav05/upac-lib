@@ -5,15 +5,10 @@ OUT_BUILD_DIR := $(ROOT_DIR)/build
 VERSION     := $(shell grep '^version' $(ROOT_DIR)/upac-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 PKG_NAME    := upac-$(VERSION)-$(ARCH)
 
-ARCH        ?= x86_64
-LIBC        ?= gnu
-MODE        ?= release
+MODE        ?= debug
 CPU         ?= native
 
-ZIG_TARGET      := $(ARCH)-linux-$(LIBC)
-CARGO_TARGET    ?= $(ARCH)-unknown-linux-$(LIBC)
-
-RUST_FLAGS_CPU := -C target-cpu=$(subst _,-,$(strip $(CPU)))
+CARGO_TARGET ?= $(shell rustc -Vv | grep host | cut -d ' ' -f 2)
 
 ARCH_PKG_FLAGS  ?= --nodeps --noconfirm -f
 RPM_PKG_FLAGS   ?= -bb --define "_topdir $(PKG_DIR)/rpm" \
@@ -30,63 +25,54 @@ DEB_PKG_FLAGS   ?= --root-owner-group
 # ── Compilation flags ──────────────────────────────────────────────────────────
 ifeq ($(strip $(MODE)), release)
     $(info --- INFO: Building in RELEASE mode ---)
-    RUST_FLAGS_MODE  := -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false
-    ZIG_MODE_FLAGS  := -Doptimize=ReleaseSafe -Dstrip=true -Dstack-check=false
+    CARGO_BUILD_FLAG := --release
+    RUST_BUILD_FLAGS  := -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false -C target-cpu=$(subst _,-,$(strip $(CPU)))
+    ZIG_BUILD_FLAGS  := -Doptimize=ReleaseSafe -Dstrip=true -Dstack-check=false
 else
     $(info --- INFO: Building in DEBUG mode ---)
-    RUST_FLAGS_MODE  := -C debuginfo=2 -C force-frame-pointers=yes
-    ZIG_MODE_FLAGS  := -Doptimize=Debug -Dstrip=false -Dstack-check=true
-endif
-
-ifeq ($(strip $(LIBC)), musl)
-    MUSL_LDPATH     := /lib/ld-musl-$(ARCH).so.1
-    RUST_FLAGS_LIBC := -C target-feature=-crt-static -C link-arg=-dynamic-linker=$(MUSL_LDPATH)
-else
-    RUST_FLAGS_LIBC :=
+    CARGO_BUILD_FLAG :=
+    RUST_BUILD_FLAGS  := -C debuginfo=2 -C force-frame-pointers=yes -C target-cpu=$(subst _,-,$(strip $(CPU)))
+    ZIG_BUILD_FLAGS  := -Doptimize=Debug -Dstrip=false -Dstack-check=true -Dcpu=$(strip $(CPU))
 endif
 
 export PKG_CONFIG_ALLOW_CROSS = 1
 
-ZIG_BUILD_FLAGS := -Dtarget=$(ZIG_TARGET) $(ZIG_MODE_FLAGS) $(ZIG_CPU_FLAGS)
-RUST_BUILD_FLAGS := $(RUST_FLAGS_CPU) $(RUST_FLAGS_MODE) $(RUST_FLAGS_LIBC)
-
 # ── Prepare ───────────────────────────────────────────────────────────────────
-
 prepare-dirs:
 	@echo "--- Preparing directories ($(MODE) / $(ARCH)-linux-$(LIBC) / cpu=$(CPU)) ---"
 	@mkdir -p $(OUT_BUILD_DIR)/bin $(OUT_BUILD_DIR)/lib
 
 # ── Build ─────────────────────────────────────────────────────────────────────
-
 build: prepare-dirs build-lib build-backends build-cli build-removing
 
 build-lib:
-	@echo "--- Building upac-lib ---"
+	@echo "--- Building upac-lib in $(MODE) mode ---"
 	@cd $(ROOT_DIR)/upac-lib && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-backends:
-	@echo "--- Building upac-alpm ---"
+	@echo "--- Building upac-alpm in $(MODE) mode ---"
 	@cd $(ROOT_DIR)/upac-alpm && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
-	@echo "--- Building upac-rpm ---"
+	@echo "--- Building upac-rpm in $(MODE) mode ---"
 	@cd $(ROOT_DIR)/upac-rpm && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
-	@echo "--- Building upac-deb ---"
+	@echo "--- Building upac-deb in $(MODE) mode ---"
 	@cd $(ROOT_DIR)/upac-deb && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-cli:
-	@echo "--- Building upac-cli ($(CARGO_TARGET) / cpu=$(CPU)) ---"
+	@echo "--- Building upac-cli in $(MODE) mode ---"
+
 	@cd $(ROOT_DIR)/upac-cli && \
-	    RUSTFLAGS="$(RUSTFLAGS)" cargo zigbuild \
-	        --target $(CARGO_TARGET) \
-	        --target-dir $(OUT_BUILD_DIR) \
+	    RUSTFLAGS="$(RUSTFLAGS)" cargo-zigbuild build \
+			$(CARGO_BUILD_FLAG) \
+			--target-dir $(OUT_BUILD_DIR) \
 	        $(CARGO_FLAGS)
-	@cp $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
+	@cp $(OUT_BUILD_DIR)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
 
 build-removing:
 	@echo "--- Cleaning cargo temp dirs ---"
 	@rm -rf $(OUT_BUILD_DIR)/$(CARGO_TARGET)
-	@rm -rf $(OUT_BUILD_DIR)/debug $(OUT_BUILD_DIR)/release
+	@rm -rf $(OUT_BUILD_DIR)/$(MODE)
 	@rm -rf $(OUT_BUILD_DIR)/.rustc_info.json
 
 # ── ARCH package ────────────────────────────────────────────────────────────────
