@@ -5,7 +5,10 @@ use colored::Colorize;
 use std::slice;
 
 use crate::config::Config;
-use crate::ffi::{CCommitArray, CDiffArray, CSlice, UpacLib, UpacLibGuard};
+use crate::ffi::{
+    CAttributedDiffArray, CCommitArray, CDiffKind, CPackageDiffArray, CPackageDiffKind, CSlice,
+    UpacLib, UpacLibGuard,
+};
 
 // ── FSM ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
@@ -17,13 +20,26 @@ enum State {
     Failed(String),
 }
 
-struct DiffRow {
-    path: String,
-    kind: DiffKind,
+struct PackageDiffRow {
+    name: String,
+    kind: PkgDiffKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum DiffKind {
+enum PkgDiffKind {
+    Added,
+    Removed,
+    Updated,
+}
+
+struct FileDiffRow {
+    path: String,
+    kind: FileDiffKind,
+    package_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum FileDiffKind {
     Added,
     Removed,
     Modified,
@@ -33,27 +49,29 @@ struct DiffMachine {
     config: Config,
     from: Option<String>,
     to: Option<String>,
+    files_mode: bool,
 
     resolved_from: String,
     resolved_to: String,
-    diff_entries: Vec<DiffRow>,
+
+    package_rows: Vec<PackageDiffRow>,
+    file_rows: Vec<FileDiffRow>,
 
     upac_lib: Option<UpacLibGuard>,
     stack: Vec<State>,
 }
 
 impl DiffMachine {
-    fn new(config: Config, from: Option<String>, to: Option<String>) -> Self {
+    fn new(config: Config, from: Option<String>, to: Option<String>, files_mode: bool) -> Self {
         Self {
             config,
             from,
             to,
-
+            files_mode,
             resolved_from: String::new(),
             resolved_to: String::new(),
-
-            diff_entries: Vec::new(),
-
+            package_rows: Vec::new(),
+            file_rows: Vec::new(),
             upac_lib: None,
             stack: Vec::new(),
         }
@@ -122,39 +140,76 @@ fn state_validating(machine: &mut DiffMachine) -> Result<()> {
 
 fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::FetchingDiff);
+    let lib = machine.upac_lib.as_ref().unwrap();
 
-    let mut c_diff = CDiffArray {
-        ptr: std::ptr::null_mut(),
-        len: 0,
-    };
+    if machine.files_mode {
+        let mut c_out = CAttributedDiffArray {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
 
-    let code = unsafe {
-        (machine.upac_lib.as_ref().unwrap().diff)(
-            CSlice::from_str(&machine.config.paths.repo_path),
-            CSlice::from_str(&machine.resolved_from),
-            CSlice::from_str(&machine.resolved_to),
-            CSlice::from_str(&machine.config.paths.root_path),
-            &mut c_diff,
-        )
-    };
-    UpacLib::check(code, "diff")?;
+        let code = unsafe {
+            (lib.diff_files_attributed)(
+                CSlice::from_str(&machine.config.paths.repo_path),
+                CSlice::from_str(&machine.resolved_from),
+                CSlice::from_str(&machine.resolved_to),
+                CSlice::from_str(&machine.config.paths.root_path),
+                CSlice::from_str(&machine.config.paths.database_path),
+                &mut c_out,
+            )
+        };
+        UpacLib::check(code, "diff files attributed")?;
 
-    let entries = unsafe { slice::from_raw_parts(c_diff.ptr, c_diff.len) };
-    machine.diff_entries = entries
-        .iter()
-        .map(|entry| unsafe {
-            DiffRow {
-                path: entry.path.as_str().to_owned(),
-                kind: match entry.kind {
-                    crate::ffi::CDiffKind::Added => DiffKind::Added,
-                    crate::ffi::CDiffKind::Removed => DiffKind::Removed,
-                    crate::ffi::CDiffKind::Modified => DiffKind::Modified,
-                },
-            }
-        })
-        .collect();
+        let entries = unsafe { slice::from_raw_parts(c_out.ptr, c_out.len) };
+        machine.file_rows = entries
+            .iter()
+            .map(|e| unsafe {
+                FileDiffRow {
+                    path: e.path.as_str().to_owned(),
+                    kind: match e.kind {
+                        CDiffKind::Added => FileDiffKind::Added,
+                        CDiffKind::Removed => FileDiffKind::Removed,
+                        CDiffKind::Modified => FileDiffKind::Modified,
+                    },
+                    package_name: e.package_name.as_str().to_owned(),
+                }
+            })
+            .collect();
 
-    unsafe { (machine.upac_lib.as_ref().unwrap().diff_free)(&mut c_diff) };
+        unsafe { (lib.diff_files_attributed_free)(&mut c_out) };
+    } else {
+        let mut c_out = CPackageDiffArray {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
+
+        let code = unsafe {
+            (lib.diff_packages)(
+                CSlice::from_str(&machine.config.paths.repo_path),
+                CSlice::from_str(&machine.resolved_from),
+                CSlice::from_str(&machine.resolved_to),
+                &mut c_out,
+            )
+        };
+        UpacLib::check(code, "diff packages")?;
+
+        let entries = unsafe { slice::from_raw_parts(c_out.ptr, c_out.len) };
+        machine.package_rows = entries
+            .iter()
+            .map(|e| unsafe {
+                PackageDiffRow {
+                    name: e.name.as_str().to_owned(),
+                    kind: match e.kind {
+                        CPackageDiffKind::Added => PkgDiffKind::Added,
+                        CPackageDiffKind::Removed => PkgDiffKind::Removed,
+                        CPackageDiffKind::Updated => PkgDiffKind::Updated,
+                    },
+                }
+            })
+            .collect();
+
+        unsafe { (lib.diff_packages_free)(&mut c_out) };
+    }
 
     state_printing(machine)
 }
@@ -162,21 +217,55 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
 fn state_printing(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::Printing);
 
-    if machine.diff_entries.is_empty() {
-        println!("{}", "No changes.".dimmed());
+    let from_short = &machine.resolved_from[..machine.resolved_from.len().min(12)];
+    let to_short = &machine.resolved_to[..machine.resolved_to.len().min(12)];
+
+    if machine.files_mode {
+        if machine.file_rows.is_empty() {
+            println!("{}", "No file changes.".dimmed());
+        } else {
+            println!(
+                "{} {} → {}",
+                "diff --files:".dimmed(),
+                from_short.cyan(),
+                to_short.cyan(),
+            );
+            println!();
+            for row in &machine.file_rows {
+                let (symbol, path_colored) = match row.kind {
+                    FileDiffKind::Added => ("+".green().bold(), row.path.as_str().normal()),
+                    FileDiffKind::Removed => ("-".red().bold(), row.path.as_str().normal()),
+                    FileDiffKind::Modified => ("~".yellow().bold(), row.path.as_str().normal()),
+                };
+                if row.package_name.is_empty() {
+                    println!("{} {}", symbol, path_colored);
+                } else {
+                    println!(
+                        "{} {} ({})",
+                        symbol,
+                        path_colored,
+                        row.package_name.dimmed()
+                    );
+                }
+            }
+        }
     } else {
-        println!(
-            "{} {} → {}",
-            "diff:".dimmed(),
-            &machine.resolved_from[..12].cyan(),
-            &machine.resolved_to[..12].cyan(),
-        );
-        println!();
-        for row in &machine.diff_entries {
-            match row.kind {
-                DiffKind::Added => println!("{} {}", "+".green().bold(), row.path),
-                DiffKind::Removed => println!("{} {}", "-".red().bold(), row.path),
-                DiffKind::Modified => println!("{} {}", "~".yellow().bold(), row.path),
+        if machine.package_rows.is_empty() {
+            println!("{}", "No package changes.".dimmed());
+        } else {
+            println!(
+                "{} {} → {}",
+                "diff:".dimmed(),
+                from_short.cyan(),
+                to_short.cyan(),
+            );
+            println!();
+            for row in &machine.package_rows {
+                match row.kind {
+                    PkgDiffKind::Added => println!("{} {}", "+".green().bold(), row.name.bold()),
+                    PkgDiffKind::Removed => println!("{} {}", "-".red().bold(), row.name.bold()),
+                    PkgDiffKind::Updated => println!("{} {}", "~".yellow().bold(), row.name.bold()),
+                }
             }
         }
     }
@@ -190,8 +279,13 @@ fn state_done(machine: &mut DiffMachine) -> Result<()> {
 }
 
 // ── Публичное API ─────────────────────────────────────────────────────────────
-pub fn run(config: Config, from: Option<String>, to: Option<String>) -> Result<()> {
-    let mut machine = DiffMachine::new(config, from, to);
+pub fn run(
+    config: Config,
+    from: Option<String>,
+    to: Option<String>,
+    files_mode: bool,
+) -> Result<()> {
+    let mut machine = DiffMachine::new(config, from, to, files_mode);
 
     state_validating(&mut machine).map_err(|err| {
         let last_state = machine.stack.last().cloned();

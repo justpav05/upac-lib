@@ -47,3 +47,31 @@ pub const PackageFile = struct {
         allocator.free(self.checksum);
     }
 };
+
+pub const PackageDiffKind = enum { added, removed, updated };
+
+pub const PackageDiffEntry = struct {
+    name: []const u8,
+    kind: PackageDiffKind,
+};
+
+pub const AttributedDiffEntry = struct {
+    path: []const u8,
+    kind: DiffKind,
+    package_name: []const u8,
+};
+
+// A structure for storing information about a specific "restore point"
+pub const CommitEntry = struct {
+    checksum: []const u8,
+    subject: []const u8,
+};
+
+// Listing of file change types: added, removed, modified
+pub const DiffKind = enum { added, removed, modified };
+
+// Description of the specific change: the file path and exactly what happened to it
+pub const DiffEntry = struct {
+    path: []const u8,
+    kind: DiffKind,
+};

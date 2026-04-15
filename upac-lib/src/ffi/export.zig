@@ -26,8 +26,14 @@ const CInstallRequest = types.CInstallRequest;
 const CUninstallRequest = types.CUninstallRequest;
 const CRollbackRequest = types.CRollbackRequest;
 
-const CDiffArray = types.CDiffArray;
 const CDiffEntry = types.CDiffEntry;
+const CDiffArray = types.CDiffArray;
+
+const CPackageDiffEntry = types.CPackageDiffEntry;
+const CPackageDiffArray = types.CPackageDiffArray;
+
+const CAttributedDiffEntry = types.CAttributedDiffEntry;
+const CAttributedDiffArray = types.CAttributedDiffArray;
 
 const CCommitArray = types.CCommitArray;
 const CCommitEntry = types.CCommitEntry;
@@ -216,35 +222,86 @@ pub export fn upac_rollback(c_rollback_request: CRollbackRequest) callconv(.C) i
     return @intFromEnum(ErrorCode.ok);
 }
 
-// Compares two states (refs) in a repository and returns an array of changes (CDiffArray). Allocates memory for the entries, which must be freed later
-pub export fn upac_diff(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, root_path_c: CSlice, c_diff_out: *CDiffArray) callconv(.C) i32 {
+pub export fn upac_diff_packages(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, out_c: *CPackageDiffArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    const diff_entries = rollback.diff(repo_path_c.toSlice(), from_ref_c.toSlice(), to_ref_c.toSlice(), root_path_c.toSlice(), allocator) catch |err| return @intFromEnum(types.fromError(err));
+    const pkg_entries = rollback.diffPackages(
+        repo_path_c.toSlice(),
+        from_ref_c.toSlice(),
+        to_ref_c.toSlice(),
+        allocator,
+    ) catch |err| return @intFromEnum(types.fromError(err));
 
-    const c_entries = allocator.alloc(CDiffEntry, diff_entries.len) catch {
-        for (diff_entries) |entry| allocator.free(entry.path);
-        allocator.free(diff_entries);
+    const entries_c = allocator.alloc(CPackageDiffEntry, pkg_entries.len) catch {
+        for (pkg_entries) |entry| allocator.free(entry.name);
+        allocator.free(pkg_entries);
         return @intFromEnum(ErrorCode.out_of_memory);
     };
 
-    for (c_entries, 0..) |*c_entry, index| {
-        c_entry.* = .{
-            .path = CSlice.fromSlice(diff_entries[index].path),
-            .kind = @enumFromInt(@intFromEnum(diff_entries[index].kind)),
+    for (entries_c, 0..) |*entry_c, index| {
+        entry_c.* = .{
+            .name = CSlice.fromSlice(pkg_entries[index].name),
+            .kind = switch (pkg_entries[index].kind) {
+                .added => .added,
+                .removed => .removed,
+                .updated => .updated,
+            },
         };
     }
-    allocator.free(diff_entries);
+    allocator.free(pkg_entries);
 
-    c_diff_out.* = .{ .ptr = c_entries.ptr, .len = c_entries.len };
+    out_c.* = .{ .ptr = entries_c.ptr, .len = entries_c.len };
     return @intFromEnum(ErrorCode.ok);
 }
 
-// Frees all memory allocated for the array of changes and the paths within each CDiffEntry record
-pub export fn upac_diff_free(c_diff: *CDiffArray) callconv(.C) void {
+pub export fn upac_diff_packages_free(c_out: *CPackageDiffArray) callconv(.C) void {
     const allocator = types.allocator();
-    const entries = c_diff.toSlice();
-    for (entries) |entry| allocator.free(entry.path.toSlice());
+    const entries = c_out.toSlice();
+    for (entries) |entry| allocator.free(entry.name.toSlice());
+    allocator.free(entries);
+}
+
+pub export fn upac_diff_files_attributed(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, root_path_c: CSlice, db_path_c: CSlice, out_c: *CAttributedDiffArray) callconv(.C) i32 {
+    const allocator = types.allocator();
+
+    const entries = rollback.diffFilesAttributed(
+        repo_path_c.toSlice(),
+        from_ref_c.toSlice(),
+        to_ref_c.toSlice(),
+        root_path_c.toSlice(),
+        db_path_c.toSlice(),
+        allocator,
+    ) catch |err| return @intFromEnum(types.fromError(err));
+
+    const entries_c = allocator.alloc(CAttributedDiffEntry, entries.len) catch {
+        for (entries) |entry| {
+            allocator.free(entry.path);
+            allocator.free(entry.package_name);
+        }
+        allocator.free(entries);
+        return @intFromEnum(ErrorCode.out_of_memory);
+    };
+
+    for (entries_c, 0..) |*entry_c, index| {
+        entry_c.* = .{
+            .path = CSlice.fromSlice(entries[index].path),
+            .kind = @enumFromInt(@intFromEnum(entries[index].kind)),
+            .package_name = CSlice.fromSlice(entries[index].package_name),
+        };
+    }
+    allocator.free(entries);
+
+    out_c.* = .{ .ptr = entries_c.ptr, .len = entries_c.len };
+    return @intFromEnum(ErrorCode.ok);
+}
+
+pub export fn upac_diff_files_attributed_free(out_c: *CAttributedDiffArray) callconv(.C) void {
+    const allocator = types.allocator();
+    const entries = out_c.toSlice();
+    for (entries) |entry| {
+        allocator.free(entry.path.toSlice());
+        allocator.free(entry.package_name.toSlice());
+    }
     allocator.free(entries);
 }
 

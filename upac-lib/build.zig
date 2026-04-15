@@ -39,6 +39,7 @@ pub fn build(b: *std.Build) void {
     const upac_rollback = b.addModule("upac-rollback", .{ .root_source_file = b.path("src/rollback/rollback.zig"), .target = target, .optimize = optimize });
     upac_rollback.addImport("upac-types", upac_types);
     upac_rollback.addImport("upac-file", upac_file);
+    upac_rollback.addImport("upac-data", upac_data);
 
     // ── Init ──────────────────────────────────────────────────────────────────
     const upac_init = b.addModule("upac-init", .{ .root_source_file = b.path("src/init.zig"), .target = target, .optimize = optimize });

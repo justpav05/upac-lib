@@ -63,6 +63,8 @@ enum Command {
     Diff {
         from: Option<String>,
         to: Option<String>,
+        #[arg(long)]
+        files: bool,
     },
 
     Commit,
@@ -104,8 +106,8 @@ fn run() -> Result<()> {
         Command::List { commit, full } => {
             commands::list::run(config, commit, full)?;
         }
-        Command::Diff { from, to } => {
-            commands::diff::run(config, from, to)?;
+        Command::Diff { from, to, files } => {
+            commands::diff::run(config, from, to, files)?;
         }
         Command::Rollback { commit } => {
             commands::rollback::run(config, commit)?;

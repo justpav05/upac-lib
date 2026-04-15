@@ -1,6 +1,16 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
+const data = @import("upac-data");
+
+const types = @import("upac-types");
+const CommitEntry = types.CommitEntry;
+const PackageDiffEntry = types.PackageDiffEntry;
+const AttributedDiffEntry = types.AttributedDiffEntry;
+
+const DiffEntry = types.DiffEntry;
+const DiffKind = types.DiffKind;
+
 const file = @import("upac-file");
 const c_libs = file.c_libs;
 
@@ -14,21 +24,6 @@ pub const RollbackError = error{
     StagingFailed,
     SwapFailed,
     CleanupFailed,
-};
-
-// A structure for storing information about a specific "restore point"
-pub const CommitEntry = struct {
-    checksum: []const u8,
-    subject: []const u8,
-};
-
-// Listing of file change types: added, removed, modified
-pub const DiffKind = enum { added, removed, modified };
-
-// Description of the specific change: the file path and exactly what happened to it
-pub const DiffEntry = struct {
-    path: []const u8,
-    kind: DiffKind,
 };
 
 // ── Rollback ────────────────────────────────────────────────────────────────────
@@ -150,7 +145,7 @@ pub fn listCommits(repo_path: []const u8, branch: []const u8, allocator: std.mem
 
 // ── Diff ────────────────────────────────────────────────────────────────────────
 // Compares two repository states
-pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, root_path: []const u8, allocator: std.mem.Allocator) ![]DiffEntry {
+pub fn diffFiles(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, root_path: []const u8, allocator: std.mem.Allocator) ![]DiffEntry {
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
 
@@ -256,6 +251,89 @@ pub fn diff(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, roo
     }
 
     return diff_entries.toOwnedSlice();
+}
+
+pub fn diffPackages(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, allocator: std.mem.Allocator) ![]PackageDiffEntry {
+    const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
+    defer allocator.free(repo_path_c);
+
+    const gfile = c_libs.g_file_new_for_path(repo_path_c.ptr);
+    defer c_libs.g_object_unref(gfile);
+
+    const repo = c_libs.ostree_repo_new(gfile);
+    defer c_libs.g_object_unref(repo);
+
+    var gerror: ?*c_libs.GError = null;
+    if (c_libs.ostree_repo_open(repo, null, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        return RollbackError.RepoOpenFailed;
+    }
+
+    const from_commit_body = try getRefBody(repo.?, from_ref, allocator);
+    defer if (from_commit_body) |body| allocator.free(body);
+
+    const to_commit_body = try getRefBody(repo.?, to_ref, allocator);
+    defer if (to_commit_body) |body| allocator.free(body);
+
+    var from_commit_file_map = try parsePackageBody(from_commit_body orelse "", allocator);
+    defer freeStringMap(&from_commit_file_map, allocator);
+
+    var to_commit_file_map = try parsePackageBody(to_commit_body orelse "", allocator);
+    defer freeStringMap(&to_commit_file_map, allocator);
+
+    var entries = std.ArrayList(PackageDiffEntry).init(allocator);
+    errdefer {
+        for (entries.items) |package_diff_entry| allocator.free(package_diff_entry.name);
+        entries.deinit();
+    }
+
+    var to_commit_file_map_iter = to_commit_file_map.iterator();
+    while (to_commit_file_map_iter.next()) |entry| {
+        if (from_commit_file_map.get(entry.key_ptr.*)) |from_commit_checksum| {
+            if (!std.mem.eql(u8, from_commit_checksum, entry.value_ptr.*)) try entries.append(.{ .name = try allocator.dupe(u8, entry.key_ptr.*), .kind = .updated });
+        } else try entries.append(.{ .name = try allocator.dupe(u8, entry.key_ptr.*), .kind = .added });
+    }
+
+    var from_commit_file_map_iter = from_commit_file_map.iterator();
+    while (from_commit_file_map_iter.next()) |entry| {
+        if (!to_commit_file_map.contains(entry.key_ptr.*)) try entries.append(.{ .name = try allocator.dupe(u8, entry.key_ptr.*), .kind = .removed });
+    }
+
+    return entries.toOwnedSlice();
+}
+
+pub fn diffFilesAttributed(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, root_path: []const u8, db_path: []const u8, allocator: std.mem.Allocator) ![]AttributedDiffEntry {
+    const raw_files_diff = try diffFiles(repo_path, from_ref, to_ref, root_path, allocator);
+    defer {
+        for (raw_files_diff) |entry| allocator.free(entry.path);
+        allocator.free(raw_files_diff);
+    }
+
+    var file_pkg = std.StringHashMap([]const u8).init(allocator);
+    defer freeStringMap(&file_pkg, allocator);
+
+    try buildFilePkgMap(repo_path, to_ref, db_path, &file_pkg, allocator);
+    try buildFilePkgMap(repo_path, from_ref, db_path, &file_pkg, allocator);
+
+    var result = std.ArrayList(AttributedDiffEntry).init(allocator);
+    errdefer {
+        for (result.items) |entry| {
+            allocator.free(entry.path);
+            allocator.free(entry.package_name);
+        }
+        result.deinit();
+    }
+
+    for (raw_files_diff) |entry| {
+        const pkg = file_pkg.get(entry.path) orelse "";
+        try result.append(.{
+            .path = try allocator.dupe(u8, entry.path),
+            .kind = entry.kind,
+            .package_name = try allocator.dupe(u8, pkg),
+        });
+    }
+
+    return result.toOwnedSlice();
 }
 
 // ── Helpers functions ───────────────────────────────────────────────────────
@@ -386,5 +464,103 @@ fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [:0]const u8, destination_path: 
     if (c_libs.ostree_repo_checkout_at(repo, &checkout_options, std.c.AT.FDCWD, destination_path.ptr, resolved_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
         return RollbackError.DiffFailed;
+    }
+}
+
+fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref: []const u8, allocator: std.mem.Allocator) !?[]const u8 {
+    const ostree_ref_c = try std.fmt.allocPrintZ(allocator, "{s}", .{ostree_ref});
+    defer allocator.free(ostree_ref_c);
+
+    var gerror: ?*c_libs.GError = null;
+    var checksum: ?[*:0]u8 = null;
+    if (c_libs.ostree_repo_resolve_rev(repo, ostree_ref_c.ptr, 1, &checksum, &gerror) == 0 or checksum == null) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        return null;
+    }
+    defer c_libs.g_free(@ptrCast(checksum));
+
+    var commit_variant: ?*c_libs.GVariant = null;
+    if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, checksum, &commit_variant, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        return null;
+    }
+    defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
+
+    const body_variant = c_libs.g_variant_get_child_value(commit_variant, 4);
+    defer if (body_variant) |variant| c_libs.g_variant_unref(variant);
+
+    var commit_body_len: usize = 0;
+    const commit_body_ptr = c_libs.g_variant_get_string(body_variant, &commit_body_len);
+    return try allocator.dupe(u8, commit_body_ptr[0..commit_body_len]);
+}
+
+fn parsePackageBody(body: []const u8, allocator: std.mem.Allocator) !std.StringHashMap([]const u8) {
+    var map = std.StringHashMap([]const u8).init(allocator);
+    errdefer freeStringMap(&map, allocator);
+
+    var line_iter = std.mem.splitScalar(u8, body, '\n');
+    while (line_iter.next()) |line| {
+        const trimmed_line = std.mem.trim(u8, line, " \t\r");
+        if (trimmed_line.len == 0) continue;
+
+        const separator_index = std.mem.indexOfScalar(u8, trimmed_line, ' ') orelse continue;
+
+        const package_name = trimmed_line[0..separator_index];
+        const package_checksum = std.mem.trim(u8, trimmed_line[separator_index + 1 ..], " \t");
+
+        if (package_name.len == 0 or package_checksum.len == 0) continue;
+        try map.put(try allocator.dupe(u8, package_name), try allocator.dupe(u8, package_checksum));
+    }
+    return map;
+}
+
+fn freeStringMap(map: *std.StringHashMap([]const u8), allocator: std.mem.Allocator) void {
+    var map_iter = map.iterator();
+    while (map_iter.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        allocator.free(entry.value_ptr.*);
+    }
+    map.deinit();
+}
+
+fn buildFilePkgMap(repo_path: []const u8, ref: []const u8, db_path: []const u8, out: *std.StringHashMap([]const u8), allocator: std.mem.Allocator) !void {
+    const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
+    defer allocator.free(repo_path_c);
+
+    const gfile = c_libs.g_file_new_for_path(repo_path_c.ptr);
+    defer c_libs.g_object_unref(gfile);
+
+    const repo = c_libs.ostree_repo_new(gfile);
+    defer c_libs.g_object_unref(repo);
+
+    var gerror: ?*c_libs.GError = null;
+    if (c_libs.ostree_repo_open(repo, null, &gerror) == 0) {
+        if (gerror) |err| c_libs.g_error_free(err);
+        return;
+    }
+
+    const body = (try getRefBody(repo.?, ref, allocator)) orelse return;
+    defer allocator.free(body);
+
+    var pkg_map = try parsePackageBody(body, allocator);
+    defer freeStringMap(&pkg_map, allocator);
+
+    var pkg_map_iter = pkg_map.iterator();
+    while (pkg_map_iter.next()) |entry| {
+        const pkg_name = entry.key_ptr.*;
+        const pkg_checksum = entry.value_ptr.*;
+
+        var file_map = data.readFiles(db_path, pkg_checksum, allocator) catch continue;
+        defer data.freeFileMap(&file_map, allocator);
+
+        var file_map_iter = file_map.iterator();
+        while (file_map_iter.next()) |file_map_entry| {
+            if (!out.contains(file_map_entry.key_ptr.*)) {
+                try out.put(
+                    try allocator.dupe(u8, file_map_entry.key_ptr.*),
+                    try allocator.dupe(u8, pkg_name),
+                );
+            }
+        }
     }
 }

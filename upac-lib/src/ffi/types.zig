@@ -32,6 +32,12 @@ pub const CSliceArray = extern struct {
     }
 };
 
+pub const CPackageDiffKind = enum(u8) {
+    added = 0,
+    removed = 1,
+    updated = 2,
+};
+
 pub const CPackageEntry = extern struct {
     meta: CPackageMeta,
     temp_path: CSlice,
@@ -104,6 +110,35 @@ pub const CDiffArray = extern struct {
     len: usize,
 
     pub fn toSlice(self: CDiffArray) []CDiffEntry {
+        return self.ptr[0..self.len];
+    }
+};
+
+pub const CPackageDiffEntry = extern struct {
+    name: CSlice,
+    kind: CPackageDiffKind,
+};
+
+pub const CPackageDiffArray = extern struct {
+    ptr: [*]CPackageDiffEntry,
+    len: usize,
+
+    pub fn toSlice(self: CPackageDiffArray) []CPackageDiffEntry {
+        return self.ptr[0..self.len];
+    }
+};
+
+pub const CAttributedDiffEntry = extern struct {
+    path: CSlice,
+    kind: CDiffKind,
+    package_name: CSlice,
+};
+
+pub const CAttributedDiffArray = extern struct {
+    ptr: [*]CAttributedDiffEntry,
+    len: usize,
+
+    pub fn toSlice(self: CAttributedDiffArray) []CAttributedDiffEntry {
         return self.ptr[0..self.len];
     }
 };

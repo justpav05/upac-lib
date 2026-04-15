@@ -113,6 +113,41 @@ pub struct CDiffArray {
     pub len: usize,
 }
 
+// ── Package Diff ──────────────────────────────────────────────────────────────
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug)]
+pub enum CPackageDiffKind {
+    Added = 0,
+    Removed = 1,
+    Updated = 2,
+}
+
+#[repr(C)]
+pub struct CPackageDiffEntry {
+    pub name: CSlice,
+    pub kind: CPackageDiffKind,
+}
+
+#[repr(C)]
+pub struct CPackageDiffArray {
+    pub ptr: *mut CPackageDiffEntry,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct CAttributedDiffEntry {
+    pub path: CSlice,
+    pub kind: CDiffKind,
+    pub package_name: CSlice,
+}
+
+#[repr(C)]
+pub struct CAttributedDiffArray {
+    pub ptr: *mut CAttributedDiffEntry,
+    pub len: usize,
+}
+
 // ── Commits ───────────────────────────────────────────────────────────────────
 #[repr(C)]
 pub struct CCommitEntry {
@@ -159,8 +194,17 @@ pub struct UpacLib {
     pub uninstall: unsafe extern "C" fn(CUninstallRequest) -> i32,
     pub rollback: unsafe extern "C" fn(CRollbackRequest) -> i32,
 
-    pub diff: unsafe extern "C" fn(CSlice, CSlice, CSlice, CSlice, *mut CDiffArray) -> i32,
-    pub diff_free: unsafe extern "C" fn(*mut CDiffArray),
+    pub diff_packages: unsafe extern "C" fn(CSlice, CSlice, CSlice, *mut CPackageDiffArray) -> i32,
+    pub diff_packages_free: unsafe extern "C" fn(*mut CPackageDiffArray),
+    pub diff_files_attributed: unsafe extern "C" fn(
+        CSlice,
+        CSlice,
+        CSlice,
+        CSlice,
+        CSlice,
+        *mut CAttributedDiffArray,
+    ) -> i32,
+    pub diff_files_attributed_free: unsafe extern "C" fn(*mut CAttributedDiffArray),
 
     pub list_commits: unsafe extern "C" fn(CSlice, CSlice, *mut CCommitArray) -> i32,
     pub commits_free: unsafe extern "C" fn(*mut CCommitArray),
@@ -194,8 +238,10 @@ impl UpacLib {
             uninstall: sym!(b"upac_uninstall"),
             rollback: sym!(b"upac_rollback"),
 
-            diff: sym!(b"upac_diff"),
-            diff_free: sym!(b"upac_diff_free"),
+            diff_packages: sym!(b"upac_diff_packages"),
+            diff_packages_free: sym!(b"upac_diff_packages_free"),
+            diff_files_attributed: sym!(b"upac_diff_files_attributed"),
+            diff_files_attributed_free: sym!(b"upac_diff_files_attributed_free"),
 
             list_commits: sym!(b"upac_list_commits"),
             commits_free: sym!(b"upac_commits_free"),
