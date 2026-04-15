@@ -13,7 +13,7 @@ CPU         ?= native
 ZIG_TARGET      := $(ARCH)-linux-$(LIBC)
 CARGO_TARGET    ?= $(ARCH)-unknown-linux-$(LIBC)
 
-RUSTFLAGS_COMMON := -C target-cpu=$(subst _,-,$(strip $(CPU)))
+RUST_FLAGS_CPU := -C target-cpu=$(subst _,-,$(strip $(CPU)))
 
 ARCH_PKG_FLAGS  ?= --nodeps --noconfirm -f
 RPM_PKG_FLAGS   ?= -bb --define "_topdir $(PKG_DIR)/rpm" \
@@ -28,32 +28,27 @@ DEB_PKG_FLAGS   ?= --root-owner-group
         clean clean-build clean-pkg
 
 # ── Compilation flags ──────────────────────────────────────────────────────────
-
 ifeq ($(strip $(MODE)), release)
     $(info --- INFO: Building in RELEASE mode ---)
-    RUSTFLAGS_MODE  := -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false
+    RUST_FLAGS_MODE  := -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false
     ZIG_MODE_FLAGS  := -Doptimize=ReleaseSafe -Dstrip=true -Dstack-check=false
 else
     $(info --- INFO: Building in DEBUG mode ---)
-    RUSTFLAGS_MODE  := -C debuginfo=2 -C force-frame-pointers=yes
+    RUST_FLAGS_MODE  := -C debuginfo=2 -C force-frame-pointers=yes
     ZIG_MODE_FLAGS  := -Doptimize=Debug -Dstrip=false -Dstack-check=true
 endif
 
-ifeq ($(LIBC), musl)
+ifeq ($(strip $(LIBC)), musl)
     MUSL_LDPATH     := /lib/ld-musl-$(ARCH).so.1
-    RUSTFLAGS_LIBC  := -C target-feature=-crt-static \
-                       -C link-arg=-dynamic-linker=$(MUSL_LDPATH)
+    RUST_FLAGS_LIBC := -C target-feature=-crt-static -C link-arg=-dynamic-linker=$(MUSL_LDPATH)
+else
+    RUST_FLAGS_LIBC :=
 endif
 
-# Для Zig CPU-флаг нужен только если не native (native — умолчание Zig)
-ifneq ($(CPU), native)
-    ZIG_CPU_FLAGS := -Dcpu=$(CPU)
-endif
+export PKG_CONFIG_ALLOW_CROSS = 1
 
-RUSTFLAGS := $(RUSTFLAGS_COMMON) $(RUSTFLAGS_MODE) $(RUSTFLAGS_LIBC)
-
-# ZIG_SYS_FLAGS остаётся для внешней передачи (пути к системным либам и т.п.)
-ZIG_BUILD_FLAGS := -Dtarget=$(ZIG_TARGET) $(ZIG_MODE_FLAGS) $(ZIG_CPU_FLAGS) $(ZIG_SYS_FLAGS)
+ZIG_BUILD_FLAGS := -Dtarget=$(ZIG_TARGET) $(ZIG_MODE_FLAGS) $(ZIG_CPU_FLAGS)
+RUST_BUILD_FLAGS := $(RUST_FLAGS_CPU) $(RUST_FLAGS_MODE) $(RUST_FLAGS_LIBC)
 
 # ── Prepare ───────────────────────────────────────────────────────────────────
 

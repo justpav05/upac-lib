@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
     });
 
     shared_lib.linkLibC();
-    shared_lib.linkSystemLibrary("archive");
+    shared_lib.linkSystemLibrary("libarchive");
 
     shared_lib.root_module.strip = strip;
     shared_lib.root_module.stack_check = stack_check;

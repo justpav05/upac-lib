@@ -11,6 +11,12 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
+        cargoVendorDir = pkgs.rustPlatform.fetchCargoVendor {
+            src = ./upac-cli;
+            name = "upac-deps";
+            hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+          };
+
         crossPackageSets = {
           x86_64-gnu = if system == "x86_64-linux"
             then pkgs
@@ -40,18 +46,23 @@
             ];
 
             buildInputs = with crossPkgs; [
-              ostree glib libarchive
+              ostree glib libarchive.dev libarchive.lib
             ];
 
             buildPhase = ''
               export HOME=$TMPDIR
+              export CARGO_HOME=$TMPDIR/cargo-home
+              export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
+
+              mkdir -p $CARGO_HOME
+              ln -s ${cargoVendorDir} $CARGO_HOME/registry
 
               make build \
                 ARCH=${crossPkgs.stdenv.hostPlatform.linuxArch} \
                 LIBC=${if crossPkgs.stdenv.hostPlatform.isMusl then "musl" else "gnu"} \
                 MODE=release \
                 CPU=${cpu} \
-                ZIG_SYS_FLAGS="--search-prefix ${crossPkgs.libarchive.dev} --search-prefix ${crossPkgs.libarchive.lib} --search-prefix ${crossPkgs.glib.dev} --search-prefix ${crossPkgs.glib.out}"
+                CARGO_FLAGS="--offline --frozen"
             '';
 
             installPhase = ''
@@ -108,7 +119,7 @@
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            zig_0_13 rustc cargo cargo-zigbuild gnumake pkg-config ostree glib
+            zig_0_13 rustc cargo cargo-zigbuild gnumake pkg-config ostree glib libarchive
           ];
         };
       }
