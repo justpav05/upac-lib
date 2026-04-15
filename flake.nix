@@ -36,20 +36,22 @@
             src     = ./.;
 
             nativeBuildInputs = with pkgs; [
-              zig rustc cargo cargo-zigbuild gnumake pkg-config
+              zig_0_13 rustc cargo cargo-zigbuild gnumake pkg-config
             ];
 
             buildInputs = with crossPkgs; [
-              ostree glib
+              ostree glib libarchive
             ];
 
             buildPhase = ''
               export HOME=$TMPDIR
+
               make build \
                 ARCH=${crossPkgs.stdenv.hostPlatform.linuxArch} \
                 LIBC=${if crossPkgs.stdenv.hostPlatform.isMusl then "musl" else "gnu"} \
                 MODE=release \
-                CPU=${cpu}
+                CPU=${cpu} \
+                ZIG_SYS_FLAGS="--search-prefix ${crossPkgs.libarchive.dev} --search-prefix ${crossPkgs.libarchive.lib} --search-prefix ${crossPkgs.glib.dev} --search-prefix ${crossPkgs.glib.out}"
             '';
 
             installPhase = ''
@@ -106,7 +108,7 @@
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            zig rustc cargo cargo-zigbuild gnumake pkg-config ostree glib
+            zig_0_13 rustc cargo cargo-zigbuild gnumake pkg-config ostree glib
           ];
         };
       }

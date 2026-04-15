@@ -5,7 +5,7 @@ verbose = false
 
 [paths]
 # Directory where package metadata is stored
-database_path = "/var/db/upac"
+database_path = "/usr/share/upac/db"
 
 # OSTree repo
 repo_path   = "/var/repo"
