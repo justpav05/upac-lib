@@ -42,7 +42,7 @@ fn state_initializing(machine: &mut InitMachine) -> Result<()> {
     let progress_bar = spinner("Initializing system directories...");
 
     let system_paths_c = CSystemPaths {
-        repo_path: CSlice::from_str(&machine.config_path),
+        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
         root_path: CSlice::from_str(&machine.config.paths.root_path),
     };
 
