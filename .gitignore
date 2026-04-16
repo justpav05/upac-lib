@@ -10,6 +10,7 @@ build
 
 # Builded packages
 pkg/
+ostree/
 
 Agents
 AGENTS.md

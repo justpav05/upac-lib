@@ -10,6 +10,9 @@ CPU         ?= native
 
 CARGO_TARGET ?= $(shell rustc -Vv | grep host | cut -d ' ' -f 2)
 
+OSTREE_REPO := https://github.com/ostreedev/ostree.git
+OSTREE_DIR  := $(ROOT_DIR)/ostree
+
 ARCH_PKG_FLAGS  ?= --nodeps --noconfirm -f
 RPM_PKG_FLAGS   ?= -bb --define "_topdir $(PKG_DIR)/rpm" \
                        --define "_rpmdir $(PKG_DIR)/rpm/RPMS" \
@@ -28,11 +31,13 @@ ifeq ($(strip $(MODE)), release)
     CARGO_BUILD_FLAG := --release
     RUST_BUILD_FLAGS  := -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false -C target-cpu=$(subst _,-,$(strip $(CPU)))
     ZIG_BUILD_FLAGS  := -Doptimize=ReleaseSafe -Dstrip=true -Dstack-check=false
+    OSTREE_BUILD_CFLAGS := -O3 -flto -march=$(subst _,-,$(strip $(CPU)))
 else
     $(info --- INFO: Building in DEBUG mode ---)
     CARGO_BUILD_FLAG :=
     RUST_BUILD_FLAGS  := -C debuginfo=2 -C force-frame-pointers=yes -C target-cpu=$(subst _,-,$(strip $(CPU)))
     ZIG_BUILD_FLAGS  := -Doptimize=Debug -Dstrip=false -Dstack-check=true -Dcpu=$(strip $(CPU))
+    OSTREE_BUILD_CFLAGS := -g -O0
 endif
 
 export PKG_CONFIG_ALLOW_CROSS = 1
@@ -41,9 +46,26 @@ export PKG_CONFIG_ALLOW_CROSS = 1
 prepare-dirs:
 	@echo "--- Preparing directories ($(MODE) / cpu=$(CPU)) ---"
 	@mkdir -p $(OUT_BUILD_DIR)/bin $(OUT_BUILD_DIR)/lib
+	@mkdir -p $(ROOT_DIR)/ostree
+
+prepare-ostree:
+	@echo "--- Fetching and building static ostree in $(MODE) mode ---"
+	@git clone --depth 1 $(OSTREE_REPO) $(OSTREE_DIR);
+	@cd $(OSTREE_DIR) && \
+		env NOCONFIGURE=1 ./autogen.sh && \
+		./configure \
+			--enable-static \
+			--disable-shared \
+			--disable-rofiles-fuse \
+			--without-soup \
+			--without-curl \
+			--without-avahi \
+			--disable-man \
+			CFLAGS="$(OSTREE_BUILD_CFLAGS)" && \
+		$(MAKE) -j$(shell nproc)
 
 # ── Build ─────────────────────────────────────────────────────────────────────
-build: prepare-dirs build-lib build-backends build-cli build-removing
+build: prepare-dirs prepare-ostree build-lib build-backends build-cli build-removing
 
 build-lib:
 	@echo "--- Building upac-lib in $(MODE) mode ---"
@@ -63,11 +85,15 @@ build-cli:
 	@cd $(ROOT_DIR)/upac-cli && \
 		RUSTFLAGS="$(RUSTFLAGS)" cargo-zigbuild build \
 			$(CARGO_BUILD_FLAG) \
+			--target $(CARGO_TARGET) \
 			--target-dir $(OUT_BUILD_DIR) \
 			$(CARGO_FLAGS)
-	@mv $(OUT_BUILD_DIR)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
+	@mv $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
 
 build-removing:
+	@echo "--- Cleaning cargo temp dirs ---"
+	@rm -rf $(ROOT_DIR)/ostree
+
 	@echo "--- Cleaning cargo temp dirs ---"
 	@rm -rf $(OUT_BUILD_DIR)/$(CARGO_TARGET)
 	@rm -rf $(OUT_BUILD_DIR)/$(MODE)
@@ -201,6 +227,9 @@ sync-build:
 clean: clean-build clean-pkg
 
 clean-build:
+	@echo "--- Cleaning ostree build artifacts ---"
+	@rm -rf $(ROOT_DIR)/ostree
+
 	@echo "--- Cleaning build artifacts ---"
 	@echo "--- Cleaning upac-lib build artifacts ---"
 	@rm -rf $(ROOT_DIR)/upac-lib/zig-out
