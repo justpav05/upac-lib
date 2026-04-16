@@ -1,89 +1,17 @@
-use anyhow::Result;
-
-use colored::Colorize;
-
+// ── Imports ─────────────────────────────────────────────────────────────────
 use std::slice;
 
-use crate::config::Config;
+use super::{
+    Colorize, DiffMachine, FileDiffKind, FileDiffRow, PackageDiffRow, PkgDiffKind, Result, State,
+};
+
 use crate::ffi::{
     CAttributedDiffArray, CCommitArray, CDiffKind, CPackageDiffArray, CPackageDiffKind, CSlice,
     UpacLib, UpacLibGuard,
 };
 
-// ── FSM ───────────────────────────────────────────────────────────────────────
-#[derive(Debug, Clone, PartialEq)]
-enum State {
-    Validating,
-    FetchingDiff,
-    Printing,
-    Done,
-    Failed(String),
-}
-
-struct PackageDiffRow {
-    name: String,
-    kind: PkgDiffKind,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum PkgDiffKind {
-    Added,
-    Removed,
-    Updated,
-}
-
-struct FileDiffRow {
-    path: String,
-    kind: FileDiffKind,
-    package_name: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum FileDiffKind {
-    Added,
-    Removed,
-    Modified,
-}
-
-struct DiffMachine {
-    config: Config,
-    from: Option<String>,
-    to: Option<String>,
-    files_mode: bool,
-
-    resolved_from: String,
-    resolved_to: String,
-
-    package_rows: Vec<PackageDiffRow>,
-    file_rows: Vec<FileDiffRow>,
-
-    upac_lib: Option<UpacLibGuard>,
-    stack: Vec<State>,
-}
-
-impl DiffMachine {
-    fn new(config: Config, from: Option<String>, to: Option<String>, files_mode: bool) -> Self {
-        Self {
-            config,
-            from,
-            to,
-            files_mode,
-            resolved_from: String::new(),
-            resolved_to: String::new(),
-            package_rows: Vec::new(),
-            file_rows: Vec::new(),
-            upac_lib: None,
-            stack: Vec::new(),
-        }
-    }
-
-    fn enter(&mut self, state: State) {
-        self.stack.push(state);
-    }
-}
-
-// ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_validating(machine: &mut DiffMachine) -> Result<()> {
+// ── States ─────────────────────────────────────────────────────────────────
+pub fn state_validating(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::Validating);
     machine.upac_lib = Some(UpacLibGuard::load()?);
 
@@ -93,7 +21,7 @@ fn state_validating(machine: &mut DiffMachine) -> Result<()> {
             machine.resolved_to = to.clone();
         }
         _ => {
-            let mut c_commits = CCommitArray {
+            let mut commits_c = CCommitArray {
                 ptr: std::ptr::null_mut(),
                 len: 0,
             };
@@ -102,18 +30,18 @@ fn state_validating(machine: &mut DiffMachine) -> Result<()> {
                 (machine.upac_lib.as_ref().unwrap().list_commits)(
                     CSlice::from_str(&machine.config.paths.repo_path),
                     CSlice::from_str(&machine.config.ostree.branch),
-                    &mut c_commits,
+                    &mut commits_c,
                 )
             };
             UpacLib::check(code, "list commits")?;
 
-            let entries = unsafe { slice::from_raw_parts(c_commits.ptr, c_commits.len) };
+            let entries = unsafe { slice::from_raw_parts(commits_c.ptr, commits_c.len) };
             let checksums: Vec<String> = entries
                 .iter()
                 .map(|entry| unsafe { entry.checksum.as_str().to_owned() })
                 .collect();
 
-            unsafe { (machine.upac_lib.as_ref().unwrap().commits_free)(&mut c_commits) };
+            unsafe { (machine.upac_lib.as_ref().unwrap().commits_free)(&mut commits_c) };
 
             if checksums.is_empty() {
                 anyhow::bail!("no commits found");
@@ -276,29 +204,4 @@ fn state_printing(machine: &mut DiffMachine) -> Result<()> {
 fn state_done(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::Done);
     Ok(())
-}
-
-// ── Публичное API ─────────────────────────────────────────────────────────────
-pub fn run(
-    config: Config,
-    from: Option<String>,
-    to: Option<String>,
-    files_mode: bool,
-) -> Result<()> {
-    let mut machine = DiffMachine::new(config, from, to, files_mode);
-
-    state_validating(&mut machine).map_err(|err| {
-        let last_state = machine.stack.last().cloned();
-        if !matches!(last_state, Some(State::Failed(_))) {
-            machine.enter(State::Failed(err.to_string()));
-        }
-        if machine.config.verbose {
-            eprintln!(
-                "{} failed at state {:?}",
-                "✗".red().bold(),
-                machine.stack.last()
-            );
-        }
-        err
-    })
 }

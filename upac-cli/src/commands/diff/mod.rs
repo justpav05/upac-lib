@@ -1,0 +1,129 @@
+// ── Imports ─────────────────────────────────────────────────────────────────
+use anyhow::Result;
+
+use colored::Colorize;
+
+use clap::Args;
+
+use self::states::state_validating;
+
+use crate::config::Config;
+use crate::ffi::UpacLibGuard;
+
+mod states;
+
+// ── Arguments for command ───────────────────────────────────────────────────────────────────────
+#[derive(Args)]
+pub struct DiffArgs {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    #[arg(long)]
+    pub files: bool,
+    #[arg(long)]
+    pub package: Option<String>,
+}
+
+// ── FSM States ───────────────────────────────────────────────────────────────────────
+#[derive(Debug, Clone, PartialEq)]
+enum State {
+    Validating,
+    FetchingDiff,
+    Printing,
+
+    Done,
+    Failed(String),
+}
+
+// ── Diff kinds ───────────────────────────────────────────────────────────────────────
+#[derive(Debug, Clone, PartialEq)]
+enum PkgDiffKind {
+    Added,
+    Removed,
+    Updated,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum FileDiffKind {
+    Added,
+    Removed,
+    Modified,
+}
+
+// ── Diff rows ───────────────────────────────────────────────────────────────────────
+struct PackageDiffRow {
+    name: String,
+    kind: PkgDiffKind,
+}
+
+struct FileDiffRow {
+    path: String,
+    kind: FileDiffKind,
+    package_name: String,
+}
+
+// ── DiffFSM machine ───────────────────────────────────────────────────────────────────────
+struct DiffMachine {
+    from: Option<String>,
+    to: Option<String>,
+
+    resolved_from: String,
+    resolved_to: String,
+
+    package_rows: Vec<PackageDiffRow>,
+    file_rows: Vec<FileDiffRow>,
+
+    files_mode: bool,
+    package_filter: Option<String>,
+
+    config: Config,
+    upac_lib: Option<UpacLibGuard>,
+    stack: Vec<State>,
+}
+
+impl DiffMachine {
+    fn new(
+        config: Config,
+        from: Option<String>,
+        to: Option<String>,
+        files_mode: bool,
+        package_filter: Option<String>,
+    ) -> Self {
+        Self {
+            from,
+            to,
+            resolved_from: String::new(),
+            resolved_to: String::new(),
+            package_rows: Vec::new(),
+            file_rows: Vec::new(),
+            files_mode,
+            package_filter,
+            config,
+            upac_lib: None,
+            stack: Vec::new(),
+        }
+    }
+
+    fn enter(&mut self, state: State) {
+        self.stack.push(state);
+    }
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────
+pub fn run(config: Config, args: DiffArgs) -> Result<()> {
+    let mut machine = DiffMachine::new(config, args.from, args.to, args.files, args.package);
+
+    state_validating(&mut machine).map_err(|err| {
+        let last_state = machine.stack.last().cloned();
+        if !matches!(last_state, Some(State::Failed(_))) {
+            machine.enter(State::Failed(err.to_string()));
+        }
+        if machine.config.verbose {
+            eprintln!(
+                "{} failed at state {:?}",
+                "✗".red().bold(),
+                machine.stack.last()
+            );
+        }
+        err
+    })
+}

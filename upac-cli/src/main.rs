@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
 
 use clap::{Parser, Subcommand};
@@ -6,12 +7,17 @@ use colored::Colorize;
 
 use std::path::Path;
 
+use commands::diff::DiffArgs;
+use commands::init::InitArgs;
+use commands::install::InstallArgs;
+use commands::list::ListArgs;
+use commands::remove::RemoveArgs;
+use commands::rollback::RollbackArgs;
+
 mod backends;
 mod config;
 mod ffi;
 mod commands {
-    pub mod commit;
-
     pub mod install;
     pub mod remove;
     pub mod rollback;
@@ -24,7 +30,7 @@ mod commands {
 
 const CONFIG_PATH: &str = "/etc/upac/config.toml";
 
-// ── CLI аргументы ─────────────────────────────────────────────────────────────
+// ── CLI arguments ─────────────────────────────────────────────────────────────
 #[derive(Parser)]
 #[command(name = "upac", about = "A modular Linux package manager", version)]
 struct Cli {
@@ -34,48 +40,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Install {
-        files: Vec<String>,
+    Install(InstallArgs),
+    Remove(RemoveArgs),
+    Rollback(RollbackArgs),
 
-        #[arg(long)]
-        backend: Option<String>,
-
-        #[arg(long, num_args = 0..)]
-        checksums: Vec<String>,
-    },
-
-    Remove {
-        name: Vec<String>,
-    },
-
-    Rollback {
-        commit: String,
-    },
-
-    List {
-        #[arg(long)]
-        commit: bool,
-
-        #[arg(long)]
-        full: bool,
-    },
-
-    Diff {
-        from: Option<String>,
-        to: Option<String>,
-        #[arg(long)]
-        files: bool,
-    },
-
-    Commit,
-
-    Init {
-        #[arg(long, default_value = "archive")]
-        mode: String,
-    },
+    List(ListArgs),
+    Diff(DiffArgs),
+    Init(InitArgs),
 }
 
-// ── Точка входа ───────────────────────────────────────────────────────────────
+// ── Entry point ───────────────────────────────────────────────────────────────
 fn main() {
     if let Err(err) = run() {
         eprintln!("{} {err}", "error:".red().bold());
@@ -90,30 +64,23 @@ fn run() -> Result<()> {
     let config = config::Config::load(&default_config_path)?;
 
     match cli.command {
-        Command::Install {
-            files,
-            backend,
-            checksums,
-        } => {
-            commands::install::run(config, files, backend, checksums)?;
+        Command::Install(args) => {
+            commands::install::run(config, args)?;
         }
-        Command::Remove { name } => {
-            commands::remove::run(config, name)?;
+        Command::Remove(args) => {
+            commands::remove::run(config, args)?;
         }
-        Command::Commit => {
-            commands::commit::run(config)?;
+        Command::List(args) => {
+            commands::list::run(config, args)?;
         }
-        Command::List { commit, full } => {
-            commands::list::run(config, commit, full)?;
+        Command::Diff(args) => {
+            commands::diff::run(config, args)?;
         }
-        Command::Diff { from, to, files } => {
-            commands::diff::run(config, from, to, files)?;
+        Command::Rollback(args) => {
+            commands::rollback::run(config, args)?;
         }
-        Command::Rollback { commit } => {
-            commands::rollback::run(config, commit)?;
-        }
-        Command::Init { mode } => {
-            commands::init::run(config, mode)?;
+        Command::Init(args) => {
+            commands::init::run(config, args)?;
         }
     }
 

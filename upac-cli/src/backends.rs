@@ -68,7 +68,7 @@ impl BackendKind {
 
     pub fn so_name(&self) -> &'static str {
         match self {
-            Self::Alpm => "libupac-arch.so",
+            Self::Alpm => "libupac-alpm.so",
             Self::Rpm => "libupac-rpm.so",
             Self::Deb => "libupac-deb.so",
         }

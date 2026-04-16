@@ -1,7 +1,4 @@
-use anyhow::Result;
-
-use colored::Colorize;
-
+// ── Imports ─────────────────────────────────────────────────────────────────
 use indicatif::{ProgressBar, ProgressStyle};
 
 use sha2::{Digest, Sha256};
@@ -11,72 +8,13 @@ use std::io::Read;
 use std::process;
 use std::time::Duration;
 
-use crate::backends::{Backend, BackendKind, PackageMeta};
+use super::{Colorize, InstallMachine, PreparedPackage, Result, State};
 
-use crate::config::Config;
+use crate::backends::{Backend, BackendKind};
 use crate::ffi::{CInstallRequest, CPackageEntry, CSlice, UpacLib, UpacLibGuard};
 
-// ── FSM ───────────────────────────────────────────────────────────────────────
-#[derive(Debug, Clone, PartialEq)]
-enum State {
-    DetectingBackend(String),
-    PreparingPackage,
-    Installing,
-    Done,
-    Failed(String),
-}
-
-struct PreparedPackage {
-    meta: PackageMeta,
-    temp_path: String,
-    checksum: String,
-}
-
-struct InstallMachine {
-    config: Config,
-    files: Vec<String>,
-    backend: Option<String>,
-    checksums: Vec<String>,
-
-    prepared_packages: Vec<PreparedPackage>,
-    tmp_dirs: Vec<String>,
-
-    stack: Vec<State>,
-}
-
-impl InstallMachine {
-    fn new(
-        config: Config,
-        files: Vec<String>,
-        backend: Option<String>,
-        checksums: Vec<String>,
-    ) -> Self {
-        Self {
-            config,
-            files,
-            backend,
-            checksums,
-            prepared_packages: Vec::new(),
-            tmp_dirs: Vec::new(),
-            stack: Vec::new(),
-        }
-    }
-
-    fn enter(&mut self, state: State) {
-        self.stack.push(state);
-    }
-}
-
-impl Drop for InstallMachine {
-    fn drop(&mut self) {
-        for tmp_dir in &self.tmp_dirs {
-            let _ = fs::remove_dir_all(tmp_dir);
-        }
-    }
-}
-
-// ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
+// ── States ─────────────────────────────────────────────────────────────────
+pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::PreparingPackage);
 
     let files: Vec<String> = machine.files.clone();
@@ -185,39 +123,7 @@ fn state_done(machine: &mut InstallMachine) -> Result<()> {
     Ok(())
 }
 
-// ── Публичное API ─────────────────────────────────────────────────────────────
-pub fn run(
-    config: Config,
-    files: Vec<String>,
-    backend: Option<String>,
-    checksums: Vec<String>,
-) -> Result<()> {
-    if !checksums.is_empty() && checksums.len() != files.len() {
-        anyhow::bail!(
-            "number of checksums ({}) must match number of files ({})",
-            checksums.len(),
-            files.len()
-        );
-    }
-
-    let mut machine = InstallMachine::new(config, files, backend, checksums);
-
-    state_preparing_package(&mut machine).map_err(|err| {
-        if !matches!(machine.stack.last(), Some(State::Failed(_))) {
-            machine.enter(State::Failed(err.to_string()));
-        }
-        if machine.config.verbose {
-            eprintln!(
-                "{} failed at state {:?}",
-                "✗".red().bold(),
-                machine.stack.last()
-            );
-        }
-        err
-    })
-}
-
-// ── Хелперы ───────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 fn spinner(message: &str) -> ProgressBar {
     let progress_bar = ProgressBar::new_spinner();
     progress_bar.set_style(

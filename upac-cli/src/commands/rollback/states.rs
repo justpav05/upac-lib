@@ -1,46 +1,14 @@
-use anyhow::Result;
-
-use colored::Colorize;
-
+// ── Imports ─────────────────────────────────────────────────────────────────
 use indicatif::{ProgressBar, ProgressStyle};
 
 use std::time::Duration;
 
-use crate::config::Config;
+use super::{Colorize, Result, RollbackMachine, State};
 
 use crate::ffi::{CRollbackRequest, CSlice, UpacLib, UpacLibGuard};
 
-// ── FSM ───────────────────────────────────────────────────────────────────────
-#[derive(Debug, Clone, PartialEq)]
-enum State {
-    Validating,
-    RollingBack,
-    Done,
-    Failed(String),
-}
-
-struct RollbackMachine {
-    config: Config,
-    commit_hash: String,
-    stack: Vec<State>,
-}
-
-impl RollbackMachine {
-    fn new(config: Config, commit_hash: String) -> Self {
-        Self {
-            config,
-            commit_hash,
-            stack: Vec::new(),
-        }
-    }
-
-    fn enter(&mut self, state: State) {
-        self.stack.push(state);
-    }
-}
-
-// ── Состояния ─────────────────────────────────────────────────────────────────
-fn state_validating(rolling_machine: &mut RollbackMachine) -> Result<()> {
+// ── States ─────────────────────────────────────────────────────────────────
+pub fn state_validating(rolling_machine: &mut RollbackMachine) -> Result<()> {
     rolling_machine.enter(State::Validating);
 
     if rolling_machine.commit_hash.len() != 64
@@ -98,27 +66,7 @@ fn state_done(machine: &mut RollbackMachine) -> Result<()> {
     Ok(())
 }
 
-// ── Публичное API ─────────────────────────────────────────────────────────────
-pub fn run(config: Config, commit_hash: String) -> Result<()> {
-    let mut rolling_machine = RollbackMachine::new(config, commit_hash);
-
-    state_validating(&mut rolling_machine).map_err(|err| {
-        if !matches!(rolling_machine.stack.last(), Some(State::Failed(_))) {
-            rolling_machine.enter(State::Failed(err.to_string()));
-        }
-
-        if rolling_machine.config.verbose {
-            eprintln!(
-                "{} failed at state {:?}",
-                "✗".red().bold(),
-                rolling_machine.stack.last()
-            );
-        }
-        err
-    })
-}
-
-// ── Хелперы ───────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 fn spinner(message: &str) -> ProgressBar {
     let progress_bar = ProgressBar::new_spinner();
     progress_bar.set_style(
