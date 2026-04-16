@@ -1,0 +1,18 @@
+# Upac configuration file
+# Copy to /etc/upac/config.toml and adjust paths as needed for testing purposes
+step_retries = 3
+verbose = false
+
+[paths]
+# Directory where package metadata is stored
+database_path = "/usr/share/upac/db"
+
+# OSTree repo
+repo_path   = "/tmp/var"
+
+# Root of the filesystem where hardlinks are created
+root_path   = "/tmp/root/"
+
+[ostree]
+# Branch name used for OStree commits
+branch  = "packages"
