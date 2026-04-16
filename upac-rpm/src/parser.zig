@@ -1,9 +1,11 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
-// ── Константы RPM ─────────────────────────────────────────────────────────────
+// ── Contains RPM magic bytes and header magic bytes ─────────────────────────────────────────────────────────────
 const rpm_magic: [4]u8 = .{ 0xED, 0xAB, 0xEE, 0xDB };
 const header_magic: [3]u8 = .{ 0x8E, 0xAD, 0xE8 };
 
+// Represents an RPM tag, identified by its numeric tag ID
 const RpmTag = enum(u32) {
     name = 1000,
     version = 1001,
@@ -16,6 +18,7 @@ const RpmTag = enum(u32) {
     _,
 };
 
+// Represents the type of an RPM tag value
 const RpmTagType = enum(u32) {
     null_type = 0,
     char = 1,
@@ -30,7 +33,8 @@ const RpmTagType = enum(u32) {
     _,
 };
 
-// ── Публичные типы ────────────────────────────────────────────────────────────
+// ── Public types ────────────────────────────────────────────────────────────
+// Contains metadata extracted from the RPM package header
 pub const RpmHeader = struct {
     name: ?[]const u8,
     version: ?[]const u8,
@@ -40,6 +44,7 @@ pub const RpmHeader = struct {
     url: ?[]const u8,
     packager: ?[]const u8,
 
+    // Frees the memory allocated for the header fields
     pub fn deinit(self: *RpmHeader, allocator: std.mem.Allocator) void {
         if (self.name) |value| allocator.free(value);
         if (self.version) |value| allocator.free(value);
@@ -51,7 +56,8 @@ pub const RpmHeader = struct {
     }
 };
 
-// ── Парсер ────────────────────────────────────────────────────────────────────
+// ── Parser ────────────────────────────────────────────────────────────────────
+// Main entry point for RPM parsing: verifies the signature and reads the headers.
 pub fn parseHeader(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader {
     try verifyMagic(file);
     try skipLeadSection(file);
@@ -60,7 +66,8 @@ pub fn parseHeader(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader {
     return try readHeaderSection(allocator, file);
 }
 
-// ── Внутренние функции ────────────────────────────────────────────────────────
+// ── Internal functions ────────────────────────────────────────────────────────
+// Checks for the presence of the RPM magic number (0xEDAB EEDB) at the beginning of the file
 fn verifyMagic(file: std.fs.File) !void {
     var magic_buffer: [4]u8 = undefined;
     const bytes_read = try file.read(&magic_buffer);
@@ -70,11 +77,12 @@ fn verifyMagic(file: std.fs.File) !void {
     }
 }
 
+// Skips the obsolete Lead section (96 bytes) used in old RPM formats
 fn skipLeadSection(file: std.fs.File) !void {
-    // Lead секция всегда 96 байт, первые 4 это magic который мы уже прочитали
     try file.seekBy(96 - 4);
 }
 
+// Skips the digital signature section, accounting for its header, data, and alignment
 fn skipSignatureSection(allocator: std.mem.Allocator, file: std.fs.File) !void {
     var section_header_buffer: [8]u8 = undefined;
     try file.reader().readNoEof(&section_header_buffer);
@@ -93,12 +101,10 @@ fn skipSignatureSection(allocator: std.mem.Allocator, file: std.fs.File) !void {
 
     const tags_size = tag_count * 16;
 
-    // Пропускаем теги и данные через буфер
     const skip_buffer = try allocator.alloc(u8, tags_size + data_size);
     defer allocator.free(skip_buffer);
     try file.reader().readNoEof(skip_buffer);
 
-    // Выравнивание по 8 байт
     const total_size = 16 + tags_size + data_size;
     const alignment_remainder = total_size % 8;
     if (alignment_remainder != 0) {
@@ -107,8 +113,8 @@ fn skipSignatureSection(allocator: std.mem.Allocator, file: std.fs.File) !void {
     }
 }
 
+// Reads the main header section, extracting the tag table and data block
 fn readHeaderSection(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader {
-    // Magic + version
     var section_header_buffer: [8]u8 = undefined;
     try file.reader().readNoEof(&section_header_buffer);
 
@@ -116,17 +122,14 @@ fn readHeaderSection(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader
         return error.InvalidHeaderMagic;
     }
 
-    // Количество тегов
     var tag_count_buffer: [4]u8 = undefined;
     try file.reader().readNoEof(&tag_count_buffer);
     const tag_count = std.mem.readInt(u32, &tag_count_buffer, .big);
 
-    // Размер блока данных
     var data_size_buffer: [4]u8 = undefined;
     try file.reader().readNoEof(&data_size_buffer);
     const data_size = std.mem.readInt(u32, &data_size_buffer, .big);
 
-    // Читаем все теги
     const TagEntry = struct {
         tag: u32,
         tag_type: u32,
@@ -155,13 +158,11 @@ fn readHeaderSection(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader
         tag_entry.count = std.mem.readInt(u32, &count_buffer, .big);
     }
 
-    // Читаем блок данных
     const data_block = try allocator.alloc(u8, data_size);
     defer allocator.free(data_block);
 
     try file.reader().readNoEof(data_block);
 
-    // Извлекаем нужные теги
     var rpm_header = RpmHeader{
         .name = null,
         .version = null,
@@ -191,6 +192,7 @@ fn readHeaderSection(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader
     return rpm_header;
 }
 
+// Reads a null-terminated string from a data block at a specified offset
 fn readString(allocator: std.mem.Allocator, data_block: []const u8, offset: u32) ![]const u8 {
     if (offset >= data_block.len) return error.InvalidTagOffset;
 

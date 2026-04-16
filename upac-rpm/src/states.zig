@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
 const backend = @import("backend.zig");
@@ -12,14 +13,15 @@ const c_libs = @cImport({
     @cInclude("archive_entry.h");
 });
 
-// ── Состояния ─────────────────────────────────────────────────────────────────
+// ── States ─────────────────────────────────────────────────────────────────
+// Archive integrity check status: calculating SHA256 and comparing against expected value
 pub fn stateVerifying(machine: *Machine) anyerror!void {
     try machine.enter(.verifying);
 
-    const package_path_z = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.package_path});
-    defer machine.allocator.free(package_path_z);
+    const package_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.package_path});
+    defer machine.allocator.free(package_path_c);
 
-    const package_file = std.fs.openFileAbsolute(package_path_z, .{}) catch |err| {
+    const package_file = std.fs.openFileAbsolute(package_path_c, .{}) catch |err| {
         stateFailed(machine);
         return err;
     };
@@ -54,6 +56,7 @@ pub fn stateVerifying(machine: *Machine) anyerror!void {
     return stateReadingMeta(machine);
 }
 
+// Parses the RPM header to extract package information into the machine metadata
 fn stateReadingMeta(machine: *Machine) anyerror!void {
     try machine.enter(.reading_meta);
 
@@ -86,6 +89,7 @@ fn stateReadingMeta(machine: *Machine) anyerror!void {
     return stateExtracting(machine);
 }
 
+// Unpacks the contents of an archive into a target directory using libarchive
 fn stateExtracting(machine: *Machine) anyerror!void {
     try machine.enter(.extracting);
 
@@ -173,13 +177,12 @@ fn stateExtracting(machine: *Machine) anyerror!void {
     return stateDone(machine);
 }
 
+// The final state representing the successful completion of all processing stages
 fn stateDone(machine: *Machine) anyerror!void {
     try machine.enter(.done);
 }
 
+// An error state signaling that the machine failed to reach the required state at a certain stage
 fn stateFailed(machine: *Machine) void {
     _ = machine.enter(.failed) catch {};
-    std.debug.print("✗ rpm backend failed, path: ", .{});
-    for (machine.stack.items) |state| std.debug.print("{s} ", .{@tagName(state)});
-    std.debug.print("\n", .{});
 }

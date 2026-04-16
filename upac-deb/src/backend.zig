@@ -95,12 +95,12 @@ const CSlice = extern struct {
     ptr: [*]const u8,
     len: usize,
 
-    // Converts a CSlice struct into a standard Zig slice []const u8.
+    // Converts a CSlice struct into a standard Zig slice []const u8
     fn toSlice(self: CSlice) []const u8 {
         return self.ptr[0..self.len];
     }
 
-    // Creates a CSlice instance from a standard Zig slice []const u8.
+    // Creates a CSlice instance from a standard Zig slice []const u8
     fn fromSlice(s: []const u8) CSlice {
         return .{ .ptr = s.ptr, .len = s.len };
     }
