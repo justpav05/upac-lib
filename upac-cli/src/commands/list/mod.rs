@@ -6,6 +6,7 @@ use colored::Colorize;
 use self::states::state_fetching_commits;
 
 use crate::config::Config;
+use crate::upac::{UpacLib, UpacLibGuard};
 
 mod states;
 
@@ -49,13 +50,13 @@ struct ListMachine {
     packages: Vec<PackageRow>,
 
     config: Config,
+    upac_lib: Option<UpacLibGuard>,
     stack: Vec<State>,
 }
 
 impl ListMachine {
     fn new(config: Config, commits_mode: bool, full: bool) -> Self {
         Self {
-            config,
             full,
 
             commits_mode,
@@ -63,6 +64,8 @@ impl ListMachine {
 
             commits: Vec::new(),
 
+            config,
+            upac_lib: None,
             stack: Vec::new(),
         }
     }
@@ -74,17 +77,17 @@ impl ListMachine {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: ListArgs) -> Result<()> {
-    let mut machine = ListMachine::new(config, args.commit, args.full);
+    let mut list_machine = ListMachine::new(config, args.commit, args.full);
 
-    state_fetching_commits(&mut machine).map_err(|err| {
-        if !matches!(machine.stack.last(), Some(State::Failed(_))) {
-            machine.enter(State::Failed(err.to_string()));
+    state_fetching_commits(&mut list_machine).map_err(|err| {
+        if !matches!(list_machine.stack.last(), Some(State::Failed(_))) {
+            list_machine.enter(State::Failed(err.to_string()));
         }
-        if machine.config.verbose {
+        if list_machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
                 "✗".red().bold(),
-                machine.stack.last()
+                list_machine.stack.last()
             );
         }
         err

@@ -3,57 +3,56 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use std::time::Duration;
 
-use super::{Colorize, Result, RollbackMachine, State};
+use super::{Colorize, Result, RollbackMachine, State, UpacLib, UpacLibGuard};
 
-use crate::ffi::{CRollbackRequest, CSlice, UpacLib, UpacLibGuard};
+use crate::ffi::{CRollbackRequest, CSlice};
 
 // ── States ─────────────────────────────────────────────────────────────────
-pub fn state_validating(rolling_machine: &mut RollbackMachine) -> Result<()> {
-    rolling_machine.enter(State::Validating);
+pub fn state_validating(machine: &mut RollbackMachine) -> Result<()> {
+    machine.enter(State::Validating);
+    machine.upac_lib = Some(UpacLibGuard::load()?);
 
-    if rolling_machine.commit_hash.len() != 64
-        || !rolling_machine
+    if machine.commit_hash.len() != 64
+        || !machine
             .commit_hash
             .chars()
             .all(|char| char.is_ascii_hexdigit())
     {
         anyhow::bail!(
             "invalid commit hash '{}'. Expected 64 hex characters",
-            rolling_machine.commit_hash
+            machine.commit_hash
         );
     }
 
     println!(
         "{} rolling back to {}",
         "→".cyan(),
-        &rolling_machine.commit_hash[..12].dimmed()
+        &machine.commit_hash[..12].dimmed()
     );
 
-    state_rolling_back(rolling_machine)
+    state_rolling_back(machine)
 }
 
-fn state_rolling_back(rolling_machine: &mut RollbackMachine) -> Result<()> {
-    rolling_machine.enter(State::RollingBack);
+fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
+    machine.enter(State::RollingBack);
 
     let progress_bar = spinner("Rolling back...");
 
-    let upac_lib = UpacLibGuard::load()?;
+    let rollback_request_c = CRollbackRequest {
+        root_path: CSlice::from_str(&machine.config.paths.root_path),
+        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
 
-    let c_rollback_request = CRollbackRequest {
-        root_path: CSlice::from_str(&rolling_machine.config.paths.root_path),
-        repo_path: CSlice::from_str(&rolling_machine.config.paths.repo_path),
+        branch: CSlice::from_str(&machine.config.ostree.branch),
 
-        branch: CSlice::from_str(&rolling_machine.config.ostree.branch),
-
-        commit_hash: CSlice::from_str(&rolling_machine.commit_hash),
+        commit_hash: CSlice::from_str(&machine.commit_hash),
     };
 
-    let return_code = unsafe { (upac_lib.rollback)(c_rollback_request) };
+    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().rollback)(rollback_request_c) };
 
     progress_bar.finish_and_clear();
     UpacLib::check(return_code, "rollback")?;
 
-    state_done(rolling_machine)
+    state_done(machine)
 }
 
 fn state_done(machine: &mut RollbackMachine) -> Result<()> {

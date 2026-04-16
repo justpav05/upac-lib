@@ -3,13 +3,14 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use std::time::Duration;
 
-use super::{Colorize, RemoveMachine, Result, State};
+use super::{Colorize, RemoveMachine, Result, State, UpacLib, UpacLibGuard};
 
-use crate::ffi::{CSlice, CUninstallRequest, UpacLib, UpacLibGuard};
+use crate::ffi::{CSlice, CUninstallRequest};
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_validating(machine: &mut RemoveMachine) -> Result<()> {
     machine.enter(State::Validating);
+    machine.upac_lib = Some(UpacLibGuard::load()?);
 
     for name in &machine.package_names {
         if name.is_empty() {
@@ -25,8 +26,6 @@ fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
     machine.enter(State::Uninstalling);
 
     let progress_bar = spinner("Removing packages...");
-
-    let upac_lib = UpacLibGuard::load()?;
 
     let package_names_c: Vec<CSlice> = machine
         .package_names
@@ -44,7 +43,7 @@ fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
         max_retries: machine.config.step_retries,
     };
 
-    let return_code = unsafe { (upac_lib.uninstall)(c_remove_request) };
+    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().uninstall)(c_remove_request) };
 
     progress_bar.finish_and_clear();
     UpacLib::check(return_code, "uninstall")?;

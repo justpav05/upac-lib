@@ -5,7 +5,8 @@ use clap::{Parser, Subcommand};
 
 use colored::Colorize;
 
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use commands::diff::DiffArgs;
 use commands::init::InitArgs;
@@ -14,9 +15,13 @@ use commands::list::ListArgs;
 use commands::remove::RemoveArgs;
 use commands::rollback::RollbackArgs;
 
+use config::Config;
+
 mod backends;
 mod config;
-mod ffi;
+pub mod ffi;
+mod upac;
+
 mod commands {
     pub mod install;
     pub mod remove;
@@ -28,9 +33,8 @@ mod commands {
     pub mod init;
 }
 
-const CONFIG_PATH: &str = "/etc/upac/config.toml";
-
 // ── CLI arguments ─────────────────────────────────────────────────────────────
+// Automatic generation of Cli structure parser
 #[derive(Parser)]
 #[command(name = "upac", about = "A modular Linux package manager", version)]
 struct Cli {
@@ -38,6 +42,7 @@ struct Cli {
     command: Command,
 }
 
+// Enumerate all available CLI subcommands
 #[derive(Subcommand)]
 enum Command {
     Install(InstallArgs),
@@ -49,7 +54,8 @@ enum Command {
     Init(InitArgs),
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── Entry points ───────────────────────────────────────────────────────────────
+// The main entry point, responsible for error output and the return code.
 fn main() {
     if let Err(err) = run() {
         eprintln!("{} {err}", "error:".red().bold());
@@ -57,11 +63,13 @@ fn main() {
     }
 }
 
+// Core business logic: argument parsing, config loading, and command execution
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    let default_config_path = Path::new(CONFIG_PATH);
-    let config = config::Config::load(&default_config_path)?;
+    let default_config_path =
+        check_default_config_path().ok_or(anyhow::anyhow!("no default config path found"))?;
+    let config = Config::load(&default_config_path)?;
 
     match cli.command {
         Command::Install(args) => {
@@ -85,4 +93,16 @@ fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+// Standard path validation function
+fn check_default_config_path() -> Option<PathBuf> {
+    let path = Path::new("/etc/upac/config.toml");
+
+    if fs::metadata(path).is_ok() {
+        Some(path.to_path_buf())
+    } else {
+        None
+    }
 }

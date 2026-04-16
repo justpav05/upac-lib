@@ -8,7 +8,7 @@ use clap::Args;
 use self::states::state_validating;
 
 use crate::config::Config;
-use crate::ffi::UpacLibGuard;
+use crate::upac::{UpacLib, UpacLibGuard};
 
 mod states;
 
@@ -110,18 +110,18 @@ impl DiffMachine {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: DiffArgs) -> Result<()> {
-    let mut machine = DiffMachine::new(config, args.from, args.to, args.files, args.package);
+    let mut diff_machine = DiffMachine::new(config, args.from, args.to, args.files, args.package);
 
-    state_validating(&mut machine).map_err(|err| {
-        let last_state = machine.stack.last().cloned();
+    state_validating(&mut diff_machine).map_err(|err| {
+        let last_state = diff_machine.stack.last().cloned();
         if !matches!(last_state, Some(State::Failed(_))) {
-            machine.enter(State::Failed(err.to_string()));
+            diff_machine.enter(State::Failed(err.to_string()));
         }
-        if machine.config.verbose {
+        if diff_machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
                 "✗".red().bold(),
-                machine.stack.last()
+                diff_machine.stack.last()
             );
         }
         err

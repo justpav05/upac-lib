@@ -5,15 +5,16 @@ use std::time::Duration;
 
 use std::path::Path;
 
-use super::{Colorize, InitMachine, Result, State};
+use super::{Colorize, InitMachine, Result, State, UpacLib, UpacLibGuard};
 
-use crate::ffi::{CInitRequest, CSlice, CSystemPaths, UpacLib, UpacLibGuard};
+use crate::ffi::{CInitRequest, CSlice, CSystemPaths};
 
 // ── States ─────────────────────────────────────────────────────────────────
-pub fn state_validating(init_machine: &mut InitMachine) -> Result<()> {
-    init_machine.enter(State::Validating);
+pub fn state_validating(machine: &mut InitMachine) -> Result<()> {
+    machine.enter(State::Validating);
+    machine.upac_lib = Some(UpacLibGuard::load()?);
 
-    let config_path = Path::new(&init_machine.config.paths.config_path);
+    let config_path = Path::new(&machine.config_path);
 
     if !config_path.exists() {
         anyhow::bail!(
@@ -28,42 +29,40 @@ pub fn state_validating(init_machine: &mut InitMachine) -> Result<()> {
              \n\
              [ostree]\n\
              branch  = \"packages\"",
-            init_machine.config.paths.config_path
+            machine.config_path
         );
     }
 
-    state_initializing(init_machine)
+    state_initializing(machine)
 }
 
-fn state_initializing(init_machine: &mut InitMachine) -> Result<()> {
-    init_machine.enter(State::Initializing);
+fn state_initializing(machine: &mut InitMachine) -> Result<()> {
+    machine.enter(State::Initializing);
 
     let progress_bar = spinner("Initializing system directories...");
 
-    let upac_lib = UpacLibGuard::load()?;
-
     let system_paths_c = CSystemPaths {
-        repo_path: CSlice::from_str(&init_machine.config.paths.repo_path),
-        root_path: CSlice::from_str(&init_machine.config.paths.root_path),
+        repo_path: CSlice::from_str(&machine.config_path),
+        root_path: CSlice::from_str(&machine.config.paths.root_path),
     };
 
-    let branch_c = CSlice::from_str(&init_machine.config.ostree.branch);
+    let branch_c = CSlice::from_str(&machine.config.ostree.branch);
 
     let init_request_c = CInitRequest {
         system_paths: system_paths_c,
-        repo_mode: init_machine.repo_mode_c,
+        repo_mode: machine.repo_mode_c,
         branch: branch_c,
     };
 
-    let return_code = unsafe { (upac_lib.init)(init_request_c) };
+    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().init)(init_request_c) };
     progress_bar.finish_and_clear();
     UpacLib::check(return_code, "init")?;
 
-    state_done(init_machine)
+    state_done(machine)
 }
 
-fn state_done(init_machine: &mut InitMachine) -> Result<()> {
-    init_machine.enter(State::Done);
+fn state_done(machine: &mut InitMachine) -> Result<()> {
+    machine.enter(State::Done);
 
     println!("{} system initialized", "✓".green().bold());
     println!(

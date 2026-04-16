@@ -7,6 +7,7 @@ use std::fs;
 
 use crate::backends::PackageMeta;
 use crate::config::Config;
+use crate::upac::{UpacLib, UpacLibGuard};
 
 use self::states::state_preparing_package;
 
@@ -41,7 +42,6 @@ enum State {
 
 // ── FSM machine ───────────────────────────────────────────────────────────────────────
 struct InstallMachine {
-    config: Config,
     files: Vec<String>,
     backend: Option<String>,
     checksums: Vec<String>,
@@ -49,6 +49,8 @@ struct InstallMachine {
     prepared_packages: Vec<PreparedPackage>,
     tmp_dirs: Vec<String>,
 
+    upac_lib: Option<UpacLibGuard>,
+    config: Config,
     stack: Vec<State>,
 }
 
@@ -60,12 +62,13 @@ impl InstallMachine {
         checksums: Vec<String>,
     ) -> Self {
         Self {
-            config,
             files,
             backend,
             checksums,
             prepared_packages: Vec::new(),
             tmp_dirs: Vec::new(),
+            upac_lib: None,
+            config,
             stack: Vec::new(),
         }
     }
@@ -93,17 +96,17 @@ pub fn run(config: Config, args: InstallArgs) -> Result<()> {
         );
     }
 
-    let mut machine = InstallMachine::new(config, args.files, args.backend, args.checksums);
+    let mut install_machine = InstallMachine::new(config, args.files, args.backend, args.checksums);
 
-    state_preparing_package(&mut machine).map_err(|err| {
-        if !matches!(machine.stack.last(), Some(State::Failed(_))) {
-            machine.enter(State::Failed(err.to_string()));
+    state_preparing_package(&mut install_machine).map_err(|err| {
+        if !matches!(install_machine.stack.last(), Some(State::Failed(_))) {
+            install_machine.enter(State::Failed(err.to_string()));
         }
-        if machine.config.verbose {
+        if install_machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
                 "✗".red().bold(),
-                machine.stack.last()
+                install_machine.stack.last()
             );
         }
         err

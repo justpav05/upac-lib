@@ -4,6 +4,7 @@ use anyhow::Result;
 use colored::Colorize;
 
 use crate::config::Config;
+use crate::upac::{UpacLib, UpacLibGuard};
 
 use self::states::state_validating;
 
@@ -29,14 +30,16 @@ struct RollbackMachine {
     commit_hash: String,
 
     config: Config,
+    upac_lib: Option<UpacLibGuard>,
     stack: Vec<State>,
 }
 
 impl RollbackMachine {
     fn new(config: Config, commit_hash: String) -> Self {
         Self {
-            config,
             commit_hash,
+            config,
+            upac_lib: None,
             stack: Vec::new(),
         }
     }

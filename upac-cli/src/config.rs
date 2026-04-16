@@ -1,32 +1,37 @@
 use anyhow::{Context, Result};
 
+use smart_default::SmartDefault;
+
 use serde::Deserialize;
 
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, SmartDefault)]
 pub struct Config {
     #[serde(default)]
     pub verbose: bool,
+    #[default = 3]
     pub step_retries: u8,
     #[serde(alias = "paths")]
     pub paths: Paths,
     pub ostree: OstreeConfig,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, SmartDefault)]
 pub struct Paths {
     #[serde(alias = "db_path")]
+    #[default = "/usr/share/upac/db"]
     pub database_path: String,
-    #[serde(default = "default_config_path")]
-    pub config_path: String,
+    #[default = "/var/share/upac/repo"]
     pub repo_path: String,
+    #[default = "/"]
     pub root_path: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, SmartDefault)]
 pub struct OstreeConfig {
+    #[default = "packages"]
     pub branch: String,
 }
 
@@ -63,8 +68,4 @@ impl Config {
 
         Ok(())
     }
-}
-
-fn default_config_path() -> String {
-    "/etc/upac/config.toml".to_owned()
 }

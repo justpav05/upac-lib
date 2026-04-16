@@ -5,6 +5,7 @@ use colored::Colorize;
 
 use crate::config::Config;
 use crate::ffi::CRepoMode;
+use crate::upac::{UpacLib, UpacLibGuard};
 
 use self::states::state_validating;
 
@@ -15,6 +16,8 @@ mod states;
 pub struct InitArgs {
     #[arg(long, default_value = "archive")]
     pub mode: String,
+    #[arg(long, default_value = "/etc/upac/config.toml")]
+    pub config_path: String,
 }
 
 // ── FSM states ───────────────────────────────────────────────────────────────────────
@@ -30,15 +33,20 @@ enum State {
 struct InitMachine {
     repo_mode_c: CRepoMode,
 
+    config_path: String,
+
     config: Config,
+    upac_lib: Option<UpacLibGuard>,
     stack: Vec<State>,
 }
 
 impl InitMachine {
-    fn new(repo_mode_c: CRepoMode, config: Config) -> Self {
+    fn new(repo_mode_c: CRepoMode, config_path: String, config: Config) -> Self {
         Self {
             repo_mode_c,
+            config_path,
             config,
+            upac_lib: None,
             stack: Vec::new(),
         }
     }
@@ -60,7 +68,7 @@ pub fn run(config: Config, args: InitArgs) -> Result<()> {
         ),
     };
 
-    let mut init_machine = InitMachine::new(repo_mode_c, config);
+    let mut init_machine = InitMachine::new(repo_mode_c, args.config_path, config);
 
     state_validating(&mut init_machine).map_err(|err| {
         if !matches!(init_machine.stack.last(), Some(State::Failed(_))) {

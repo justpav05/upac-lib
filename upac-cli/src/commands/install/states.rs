@@ -8,14 +8,15 @@ use std::io::Read;
 use std::process;
 use std::time::Duration;
 
-use super::{Colorize, InstallMachine, PreparedPackage, Result, State};
+use super::{Colorize, InstallMachine, PreparedPackage, Result, State, UpacLib, UpacLibGuard};
 
 use crate::backends::{Backend, BackendKind};
-use crate::ffi::{CInstallRequest, CPackageEntry, CSlice, UpacLib, UpacLibGuard};
+use crate::ffi::{CInstallRequest, CPackageEntry, CSlice};
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::PreparingPackage);
+    machine.upac_lib = Some(UpacLibGuard::load()?);
 
     let files: Vec<String> = machine.files.clone();
 
@@ -77,8 +78,6 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
 
     let progress_bar = spinner("Installing...");
 
-    let upac_lib = UpacLibGuard::load()?;
-
     let c_entries: Vec<CPackageEntry> = machine
         .prepared_packages
         .iter()
@@ -100,7 +99,7 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         max_retries: machine.config.step_retries,
     };
 
-    let return_code = unsafe { (upac_lib.install)(c_install_request) };
+    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().install)(c_install_request) };
 
     progress_bar.finish_and_clear();
     UpacLib::check(return_code, "install")?;

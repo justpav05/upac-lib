@@ -6,6 +6,7 @@ use colored::Colorize;
 use crate::config::Config;
 
 use self::states::state_validating;
+use crate::upac::{UpacLib, UpacLibGuard};
 
 mod states;
 
@@ -29,14 +30,16 @@ struct RemoveMachine {
     package_names: Vec<String>,
 
     config: Config,
+    upac_lib: Option<UpacLibGuard>,
     stack: Vec<State>,
 }
 
 impl RemoveMachine {
     fn new(config: Config, package_names: Vec<String>) -> Self {
         Self {
-            config,
             package_names,
+            config,
+            upac_lib: None,
             stack: Vec::new(),
         }
     }

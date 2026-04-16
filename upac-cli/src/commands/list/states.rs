@@ -1,29 +1,30 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use std::slice;
 
-use super::{Colorize, CommitRow, ListMachine, PackageRow, Result, State};
+use super::{Colorize, CommitRow, ListMachine, PackageRow, Result, State, UpacLib, UpacLibGuard};
 
-use crate::ffi::{CCommitArray, CPackageMetaArray, CSlice, UpacLib, UpacLibGuard};
+use crate::ffi::{CCommitArray, CPackageMetaArray, CSlice};
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_fetching_commits(machine: &mut ListMachine) -> Result<()> {
     machine.enter(State::FetchingCommits);
-
-    let upac_lib = UpacLibGuard::load()?;
+    machine.upac_lib = Some(UpacLibGuard::load()?);
 
     if machine.commits_mode {
         let repo_path_c = CSlice::from_str(&machine.config.paths.repo_path);
         let branch_c = CSlice::from_str(&machine.config.ostree.branch);
 
-        let mut c_commits = CCommitArray {
+        let mut commits_c = CCommitArray {
             ptr: std::ptr::null_mut(),
             len: 0,
         };
 
-        let code = unsafe { (upac_lib.list_commits)(repo_path_c, branch_c, &mut c_commits) };
+        let code = unsafe {
+            (machine.upac_lib.as_ref().unwrap().list_commits)(repo_path_c, branch_c, &mut commits_c)
+        };
         UpacLib::check(code, "list commits")?;
 
-        let entries = unsafe { slice::from_raw_parts(c_commits.ptr, c_commits.len) };
+        let entries = unsafe { slice::from_raw_parts(commits_c.ptr, commits_c.len) };
         machine.commits = entries
             .iter()
             .map(|entry| unsafe {
@@ -34,22 +35,22 @@ pub fn state_fetching_commits(machine: &mut ListMachine) -> Result<()> {
             })
             .collect();
 
-        unsafe { (upac_lib.commits_free)(&mut c_commits) };
+        unsafe { (machine.upac_lib.as_ref().unwrap().commits_free)(&mut commits_c) };
     } else {
         let mut packages_meta_c = CPackageMetaArray {
             ptr: std::ptr::null_mut(),
             len: 0,
         };
 
-        let code = unsafe {
-            (upac_lib.list_packages)(
+        let return_code = unsafe {
+            (machine.upac_lib.as_ref().unwrap().list_packages)(
                 CSlice::from_str(&machine.config.paths.repo_path),
                 CSlice::from_str(&machine.config.ostree.branch),
                 CSlice::from_str(&machine.config.paths.database_path),
                 &mut packages_meta_c,
             )
         };
-        UpacLib::check(code, "list packages")?;
+        UpacLib::check(return_code, "list packages")?;
 
         let entries = unsafe { slice::from_raw_parts(packages_meta_c.ptr, packages_meta_c.len) };
         machine.packages = entries
@@ -64,7 +65,7 @@ pub fn state_fetching_commits(machine: &mut ListMachine) -> Result<()> {
             })
             .collect();
 
-        unsafe { (upac_lib.packages_free)(&mut packages_meta_c) };
+        unsafe { (machine.upac_lib.as_ref().unwrap().packages_free)(&mut packages_meta_c) };
     }
 
     state_printing(machine)

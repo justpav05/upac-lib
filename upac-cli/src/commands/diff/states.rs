@@ -3,11 +3,11 @@ use std::slice;
 
 use super::{
     Colorize, DiffMachine, FileDiffKind, FileDiffRow, PackageDiffRow, PkgDiffKind, Result, State,
+    UpacLib, UpacLibGuard,
 };
 
 use crate::ffi::{
     CAttributedDiffArray, CCommitArray, CDiffKind, CPackageDiffArray, CPackageDiffKind, CSlice,
-    UpacLib, UpacLibGuard,
 };
 
 // ── States ─────────────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
             len: 0,
         };
 
-        let code = unsafe {
+        let return_code = unsafe {
             (lib.diff_packages)(
                 CSlice::from_str(&machine.config.paths.repo_path),
                 CSlice::from_str(&machine.resolved_from),
@@ -119,7 +119,7 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
                 &mut c_out,
             )
         };
-        UpacLib::check(code, "diff packages")?;
+        UpacLib::check(return_code, "diff packages")?;
 
         let entries = unsafe { slice::from_raw_parts(c_out.ptr, c_out.len) };
         machine.package_rows = entries
