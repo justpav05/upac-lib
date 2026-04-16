@@ -1,3 +1,4 @@
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 const posix = std.posix;
 
@@ -11,7 +12,8 @@ const c_libs = @cImport({
     @cInclude("archive_entry.h");
 });
 
-// ── Состояния ─────────────────────────────────────────────────────────────────
+// ── States ─────────────────────────────────────────────────────────────────
+// Archive integrity check status: calculating SHA256 and comparing against expected value
 pub fn stateVerifying(backend_machine: *Machine) anyerror!void {
     try backend_machine.enter(.verifying);
 
@@ -53,6 +55,7 @@ pub fn stateVerifying(backend_machine: *Machine) anyerror!void {
     return stateExtracting(backend_machine);
 }
 
+// Unpacking state: uses libarchive to extract files to the temp directory
 fn stateExtracting(backend_machine: *Machine) anyerror!void {
     try backend_machine.enter(.extracting);
 
@@ -155,6 +158,7 @@ fn stateExtracting(backend_machine: *Machine) anyerror!void {
     return stateVerifyingFiles(backend_machine);
 }
 
+// Verifies the checksums of files listed in md5sums against their actual contents on disk
 fn stateVerifyingFiles(backend_machine: *Machine) anyerror!void {
     try backend_machine.enter(.verifying_files);
 
@@ -208,6 +212,7 @@ fn stateVerifyingFiles(backend_machine: *Machine) anyerror!void {
     return stateReadingMeta(backend_machine);
 }
 
+// Extracts package metadata from the nested control.tar archive and parses the control file
 fn stateReadingMeta(backend_machine: *Machine) anyerror!void {
     try backend_machine.enter(.reading_meta);
 
@@ -311,13 +316,12 @@ fn stateReadingMeta(backend_machine: *Machine) anyerror!void {
     return stateDone(backend_machine);
 }
 
+// The final state representing the successful completion of all processing stages
 fn stateDone(backend_machine: *Machine) anyerror!void {
     try backend_machine.enter(.done);
 }
 
+// An error state signaling that the machine failed to reach the required state at a certain stage
 fn stateFailed(backend_machine: *Machine) void {
     _ = backend_machine.enter(.failed) catch {};
-    std.debug.print("✗ backend failed, path: ", .{});
-    for (backend_machine.stack.items) |state_id| std.debug.print("{s} ", .{@tagName(state_id)});
-    std.debug.print("\n", .{});
 }

@@ -36,7 +36,7 @@ pub const BackendError = error{
 };
 
 // ── Inner FSM types ───────────────────────────────────────────────────────
-// State Identifiers for the Preparation Process Finite State Machine (FSM)
+// State Identifiers for the preparation process Finite State Machine (FSM)
 pub const StateId = enum {
     verifying,
     extracting,
@@ -87,16 +87,18 @@ pub fn prepare(request: PrepareRequest, allocator: std.mem.Allocator) !PackageMe
     return BackendMachine.run(request, allocator);
 }
 
-// ── FFI типы ──────────────────────────────────────────────────────────────────
+// ── FFI types ──────────────────────────────────────────────────────────────────
 // A helper structure for passing data slices via C FFI
 const CSlice = extern struct {
     ptr: [*]const u8,
     len: usize,
 
+    // Converts a CSlice struct into a standard Zig slice []const u8.
     fn toSlice(self: CSlice) []const u8 {
         return self.ptr[0..self.len];
     }
 
+    // Creates a CSlice instance from a standard Zig slice []const u8.
     fn fromSlice(s: []const u8) CSlice {
         return .{ .ptr = s.ptr, .len = s.len };
     }
@@ -125,7 +127,7 @@ const CPrepareRequest = extern struct {
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 // ── FFI экспорты ──────────────────────────────────────────────────────────────
-// An exported C function (FFI) for initiating the preparation process from external code.
+// An exported C function (FFI) for initiating the preparation process from external code
 pub export fn upac_backend_prepare(request: *const CPrepareRequest, out_meta: *CPackageMeta) callconv(.C) i32 {
     const allocator = gpa.allocator();
 

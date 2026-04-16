@@ -13,7 +13,7 @@ const c_libs = @cImport({
 });
 
 // ── States ─────────────────────────────────────────────────────────────────
-// Archive Integrity Check Status: Calculating SHA256 and comparing against expected value
+// Archive integrity check status: calculating SHA256 and comparing against expected value
 pub fn stateVerifying(machine: *Machine) anyerror!void {
     try machine.enter(.verifying);
 
