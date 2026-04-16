@@ -11,6 +11,7 @@ use crate::ffi::{CRollbackRequest, CSlice};
 pub fn state_validating(machine: &mut RollbackMachine) -> Result<()> {
     machine.enter(State::Validating);
     machine.upac_lib = Some(UpacLibGuard::load()?);
+    machine.progress_bar = Some(spinner("Rolling back..."));
 
     if machine.commit_hash.len() != 64
         || !machine
@@ -24,19 +25,17 @@ pub fn state_validating(machine: &mut RollbackMachine) -> Result<()> {
         );
     }
 
-    println!(
+    machine.progress_bar.as_ref().unwrap().println(format!(
         "{} rolling back to {}",
         "→".cyan(),
         &machine.commit_hash[..12].dimmed()
-    );
+    ));
 
     state_rolling_back(machine)
 }
 
 fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
     machine.enter(State::RollingBack);
-
-    let progress_bar = spinner("Rolling back...");
 
     let rollback_request_c = CRollbackRequest {
         root_path: CSlice::from_str(&machine.config.paths.root_path),
@@ -49,7 +48,6 @@ fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
 
     let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().rollback)(rollback_request_c) };
 
-    progress_bar.finish_and_clear();
     UpacLib::check(return_code, "rollback")?;
 
     state_done(machine)
@@ -57,6 +55,8 @@ fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
 
 fn state_done(machine: &mut RollbackMachine) -> Result<()> {
     machine.enter(State::Done);
+    machine.progress_bar.as_ref().unwrap().finish_and_clear();
+
     println!(
         "{} rolled back to {}",
         "✓".green().bold(),

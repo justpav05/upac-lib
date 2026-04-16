@@ -3,6 +3,8 @@ use anyhow::Result;
 
 use colored::Colorize;
 
+use indicatif::ProgressBar;
+
 use crate::config::Config;
 
 use self::states::state_validating;
@@ -29,8 +31,10 @@ enum State {
 struct RemoveMachine {
     package_names: Vec<String>,
 
-    config: Config,
+    progress_bar: Option<ProgressBar>,
+
     upac_lib: Option<UpacLibGuard>,
+    config: Config,
     stack: Vec<State>,
 }
 
@@ -38,8 +42,9 @@ impl RemoveMachine {
     fn new(config: Config, package_names: Vec<String>) -> Self {
         Self {
             package_names,
-            config,
+            progress_bar: None,
             upac_lib: None,
+            config,
             stack: Vec::new(),
         }
     }

@@ -3,6 +3,8 @@ use anyhow::Result;
 
 use colored::Colorize;
 
+use indicatif::ProgressBar;
+
 use crate::config::Config;
 use crate::upac::{UpacLib, UpacLibGuard};
 
@@ -29,8 +31,10 @@ enum State {
 struct RollbackMachine {
     commit_hash: String,
 
-    config: Config,
+    progress_bar: Option<ProgressBar>,
+
     upac_lib: Option<UpacLibGuard>,
+    config: Config,
     stack: Vec<State>,
 }
 
@@ -38,8 +42,9 @@ impl RollbackMachine {
     fn new(config: Config, commit_hash: String) -> Self {
         Self {
             commit_hash,
-            config,
+            progress_bar: None,
             upac_lib: None,
+            config,
             stack: Vec::new(),
         }
     }

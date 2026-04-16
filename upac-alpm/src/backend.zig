@@ -58,6 +58,7 @@ pub const BackendMachine = struct {
     // Method for transitioning to a new state with history addition
     pub fn enter(self: *BackendMachine, id: StateId) !void {
         try self.stack.append(id);
+        std.debug.print("[alpm → {s}]\n", .{@tagName(id)});
     }
 
     // Releasing resources (stack memory) occupied by the state machine

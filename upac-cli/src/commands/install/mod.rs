@@ -3,6 +3,8 @@ use anyhow::Result;
 
 use colored::Colorize;
 
+use indicatif::ProgressBar;
+
 use std::fs;
 
 use crate::backends::PackageMeta;
@@ -49,6 +51,8 @@ struct InstallMachine {
     prepared_packages: Vec<PreparedPackage>,
     tmp_dirs: Vec<String>,
 
+    progress_bar: Option<ProgressBar>,
+
     upac_lib: Option<UpacLibGuard>,
     config: Config,
     stack: Vec<State>,
@@ -67,6 +71,7 @@ impl InstallMachine {
             checksums,
             prepared_packages: Vec::new(),
             tmp_dirs: Vec::new(),
+            progress_bar: None,
             upac_lib: None,
             config,
             stack: Vec::new(),

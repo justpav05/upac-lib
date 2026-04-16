@@ -71,6 +71,7 @@ pub const InstallerMachine = struct {
     // Registers a transition to a new state, saving it to the stack. This allows for the reconstruction of the sequence of actions during debugging
     pub fn enter(self: *InstallerMachine, state_id: StateId) !void {
         try self.stack.append(state_id);
+        std.debug.print("[install → {s}]\n", .{@tagName(state_id)});
     }
 
     // Resets the attempt counter before starting a new operation

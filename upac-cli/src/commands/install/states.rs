@@ -17,6 +17,7 @@ use crate::ffi::{CInstallRequest, CPackageEntry, CSlice};
 pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::PreparingPackage);
     machine.upac_lib = Some(UpacLibGuard::load()?);
+    machine.progress_bar = Some(spinner("Installing package..."));
 
     let files: Vec<String> = machine.files.clone();
 
@@ -30,9 +31,12 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
         };
 
         machine.enter(State::DetectingBackend(file.clone()));
-        println!("{} backend: {:?}", "→".cyan(), kind);
 
-        let progress_bar = spinner("Verifying and extracting package...");
+        machine.progress_bar.as_ref().unwrap().println(format!(
+            "{} backend: {:?}",
+            "→".cyan(),
+            kind
+        ));
 
         let tmp_string_path = format!("/tmp/upac_install_{}_{}", process::id(), index);
         fs::remove_dir_all(&tmp_string_path).ok();
@@ -54,14 +58,15 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             machine.checksums[index].clone()
         };
 
-        let package_meta = backend
-            .meta_prepare(&abs_file_str, &tmp_string_path, &checksum)
+        let package_meta = machine
+            .progress_bar
+            .as_ref()
+            .unwrap()
+            .suspend(|| backend.meta_prepare(&abs_file_str, &tmp_string_path, &checksum))
             .map_err(|err| {
-                progress_bar.finish_and_clear();
+                machine.progress_bar.as_ref().unwrap().finish_and_clear();
                 err
             })?;
-
-        progress_bar.finish_and_clear();
 
         machine.prepared_packages.push(PreparedPackage {
             meta: package_meta,
@@ -76,9 +81,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 fn state_installing(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::Installing);
 
-    let progress_bar = spinner("Installing...");
-
-    let c_entries: Vec<CPackageEntry> = machine
+    let entries_c: Vec<CPackageEntry> = machine
         .prepared_packages
         .iter()
         .map(|pkg| CPackageEntry {
@@ -88,9 +91,9 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         })
         .collect();
 
-    let c_install_request = CInstallRequest {
-        packages: c_entries.as_ptr(),
-        packages_len: c_entries.len(),
+    let install_request_c = CInstallRequest {
+        packages: entries_c.as_ptr(),
+        packages_len: entries_c.len(),
 
         repo_path: CSlice::from_str(&machine.config.paths.repo_path),
         root_path: CSlice::from_str(&machine.config.paths.root_path),
@@ -99,9 +102,8 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         max_retries: machine.config.step_retries,
     };
 
-    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().install)(c_install_request) };
+    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().install)(install_request_c) };
 
-    progress_bar.finish_and_clear();
     UpacLib::check(return_code, "install")?;
 
     state_done(machine)
@@ -109,6 +111,7 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
 
 fn state_done(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::Done);
+    machine.progress_bar.as_ref().unwrap().finish_and_clear();
 
     for pkg in &machine.prepared_packages {
         println!(

@@ -3,6 +3,8 @@ use anyhow::Result;
 
 use colored::Colorize;
 
+use indicatif::ProgressBar;
+
 use clap::Args;
 
 use self::states::state_validating;
@@ -75,8 +77,10 @@ struct DiffMachine {
     files_mode: bool,
     package_filter: Option<String>,
 
-    config: Config,
+    progress_bar: Option<ProgressBar>,
+
     upac_lib: Option<UpacLibGuard>,
+    config: Config,
     stack: Vec<State>,
 }
 
@@ -97,8 +101,9 @@ impl DiffMachine {
             file_rows: Vec::new(),
             files_mode,
             package_filter,
-            config,
+            progress_bar: None,
             upac_lib: None,
+            config,
             stack: Vec::new(),
         }
     }

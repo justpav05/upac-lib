@@ -11,12 +11,17 @@ use crate::ffi::{CSlice, CUninstallRequest};
 pub fn state_validating(machine: &mut RemoveMachine) -> Result<()> {
     machine.enter(State::Validating);
     machine.upac_lib = Some(UpacLibGuard::load()?);
+    machine.progress_bar = Some(spinner("Removing packages..."));
 
     for name in &machine.package_names {
         if name.is_empty() {
             anyhow::bail!("package name cannot be empty");
         }
-        println!("{} removing {}", "→".cyan(), name.bold());
+        machine.progress_bar.as_ref().unwrap().println(format!(
+            "{} removing {}",
+            "→".cyan(),
+            name.bold()
+        ));
     }
 
     state_uninstalling(machine)
@@ -25,15 +30,13 @@ pub fn state_validating(machine: &mut RemoveMachine) -> Result<()> {
 fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
     machine.enter(State::Uninstalling);
 
-    let progress_bar = spinner("Removing packages...");
-
     let package_names_c: Vec<CSlice> = machine
         .package_names
         .iter()
         .map(|name| CSlice::from_str(name))
         .collect();
 
-    let c_remove_request = CUninstallRequest {
+    let remove_request_c = CUninstallRequest {
         package_names: package_names_c.as_ptr(),
         package_names_len: package_names_c.len(),
         repo_path: CSlice::from_str(&machine.config.paths.repo_path),
@@ -43,9 +46,8 @@ fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
         max_retries: machine.config.step_retries,
     };
 
-    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().uninstall)(c_remove_request) };
+    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().uninstall)(remove_request_c) };
 
-    progress_bar.finish_and_clear();
     UpacLib::check(return_code, "uninstall")?;
 
     state_done(machine)
@@ -53,8 +55,14 @@ fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
 
 fn state_done(machine: &mut RemoveMachine) -> Result<()> {
     machine.enter(State::Done);
+    machine.progress_bar.as_ref().unwrap().finish_and_clear();
+
     for name in &machine.package_names {
-        println!("{} removed {}", "✓".green().bold(), name.bold());
+        machine.progress_bar.as_ref().unwrap().println(format!(
+            "{} removed {}",
+            "✓".green().bold(),
+            name.bold()
+        ));
     }
     Ok(())
 }

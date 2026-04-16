@@ -74,6 +74,7 @@ pub const UninstallerMachine = struct {
     // Registers a transition to a new state, adding it to the stack for progress tracking and debugging
     pub fn enter(self: *UninstallerMachine, state_id: StateId) !void {
         try self.stack.append(state_id);
+        std.debug.print("[remove → {s}]\n", .{@tagName(state_id)});
     }
 
     // Resets the retry counter before executing a new operation

@@ -1,4 +1,8 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
+use indicatif::{ProgressBar, ProgressStyle};
+
+use std::time::Duration;
+
 use std::slice;
 
 use super::{
@@ -14,6 +18,7 @@ use crate::ffi::{
 pub fn state_validating(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::Validating);
     machine.upac_lib = Some(UpacLibGuard::load()?);
+    machine.progress_bar = Some(spinner("Fetching diff..."));
 
     match (&machine.from.clone(), &machine.to.clone()) {
         (Some(from), Some(to)) => {
@@ -26,14 +31,14 @@ pub fn state_validating(machine: &mut DiffMachine) -> Result<()> {
                 len: 0,
             };
 
-            let code = unsafe {
+            let return_code = unsafe {
                 (machine.upac_lib.as_ref().unwrap().list_commits)(
                     CSlice::from_str(&machine.config.paths.repo_path),
                     CSlice::from_str(&machine.config.ostree.branch),
                     &mut commits_c,
                 )
             };
-            UpacLib::check(code, "list commits")?;
+            UpacLib::check(return_code, "list commits")?;
 
             let entries = unsafe { slice::from_raw_parts(commits_c.ptr, commits_c.len) };
             let checksums: Vec<String> = entries
@@ -203,5 +208,21 @@ fn state_printing(machine: &mut DiffMachine) -> Result<()> {
 
 fn state_done(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::Done);
+    machine.progress_bar.as_ref().unwrap().finish_and_clear();
+
     Ok(())
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+fn spinner(message: &str) -> ProgressBar {
+    let progress_bar = ProgressBar::new_spinner();
+    progress_bar.set_style(
+        ProgressStyle::default_spinner()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+            .template("{spinner:.cyan} {msg}")
+            .unwrap(),
+    );
+    progress_bar.set_message(message.to_owned());
+    progress_bar.enable_steady_tick(Duration::from_millis(80));
+    progress_bar
 }
