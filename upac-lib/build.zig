@@ -39,7 +39,12 @@ pub fn build(b: *std.Build) void {
     const upac_rollback = b.addModule("upac-rollback", .{ .root_source_file = b.path("src/rollback/rollback.zig"), .target = target, .optimize = optimize });
     upac_rollback.addImport("upac-types", upac_types);
     upac_rollback.addImport("upac-file", upac_file);
-    upac_rollback.addImport("upac-data", upac_data);
+
+    // ── Diff ────────────────────────────────────────────────────────────────
+    const upac_diff = b.addModule("upac-diff", .{ .root_source_file = b.path("src/diff/diff.zig"), .target = target, .optimize = optimize });
+    upac_diff.addImport("upac-types", upac_types);
+    upac_diff.addImport("upac-file", upac_file);
+    upac_diff.addImport("upac-data", upac_data);
 
     // ── Init ──────────────────────────────────────────────────────────────────
     const upac_init = b.addModule("upac-init", .{ .root_source_file = b.path("src/init.zig"), .target = target, .optimize = optimize });
@@ -65,6 +70,7 @@ pub fn build(b: *std.Build) void {
     shared_lib.root_module.addImport("upac-installer", upac_installer);
     shared_lib.root_module.addImport("upac-uninstaller", upac_uninstaller);
     shared_lib.root_module.addImport("upac-rollback", upac_rollback);
+    shared_lib.root_module.addImport("upac-diff", upac_diff);
 
     shared_lib.root_module.addImport("upac-init", upac_init);
 

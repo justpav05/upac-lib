@@ -12,6 +12,7 @@ const data = @import("upac-data");
 const installer = @import("upac-installer");
 const uninstaller = @import("upac-uninstaller");
 const rollback = @import("upac-rollback");
+const diff = @import("upac-diff");
 
 const init = @import("upac-init");
 
@@ -225,7 +226,7 @@ pub export fn upac_rollback(c_rollback_request: CRollbackRequest) callconv(.C) i
 pub export fn upac_diff_packages(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, out_c: *CPackageDiffArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    const pkg_entries = rollback.diffPackages(
+    const pkg_entries = diff.diffPackages(
         repo_path_c.toSlice(),
         from_ref_c.toSlice(),
         to_ref_c.toSlice(),
@@ -264,7 +265,7 @@ pub export fn upac_diff_packages_free(c_out: *CPackageDiffArray) callconv(.C) vo
 pub export fn upac_diff_files_attributed(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, root_path_c: CSlice, db_path_c: CSlice, out_c: *CAttributedDiffArray) callconv(.C) i32 {
     const allocator = types.allocator();
 
-    const entries = rollback.diffFilesAttributed(
+    const entries = diff.diffFilesAttributed(
         repo_path_c.toSlice(),
         from_ref_c.toSlice(),
         to_ref_c.toSlice(),
