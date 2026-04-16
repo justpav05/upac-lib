@@ -60,14 +60,12 @@ build-backends:
 	@cd $(ROOT_DIR)/upac-deb && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-cli:
-	@echo "--- Building upac-cli in $(MODE) mode ---"
-
 	@cd $(ROOT_DIR)/upac-cli && \
-	    RUSTFLAGS="$(RUSTFLAGS)" cargo-zigbuild build \
+		RUSTFLAGS="$(RUSTFLAGS)" cargo-zigbuild build \
 			$(CARGO_BUILD_FLAG) \
 			--target-dir $(OUT_BUILD_DIR) \
-	        $(CARGO_FLAGS)
-	@cp $(OUT_BUILD_DIR)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
+			$(CARGO_FLAGS)
+	@mv $(OUT_BUILD_DIR)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
 
 build-removing:
 	@echo "--- Cleaning cargo temp dirs ---"
@@ -104,7 +102,7 @@ pkg-arch: build
 	@cp $(OUT_BUILD_DIR)/lib/libupac.so $(PKG_DIR)/arch/root/usr/lib/
 
 	@echo "--- Copying backends v$(VERSION) ---"
-	@cp $(OUT_BUILD_DIR)/lib/libupac-arch.so $(PKG_DIR)/arch/root/usr/lib/
+	@cp $(OUT_BUILD_DIR)/lib/libupac-alpm.so $(PKG_DIR)/arch/root/usr/lib/
 	@cp $(OUT_BUILD_DIR)/lib/libupac-rpm.so $(PKG_DIR)/arch/root/usr/lib/
 	@cp $(OUT_BUILD_DIR)/lib/libupac-deb.so $(PKG_DIR)/arch/root/usr/lib/
 

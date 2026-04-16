@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
 
     // ── Shared library ────────────────────────────────────────────────────────
     const shared_lib = b.addSharedLibrary(.{
-        .name = "upac-arch",
+        .name = "upac-alpm",
         .root_source_file = b.path("src/backend.zig"),
         .target = target,
         .optimize = optimize,

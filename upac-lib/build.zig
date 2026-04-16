@@ -48,8 +48,12 @@ pub fn build(b: *std.Build) void {
     // ── Shared library ────────────────────────────────────────────────────────
     const shared_lib = b.addSharedLibrary(.{ .name = "upac", .root_source_file = b.path("src/ffi/export.zig"), .target = target, .optimize = optimize });
 
+    shared_lib.addIncludePath(b.path("vendor/ostree/lib"));
+    shared_lib.addIncludePath(b.path("vendor/ostree/include"));
+
+    shared_lib.linkSystemLibrary2("ostree-1", .{ .preferred_link_mode = .static });
+
     shared_lib.linkLibC();
-    shared_lib.linkSystemLibrary("ostree-1");
     shared_lib.linkSystemLibrary("glib-2.0");
     shared_lib.linkSystemLibrary("gio-2.0");
     shared_lib.linkSystemLibrary("gobject-2.0");

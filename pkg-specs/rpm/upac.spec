@@ -19,7 +19,7 @@ cp %{_topdir}/root/usr/bin/upac         %{buildroot}/usr/bin/
 
 cp %{_topdir}/root/usr/lib/libupac.so   %{buildroot}/usr/lib/
 
-cp %{_topdir}/root/usr/lib/libupac-arch.so %{buildroot}/usr/lib/
+cp %{_topdir}/root/usr/lib/libupac-alpm.so %{buildroot}/usr/lib/
 cp %{_topdir}/root/usr/lib/libupac-rpm.so %{buildroot}/usr/lib/
 cp %{_topdir}/root/usr/lib/libupac-deb.so %{buildroot}/usr/lib/
 
@@ -29,7 +29,7 @@ cp %{_topdir}/root/etc/upac/config.toml %{buildroot}/etc/upac/
 /usr/bin/upac
 
 /usr/lib/libupac.so
-/usr/lib/libupac-arch.so
+/usr/lib/libupac-alpm.so
 /usr/lib/libupac-rpm.so
 /usr/lib/libupac-deb.so
 

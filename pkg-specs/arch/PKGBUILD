@@ -23,7 +23,7 @@ package() {
 
     # Libs
     install -Dm755 "${srcdir}/../root/usr/lib/libupac.so" "${pkgdir}/usr/lib/libupac.so"
-    install -Dm755 "${srcdir}/../root/usr/lib/libupac-arch.so" "${pkgdir}/usr/lib/libupac-arch.so"
+    install -Dm755 "${srcdir}/../root/usr/lib/libupac-alpm.so" "${pkgdir}/usr/lib/libupac-alpm.so"
     install -Dm755 "${srcdir}/../root/usr/lib/libupac-rpm.so" "${pkgdir}/usr/lib/libupac-rpm.so"
     install -Dm755 "${srcdir}/../root/usr/lib/libupac-deb.so" "${pkgdir}/usr/lib/libupac-deb.so"
 
