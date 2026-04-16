@@ -55,7 +55,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
         };
 
         let package_meta = backend
-            .prepare(&abs_file_str, &tmp_string_path, &checksum)
+            .meta_prepare(&abs_file_str, &tmp_string_path, &checksum)
             .map_err(|err| {
                 progress_bar.finish_and_clear();
                 err

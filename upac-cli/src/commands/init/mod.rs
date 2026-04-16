@@ -14,8 +14,6 @@ mod states;
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
 #[derive(clap::Args)]
 pub struct InitArgs {
-    #[arg(long, default_value = "archive")]
-    pub mode: String,
     #[arg(long, default_value = "/etc/upac/config.toml")]
     pub config_path: String,
 }
@@ -58,13 +56,13 @@ impl InitMachine {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: InitArgs) -> Result<()> {
-    let repo_mode_c = match args.mode.as_str() {
+    let repo_mode_c = match config.ostree.mode.as_str() {
         "archive" => CRepoMode::Archive,
         "bare" => CRepoMode::Bare,
         "bare-user" => CRepoMode::BareUser,
         _ => anyhow::bail!(
             "unknown mode '{}'. Available: archive, bare, bare-user",
-            args.mode
+            config.ostree.mode
         ),
     };
 

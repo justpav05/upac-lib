@@ -11,6 +11,7 @@ use crate::ffi::{
 };
 
 // ── Wrapper around libupac.so ────────────────────────────────────────────────────
+// A wrapper for dynamically loading libupac.so and mapping its C functions to Rust types
 pub struct UpacLib {
     _lib: Library,
 
@@ -42,6 +43,7 @@ pub struct UpacLib {
 }
 
 impl UpacLib {
+    // Loads the library from a file and initializes pointers to symbols
     pub fn load() -> Result<Self> {
         let lib = unsafe { Library::new("libupac.so") }
             .map_err(|err| anyhow::anyhow!("failed to load libupac.so: {err}"))?;
@@ -49,10 +51,10 @@ impl UpacLib {
         macro_rules! sym {
             ($name:literal) => {
                 unsafe {
-                    let s: Symbol<_> = lib.get($name).map_err(|err| {
+                    let symbol: Symbol<_> = lib.get($name).map_err(|err| {
                         anyhow::anyhow!("symbol {} not found: {err}", stringify!($name))
                     })?;
-                    *s
+                    *symbol
                 }
             };
         }
@@ -81,6 +83,7 @@ impl UpacLib {
         })
     }
 
+    // Converts numeric error codes from the C-layer into human-readable anyhow::Result values
     pub fn check(code: i32, context: &str) -> Result<()> {
         if code == 0 {
             return Ok(());
@@ -128,10 +131,12 @@ impl UpacLib {
     }
 }
 
+// An RAII wrapper that automatically calls the library initialization upon exiting the scope
 pub struct UpacLibGuard {
     lib: UpacLib,
 }
 
+// Loads the library and wraps it in a Guard for automatic resource management
 impl UpacLibGuard {
     pub fn load() -> Result<Self> {
         Ok(Self {
@@ -140,6 +145,7 @@ impl UpacLibGuard {
     }
 }
 
+// Allows using UpacLibGuard just like the UpacLib structure itself, via dereferencing
 impl std::ops::Deref for UpacLibGuard {
     type Target = UpacLib;
     fn deref(&self) -> &Self::Target {
@@ -147,6 +153,7 @@ impl std::ops::Deref for UpacLibGuard {
     }
 }
 
+// Automatically calls the library deinitialization when the guard is dropped
 impl Drop for UpacLibGuard {
     fn drop(&mut self) {
         unsafe { (self.lib.deinit)() };

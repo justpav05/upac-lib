@@ -1,10 +1,12 @@
+// ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::{bail, Result};
 
 use libloading::{Library, Symbol};
 
 use crate::ffi::{CPackageMeta, CSlice};
 
-// ── Типы ──────────────────────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────────────
+// Internal representation of package metadata on the Rust side
 #[derive(Debug)]
 pub struct PackageMeta {
     pub name: String,
@@ -18,6 +20,7 @@ pub struct PackageMeta {
 }
 
 impl PackageMeta {
+    // Converts the PackageMeta struct to a C-compatible struct for FFI calls
     pub fn as_c(&self) -> CPackageMeta {
         CPackageMeta {
             name: CSlice::from_str(&self.name),
@@ -32,7 +35,8 @@ impl PackageMeta {
     }
 }
 
-// ── Определение бэкенда по расширению ────────────────────────────────────────
+// ── Backend Definition ────────────────────────────────────────
+// Represents the type of backend (ALPM, RPM, DEB) for a package
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackendKind {
     Alpm,
@@ -41,6 +45,7 @@ pub enum BackendKind {
 }
 
 impl BackendKind {
+    // Automatically determines the package type (ALPM, RPM, DEB) based on the file extension
     pub fn detect(path: &str) -> Option<Self> {
         if path.ends_with(".pkg.tar.zst")
             || path.ends_with(".pkg.tar.xz")
@@ -57,6 +62,7 @@ impl BackendKind {
         None
     }
 
+    // Parses a string flag (e.g., "arch", "rpm", "deb") into a BackendKind
     pub fn from_flag(string: &str) -> Result<Self> {
         match string {
             "arch" | "alpm" => Ok(Self::Alpm),
@@ -66,6 +72,7 @@ impl BackendKind {
         }
     }
 
+    // Returns the name of the shared object file for this backend (e.g., "libupac-alpm.so")
     pub fn so_name(&self) -> &'static str {
         match self {
             Self::Alpm => "libupac-alpm.so",
@@ -75,51 +82,57 @@ impl BackendKind {
     }
 }
 
-// ── Обёртка над бэкенд .so ───────────────────────────────────────────────────
+// ── Wrapper for the backend .so ───────────────────────────────────────────────────
+// Represents the request struct for the backend's prepare function
 #[repr(C)]
-struct CPrepareRequest {
+pub struct CPrepareRequest {
     pkg_path: CSlice,
     out_path: CSlice,
     checksum: CSlice,
 }
 
+// A wrapper for dynamically loading libupac.so and mapping its C functions to Rust types
 pub struct Backend {
     _lib: Library,
-    prepare: unsafe extern "C" fn(*const CPrepareRequest, *mut CPackageMeta) -> i32,
-    meta_free: unsafe extern "C" fn(*mut CPackageMeta),
+
+    pub upac_backend_prepare:
+        unsafe extern "C" fn(*const CPrepareRequest, *mut CPackageMeta) -> i32,
+    pub upac_backend_meta_free: unsafe extern "C" fn(*mut CPackageMeta),
 }
 
 impl Backend {
+    // Loads the library from a file and initializes pointers to symbols
     pub fn load(kind: &BackendKind) -> Result<Self> {
-        let so_lib = kind.so_name();
-        let lib = unsafe { Library::new(so_lib) }
-            .map_err(|err| anyhow::anyhow!("failed to load {so_lib}: {err}"))?;
+        let lib = unsafe { Library::new(kind.so_name()) }
+            .map_err(|err| anyhow::anyhow!("failed to load {}: {err}", kind.so_name()))?;
 
-        let prepare = unsafe {
-            let symbol: Symbol<
-                unsafe extern "C" fn(*const CPrepareRequest, *mut CPackageMeta) -> i32,
-            > = lib
-                .get(b"upac_backend_prepare")
-                .map_err(|err| anyhow::anyhow!("symbol upac_backend_prepare not found: {err}"))?;
-            *symbol
-        };
-
-        let meta_free = unsafe {
-            let symbol: Symbol<unsafe extern "C" fn(*mut CPackageMeta)> = lib
-                .get(b"upac_backend_meta_free")
-                .map_err(|err| anyhow::anyhow!("symbol upac_backend_meta_free not found: {err}"))?;
-            *symbol
-        };
+        macro_rules! sym {
+            ($name:literal) => {
+                unsafe {
+                    let symbol: Symbol<_> = lib.get($name).map_err(|err| {
+                        anyhow::anyhow!("symbol {} not found: {err}", stringify!($name))
+                    })?;
+                    *symbol
+                }
+            };
+        }
 
         Ok(Self {
+            upac_backend_prepare: sym!("upac_backend_prepare"),
+            upac_backend_meta_free: sym!("upac_backend_meta_free"),
+
             _lib: lib,
-            prepare,
-            meta_free,
         })
     }
 
-    pub fn prepare(&self, pkg_path: &str, out_path: &str, checksum: &str) -> Result<PackageMeta> {
-        let request = CPrepareRequest {
+    // Prepares a package by calling the backend's prepare function
+    pub fn meta_prepare(
+        &self,
+        pkg_path: &str,
+        out_path: &str,
+        checksum: &str,
+    ) -> Result<PackageMeta> {
+        let prepare_request_c = CPrepareRequest {
             pkg_path: CSlice::from_str(pkg_path),
             out_path: CSlice::from_str(out_path),
             checksum: CSlice::from_str(checksum),
@@ -127,30 +140,30 @@ impl Backend {
 
         let mut meta = std::mem::MaybeUninit::<CPackageMeta>::uninit();
 
-        let code = unsafe { (self.prepare)(&request, meta.as_mut_ptr()) };
+        let return_code =
+            unsafe { (self.upac_backend_prepare)(&prepare_request_c, meta.as_mut_ptr()) };
 
-        if code != 0 {
-            bail!("backend prepare failed with code {code}");
+        if return_code != 0 {
+            bail!("backend prepare failed with code {return_code}");
         }
 
-        let c_meta = unsafe { meta.assume_init() };
+        let mut package_meta_c = unsafe { meta.assume_init() };
 
-        let result = unsafe {
+        let package_meta_result = unsafe {
             PackageMeta {
-                name: c_meta.name.as_str().to_owned(),
-                version: c_meta.version.as_str().to_owned(),
-                author: c_meta.author.as_str().to_owned(),
-                description: c_meta.description.as_str().to_owned(),
-                license: c_meta.license.as_str().to_owned(),
-                url: c_meta.url.as_str().to_owned(),
-                installed_at: c_meta.installed_at,
-                checksum: c_meta.checksum.as_str().to_owned(),
+                name: package_meta_c.name.as_str().to_owned(),
+                version: package_meta_c.version.as_str().to_owned(),
+                author: package_meta_c.author.as_str().to_owned(),
+                description: package_meta_c.description.as_str().to_owned(),
+                license: package_meta_c.license.as_str().to_owned(),
+                url: package_meta_c.url.as_str().to_owned(),
+                installed_at: package_meta_c.installed_at,
+                checksum: package_meta_c.checksum.as_str().to_owned(),
             }
         };
 
-        let mut c_meta_owned = c_meta;
-        unsafe { (self.meta_free)(&mut c_meta_owned) };
+        unsafe { (self.upac_backend_meta_free)(&mut package_meta_c) };
 
-        Ok(result)
+        Ok(package_meta_result)
     }
 }
