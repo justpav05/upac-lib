@@ -70,8 +70,14 @@ pub struct CInstallRequest {
 
     pub branch: CSlice,
 
+    pub on_progress: Option<CInstallProgressFn>,
+    pub progress_ctx: *mut std::ffi::c_void,
+
     pub max_retries: u8,
 }
+
+pub type CInstallProgressFn =
+    unsafe extern "C" fn(event: u8, package_name: CSlice, ctx: *mut std::ffi::c_void);
 
 // Data container for the uninstallation operation: list of package names and repository settings
 #[repr(C)]
@@ -85,8 +91,14 @@ pub struct CUninstallRequest {
 
     pub branch: CSlice,
 
+    pub on_progress: Option<CUninstallProgressFn>,
+    pub progress_ctx: *mut std::ffi::c_void,
+
     pub max_retries: u8,
 }
+
+pub type CUninstallProgressFn =
+    unsafe extern "C" fn(event: u8, package_name: CSlice, ctx: *mut std::ffi::c_void);
 
 // Data container for the rollback operation: paths and repository settings
 #[repr(C)]

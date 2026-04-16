@@ -75,3 +75,25 @@ pub const DiffEntry = struct {
     path: []const u8,
     kind: DiffKind,
 };
+
+pub const InstallProgressEvent = enum(u8) {
+    verifying = 0,
+    open_repo = 1,
+    check_installed = 2,
+    write_database = 3,
+    process_files = 4,
+    commit = 5,
+    done = 6,
+    failed = 7,
+};
+
+pub const UninstallProgressEvent = enum(u8) {
+    verifying = 0,
+    open_repo = 1,
+    check_installed = 2,
+    remove_db_files = 3,
+    process_files = 4,
+    commit = 5,
+    done = 6,
+    failed = 7,
+};

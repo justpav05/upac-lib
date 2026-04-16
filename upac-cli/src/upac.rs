@@ -3,6 +3,7 @@ use anyhow::{bail, Result};
 
 use libloading::{Library, Symbol};
 
+use std::ffi::c_void;
 use std::str;
 
 use crate::ffi::{

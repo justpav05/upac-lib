@@ -1,6 +1,6 @@
 [package]
 name = "upac"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["justpav05 <aksenovpaveldmitrievich@gmail.com>"]
 description = "Package manager for installing any type of package in Linux, as well as registering binary file rollbacks based on OSTree, written in Rust and Zig"

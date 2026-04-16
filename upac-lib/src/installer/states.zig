@@ -198,8 +198,13 @@ fn stateProcessDbFiles(machine: *InstallerMachine) anyerror!void {
 
     if (c_libs.ostree_repo_write_dfd_to_mtree(machine.repo.?, std.c.AT.FDCWD, temp_path_c.ptr, machine.mtree.?, null, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
-        stateFailed(machine);
-        return InstallerError.RepoOpenFailed;
+        if (machine.exhausted()) {
+            stateFailed(machine);
+            return InstallerError.RepoOpenFailed;
+        }
+        machine.retries += 1;
+        try machine.resetTransaction();
+        return stateProcessDbFiles(machine);
     }
 
     machine.current_package_index += 1;
@@ -266,18 +271,12 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
 
     if (c_libs.ostree_repo_write_mtree(repo, mtree, &mtree_root, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
-        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
         if (machine.exhausted()) {
             stateFailed(machine);
-            return InstallerError.MaxRetriesExceeded;
+            return InstallerError.RepoOpenFailed;
         }
         machine.retries += 1;
-        var reopen_gerror: ?*c_libs.GError = null;
-        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &reopen_gerror) == 0) {
-            if (reopen_gerror) |err| c_libs.g_error_free(err);
-            stateFailed(machine);
-            return InstallerError.MaxRetriesExceeded;
-        }
+        try machine.resetTransaction();
         return stateCommit(machine);
     }
 
@@ -298,18 +297,12 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
 
     if (c_libs.ostree_repo_write_commit(repo, if (parent_checksum) |checksum| checksum else null, subject_c.ptr, body_c.ptr, null, @ptrCast(mtree_root), &commit_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
-        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
         if (machine.exhausted()) {
             stateFailed(machine);
-            return InstallerError.MaxRetriesExceeded;
+            return InstallerError.RepoOpenFailed;
         }
         machine.retries += 1;
-        var reopen_gerror: ?*c_libs.GError = null;
-        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &reopen_gerror) == 0) {
-            if (reopen_gerror) |err| c_libs.g_error_free(err);
-            stateFailed(machine);
-            return InstallerError.MaxRetriesExceeded;
-        }
+        try machine.resetTransaction();
         return stateCommit(machine);
     }
 
@@ -319,15 +312,10 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
         if (gerror) |err| c_libs.g_error_free(err);
         if (machine.exhausted()) {
             stateFailed(machine);
-            return InstallerError.MaxRetriesExceeded;
+            return InstallerError.RepoOpenFailed;
         }
         machine.retries += 1;
-        var reopen_gerror: ?*c_libs.GError = null;
-        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &reopen_gerror) == 0) {
-            if (reopen_gerror) |err| c_libs.g_error_free(err);
-            stateFailed(machine);
-            return InstallerError.MaxRetriesExceeded;
-        }
+        try machine.resetTransaction();
         return stateCommit(machine);
     }
 
@@ -339,9 +327,10 @@ fn stateCommit(machine: *InstallerMachine) anyerror!void {
         if (gerror) |err| c_libs.g_error_free(err);
         if (machine.exhausted()) {
             stateFailed(machine);
-            return InstallerError.MaxRetriesExceeded;
+            return InstallerError.RepoOpenFailed;
         }
         machine.retries += 1;
+        try machine.resetTransaction();
         return stateCommit(machine);
     }
 
@@ -357,13 +346,6 @@ fn stateDone(machine: *InstallerMachine) anyerror!void {
 // An automaton error state, signaling that a system rollback is required
 fn stateFailed(machine: *InstallerMachine) void {
     _ = machine.enter(.failed) catch {};
-    // std.debug.print("✗ install failed '{s}', states: ", .{
-    //     machine.data.packages[machine.current_package_index].package_meta.name,
-    // });
-    // for (machine.stack.items) |state| {
-    //     std.debug.print("{s} ", .{@tagName(state)});
-    // }
-    // std.debug.print("\n", .{}); - Debug information
 }
 
 // ── Helpers functions ───────────────────────────────────────────────────

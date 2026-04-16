@@ -1,6 +1,10 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
+const types = @import("upac-types");
+const InstallProgressEvent = types.InstallProgressEvent;
+const UninstallProgressEvent = types.UninstallProgressEvent;
+
 // A C-compatible slice analogue. It stores a pointer to the data and its length. It allows for easy conversion of data between Zig and an external interface
 pub const CSlice = extern struct {
     ptr: [*]const u8,
@@ -73,9 +77,26 @@ pub const CInstallRequest = extern struct {
     repo_path: CSlice,
     root_path: CSlice,
     db_path: CSlice,
+
     branch: CSlice,
+
+    on_progress: ?CInstallProgressFn = null,
+    progress_ctx: ?*anyopaque = null,
+
     max_retries: u8,
 };
+
+pub const InstallProgressFn = *const fn (
+    event: InstallProgressEvent,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
+
+pub const CInstallProgressFn = *const fn (
+    event: u8,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
 
 // // Parameter sets for the сorresponding operation — Uninstallation
 pub const CUninstallRequest = extern struct {
@@ -88,8 +109,23 @@ pub const CUninstallRequest = extern struct {
 
     branch: CSlice,
 
+    on_progress: ?CUninstallProgressFn = null,
+    progress_ctx: ?*anyopaque = null,
+
     max_retries: u8,
 };
+
+pub const UninstallProgressFn = *const fn (
+    event: UninstallProgressEvent,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
+
+pub const CUninstallProgressFn = *const fn (
+    event: u8,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
 
 // Enumeration of file system change types (added, deleted, modified)
 pub const CDiffKind = enum(u8) {

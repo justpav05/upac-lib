@@ -8,7 +8,10 @@ use std::io::Read;
 use std::process;
 use std::time::Duration;
 
-use super::{Colorize, InstallMachine, PreparedPackage, Result, State, UpacLib, UpacLibGuard};
+use super::{
+    c_void, on_install_progress, Colorize, InstallMachine, PreparedPackage, Result, State, UpacLib,
+    UpacLibGuard,
+};
 
 use crate::backends::{Backend, BackendKind};
 use crate::ffi::{CInstallRequest, CPackageEntry, CSlice};
@@ -17,7 +20,7 @@ use crate::ffi::{CInstallRequest, CPackageEntry, CSlice};
 pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::PreparingPackage);
     machine.upac_lib = Some(UpacLibGuard::load()?);
-    machine.progress_bar = Some(spinner("Installing package..."));
+    machine.progress_bar = Some(spinner("Verifying and extracting package..."));
 
     let files: Vec<String> = machine.files.clone();
 
@@ -80,6 +83,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 
 fn state_installing(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::Installing);
+    machine.progress_bar = Some(spinner("Installing..."));
 
     let entries_c: Vec<CPackageEntry> = machine
         .prepared_packages
@@ -91,6 +95,9 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         })
         .collect();
 
+    let progress_bar_ptr =
+        machine.progress_bar.as_ref().unwrap() as *const ProgressBar as *mut c_void;
+
     let install_request_c = CInstallRequest {
         packages: entries_c.as_ptr(),
         packages_len: entries_c.len(),
@@ -99,12 +106,22 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         root_path: CSlice::from_str(&machine.config.paths.root_path),
         db_path: CSlice::from_str(&machine.config.paths.database_path),
         branch: CSlice::from_str(&machine.config.ostree.branch),
+        on_progress: Some(on_install_progress),
+        progress_ctx: progress_bar_ptr,
         max_retries: machine.config.step_retries,
     };
 
-    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().install)(install_request_c) };
+    let return_code = machine
+        .progress_bar
+        .as_ref()
+        .unwrap()
+        .suspend(|| unsafe { (machine.upac_lib.as_ref().unwrap().install)(install_request_c) });
 
-    UpacLib::check(return_code, "install")?;
+    machine
+        .progress_bar
+        .as_ref()
+        .unwrap()
+        .suspend(|| UpacLib::check(return_code, "install"))?;
 
     state_done(machine)
 }

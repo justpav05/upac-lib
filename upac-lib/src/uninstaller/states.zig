@@ -58,9 +58,10 @@ fn stateOpenRepo(machine: *UninstallerMachine) !void {
         if (gerror) |err| c_libs.g_error_free(err);
         if (machine.exhausted()) {
             stateFailed(machine);
-            return UninstallerError.MaxRetriesExceeded;
+            return UninstallerError.RepoOpenFailed;
         }
         machine.retries += 1;
+        try machine.resetTransaction();
         return stateCheckInstalled(machine);
     }
 
@@ -321,18 +322,12 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
 
     if (c_libs.ostree_repo_write_mtree(repo, mtree, &mtree_root, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
-        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
         if (machine.exhausted()) {
             stateFailed(machine);
-            return UninstallerError.MaxRetriesExceeded;
+            return UninstallerError.RepoOpenFailed;
         }
         machine.retries += 1;
-
-        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
-            if (gerror) |err| c_libs.g_error_free(err);
-            stateFailed(machine);
-            return UninstallerError.MaxRetriesExceeded;
-        }
+        try machine.resetTransaction();
         return stateCommit(machine);
     }
 
@@ -353,18 +348,12 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
 
     if (c_libs.ostree_repo_write_commit(repo, if (parent_checksum) |checksum| checksum else null, subject_c.ptr, body_c.ptr, null, @ptrCast(mtree_root), &commit_checksum, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
-        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
         if (machine.exhausted()) {
             stateFailed(machine);
-            return UninstallerError.MaxRetriesExceeded;
+            return UninstallerError.RepoOpenFailed;
         }
         machine.retries += 1;
-
-        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
-            if (gerror) |err| c_libs.g_error_free(err);
-            stateFailed(machine);
-            return UninstallerError.MaxRetriesExceeded;
-        }
+        try machine.resetTransaction();
         return stateCommit(machine);
     }
 
@@ -372,18 +361,12 @@ fn stateCommit(machine: *UninstallerMachine) anyerror!void {
 
     if (c_libs.ostree_repo_commit_transaction(repo, null, null, &gerror) == 0) {
         if (gerror) |err| c_libs.g_error_free(err);
-        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
         if (machine.exhausted()) {
             stateFailed(machine);
-            return UninstallerError.MaxRetriesExceeded;
+            return UninstallerError.RepoOpenFailed;
         }
         machine.retries += 1;
-
-        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) {
-            if (gerror) |err| c_libs.g_error_free(err);
-            stateFailed(machine);
-            return UninstallerError.MaxRetriesExceeded;
-        }
+        try machine.resetTransaction();
         return stateCommit(machine);
     }
 
@@ -468,11 +451,6 @@ fn stateDone(machine: *UninstallerMachine) anyerror!void {
 // A state of unsuccessful package removal, signaling the system that a rollback is required to revert the changes
 fn stateFailed(machine: *UninstallerMachine) void {
     _ = machine.enter(.failed) catch {};
-    // std.debug.print("uninstall failed '{s}', states: ", .{machine.data.package_name});
-    // for (machine.stack.items) |state| {
-    //     std.debug.print("{s} ", .{@tagName(state)});
-    // }
-    // std.debug.print("\n", .{}); // -- Debug information
 }
 
 // ── Helpers functions ─────────────────────────────────────────────────────────────────────

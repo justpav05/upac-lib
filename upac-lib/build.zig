@@ -11,6 +11,10 @@ pub fn build(b: *std.Build) void {
     // ── Types ─────────────────────────────────────────────────────────────────
     const upac_types = b.addModule("upac-types", .{ .root_source_file = b.path("src/types.zig"), .target = target, .optimize = optimize });
 
+    // ── Ffi ─────────────────────────────────────────────────────────────────
+    const upac_ffi = b.addModule("upac-ffi", .{ .root_source_file = b.path("src/ffi/ctypes.zig"), .target = target, .optimize = optimize });
+    upac_ffi.addImport("upac-types", upac_types);
+
     // ── Database ──────────────────────────────────────────────────────────────
     const upac_data = b.addModule("upac-data", .{ .root_source_file = b.path("src/data/data.zig"), .target = target, .optimize = optimize });
     upac_data.addImport("upac-types", upac_types);
@@ -18,7 +22,10 @@ pub fn build(b: *std.Build) void {
     // ── File FSM ──────────────────────────────────────────────────────────────
     const upac_file = b.addModule("upac-file", .{ .root_source_file = b.path("src/file/file.zig"), .target = target, .optimize = optimize });
 
-    upac_file.linkSystemLibrary("ostree-1", .{ .preferred_link_mode = .dynamic });
+    upac_file.addIncludePath(b.path("ostree/lib"));
+    upac_file.addIncludePath(b.path("ostree/include"));
+    upac_file.linkSystemLibrary("ostree-1", .{ .preferred_link_mode = .static });
+
     upac_file.linkSystemLibrary("glib-2.0", .{ .preferred_link_mode = .dynamic });
     upac_file.linkSystemLibrary("gio-2.0", .{ .preferred_link_mode = .dynamic });
     upac_file.linkSystemLibrary("gobject-2.0", .{ .preferred_link_mode = .dynamic });
@@ -26,12 +33,14 @@ pub fn build(b: *std.Build) void {
     // ── Installer ─────────────────────────────────────────────────────────────
     const upac_installer = b.addModule("upac-installer", .{ .root_source_file = b.path("src/installer/installer.zig"), .target = target, .optimize = optimize });
     upac_installer.addImport("upac-types", upac_types);
+    upac_installer.addImport("upac-ffi", upac_ffi);
     upac_installer.addImport("upac-file", upac_file);
     upac_installer.addImport("upac-data", upac_data);
 
     // ── Uninstaller ───────────────────────────────────────────────────────────
     const upac_uninstaller = b.addModule("upac-uninstaller", .{ .root_source_file = b.path("src/uninstaller/uninstaller.zig"), .target = target, .optimize = optimize });
     upac_uninstaller.addImport("upac-types", upac_types);
+    upac_uninstaller.addImport("upac-ffi", upac_ffi);
     upac_uninstaller.addImport("upac-file", upac_file);
     upac_uninstaller.addImport("upac-data", upac_data);
 
@@ -47,15 +56,14 @@ pub fn build(b: *std.Build) void {
     upac_diff.addImport("upac-data", upac_data);
 
     // ── Init ──────────────────────────────────────────────────────────────────
-    const upac_init = b.addModule("upac-init", .{ .root_source_file = b.path("src/init.zig"), .target = target, .optimize = optimize });
+    const upac_init = b.addModule("upac-init", .{ .root_source_file = b.path("src/init/init.zig"), .target = target, .optimize = optimize });
     upac_init.addImport("upac-file", upac_file);
 
     // ── Shared library ────────────────────────────────────────────────────────
-    const shared_lib = b.addSharedLibrary(.{ .name = "upac", .root_source_file = b.path("src/ffi/export.zig"), .target = target, .optimize = optimize });
+    const shared_lib = b.addSharedLibrary(.{ .name = "upac", .root_source_file = b.path("src/export.zig"), .target = target, .optimize = optimize });
 
     shared_lib.addIncludePath(b.path("vendor/ostree/lib"));
     shared_lib.addIncludePath(b.path("vendor/ostree/include"));
-
     shared_lib.linkSystemLibrary2("ostree-1", .{ .preferred_link_mode = .static });
 
     shared_lib.linkLibC();
@@ -64,6 +72,8 @@ pub fn build(b: *std.Build) void {
     shared_lib.linkSystemLibrary("gobject-2.0");
 
     shared_lib.root_module.addImport("upac-types", upac_types);
+    shared_lib.root_module.addImport("upac-ffi", upac_ffi);
+
     shared_lib.root_module.addImport("upac-data", upac_data);
     shared_lib.root_module.addImport("upac-file", upac_file);
 

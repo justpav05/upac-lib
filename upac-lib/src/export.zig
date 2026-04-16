@@ -4,7 +4,7 @@ const std = @import("std");
 const file = @import("upac-file");
 const c_libs = file.c_libs;
 
-const types = @import("types.zig");
+const ffi_types = @import("upac-ffi");
 const global_types = @import("upac-types");
 
 const data = @import("upac-data");
@@ -16,34 +16,34 @@ const diff = @import("upac-diff");
 
 const init = @import("upac-init");
 
-const CSlice = types.CSlice;
+const CSlice = ffi_types.CSlice;
 
-const CPackageMeta = types.CPackageMeta;
-const CPackageEntry = types.CPackageEntry;
+const CPackageMeta = ffi_types.CPackageMeta;
+const CPackageEntry = ffi_types.CPackageEntry;
 
-const CPackageMetaArray = types.CPackageMetaArray;
+const CPackageMetaArray = ffi_types.CPackageMetaArray;
 
-const CInstallRequest = types.CInstallRequest;
-const CUninstallRequest = types.CUninstallRequest;
-const CRollbackRequest = types.CRollbackRequest;
+const CInstallRequest = ffi_types.CInstallRequest;
+const CUninstallRequest = ffi_types.CUninstallRequest;
+const CRollbackRequest = ffi_types.CRollbackRequest;
 
-const CDiffEntry = types.CDiffEntry;
-const CDiffArray = types.CDiffArray;
+const CDiffEntry = ffi_types.CDiffEntry;
+const CDiffArray = ffi_types.CDiffArray;
 
-const CPackageDiffEntry = types.CPackageDiffEntry;
-const CPackageDiffArray = types.CPackageDiffArray;
+const CPackageDiffEntry = ffi_types.CPackageDiffEntry;
+const CPackageDiffArray = ffi_types.CPackageDiffArray;
 
-const CAttributedDiffEntry = types.CAttributedDiffEntry;
-const CAttributedDiffArray = types.CAttributedDiffArray;
+const CAttributedDiffEntry = ffi_types.CAttributedDiffEntry;
+const CAttributedDiffArray = ffi_types.CAttributedDiffArray;
 
-const CCommitArray = types.CCommitArray;
-const CCommitEntry = types.CCommitEntry;
-const CSystemPaths = types.CSystemPaths;
+const CCommitArray = ffi_types.CCommitArray;
+const CCommitEntry = ffi_types.CCommitEntry;
+const CSystemPaths = ffi_types.CSystemPaths;
 
-const CInitRequest = types.CInitRequest;
+const CInitRequest = ffi_types.CInitRequest;
 
-const CRepoMode = types.CRepoMode;
-const ErrorCode = types.ErrorCode;
+const CRepoMode = ffi_types.CRepoMode;
+const ErrorCode = ffi_types.ErrorCode;
 
 // An internal helper function that converts the C struct CPackageMeta to native PackageMeta, translating CSlices into regular slices ([]const u8)
 fn toMeta(c_package_meta: CPackageMeta) global_types.PackageMeta {
@@ -60,7 +60,7 @@ fn toMeta(c_package_meta: CPackageMeta) global_types.PackageMeta {
 }
 
 pub export fn upac_list_packages(c_repo_path: CSlice, c_branch: CSlice, c_db_path: CSlice, c_out: *CPackageMetaArray) callconv(.C) i32 {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
 
     const repo_path_c = std.fmt.allocPrintZ(allocator, "{s}", .{c_repo_path.toSlice()}) catch
         return @intFromEnum(ErrorCode.out_of_memory);
@@ -142,7 +142,7 @@ pub export fn upac_list_packages(c_repo_path: CSlice, c_branch: CSlice, c_db_pat
 }
 
 pub export fn upac_packages_free(c_out: *CPackageMetaArray) callconv(.C) void {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
     const entries = c_out.toSlice();
     for (entries) |*entry| freeCPackageMeta(entry, allocator);
     allocator.free(entries);
@@ -160,7 +160,7 @@ fn freeCPackageMeta(meta: *CPackageMeta, allocator: std.mem.Allocator) void {
 
 // The main entry point for package installation. It gathers installation data from the request, initializes the installation engine, and returns an error code as an i32
 pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
 
     const packages_c = c_install_request.packages[0..c_install_request.packages_len];
 
@@ -182,14 +182,26 @@ pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 
     };
 
     installer.InstallerMachine.run(install_data, allocator) catch |err|
-        return @intFromEnum(types.fromError(err));
+        return @intFromEnum(ffi_types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
 
+fn onInstallProgress(event: u8, pkg: CSlice, ctx: ?*anyopaque) callconv(.C) void {
+    _ = ctx;
+    const package_name = pkg.toSlice();
+    switch (@as(global_types.InstallProgressEvent, @enumFromInt(event))) {
+        .verifying => std.debug.print("→ verifying {s}...\n", .{package_name}),
+        .commit => std.debug.print("→ committing {s}...\n", .{package_name}),
+        .done => std.debug.print("✓ {s} installed\n", .{package_name}),
+        .failed => std.debug.print("✗ {s} failed\n", .{package_name}),
+        else => {},
+    }
+}
+
 // An exported function for deleting a package. It extracts the parameters (paths, package name, retry limits) and initiates the deletion process
 pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C) i32 {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
 
     const names_c = c_uninstall_request.package_names[0..c_uninstall_request.package_names_len];
 
@@ -211,27 +223,27 @@ pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C
     };
 
     uninstaller.UninstallerMachine.run(uninstall_data, allocator) catch |err|
-        return @intFromEnum(types.fromError(err));
+        return @intFromEnum(ffi_types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
 
 // Reverts the system state to a specific commit hash in the OSTree repository
 pub export fn upac_rollback(c_rollback_request: CRollbackRequest) callconv(.C) i32 {
-    rollback.rollback(c_rollback_request.repo_path.toSlice(), c_rollback_request.branch.toSlice(), c_rollback_request.commit_hash.toSlice(), c_rollback_request.root_path.toSlice(), types.allocator()) catch |err| return @intFromEnum(types.fromError(err));
+    rollback.rollback(c_rollback_request.repo_path.toSlice(), c_rollback_request.branch.toSlice(), c_rollback_request.commit_hash.toSlice(), c_rollback_request.root_path.toSlice(), ffi_types.allocator()) catch |err| return @intFromEnum(ffi_types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }
 
 pub export fn upac_diff_packages(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, out_c: *CPackageDiffArray) callconv(.C) i32 {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
 
     const pkg_entries = diff.diffPackages(
         repo_path_c.toSlice(),
         from_ref_c.toSlice(),
         to_ref_c.toSlice(),
         allocator,
-    ) catch |err| return @intFromEnum(types.fromError(err));
+    ) catch |err| return @intFromEnum(ffi_types.fromError(err));
 
     const entries_c = allocator.alloc(CPackageDiffEntry, pkg_entries.len) catch {
         for (pkg_entries) |entry| allocator.free(entry.name);
@@ -256,14 +268,14 @@ pub export fn upac_diff_packages(repo_path_c: CSlice, from_ref_c: CSlice, to_ref
 }
 
 pub export fn upac_diff_packages_free(c_out: *CPackageDiffArray) callconv(.C) void {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
     const entries = c_out.toSlice();
     for (entries) |entry| allocator.free(entry.name.toSlice());
     allocator.free(entries);
 }
 
 pub export fn upac_diff_files_attributed(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, root_path_c: CSlice, db_path_c: CSlice, out_c: *CAttributedDiffArray) callconv(.C) i32 {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
 
     const entries = diff.diffFilesAttributed(
         repo_path_c.toSlice(),
@@ -272,7 +284,7 @@ pub export fn upac_diff_files_attributed(repo_path_c: CSlice, from_ref_c: CSlice
         root_path_c.toSlice(),
         db_path_c.toSlice(),
         allocator,
-    ) catch |err| return @intFromEnum(types.fromError(err));
+    ) catch |err| return @intFromEnum(ffi_types.fromError(err));
 
     const entries_c = allocator.alloc(CAttributedDiffEntry, entries.len) catch {
         for (entries) |entry| {
@@ -297,7 +309,7 @@ pub export fn upac_diff_files_attributed(repo_path_c: CSlice, from_ref_c: CSlice
 }
 
 pub export fn upac_diff_files_attributed_free(out_c: *CAttributedDiffArray) callconv(.C) void {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
     const entries = out_c.toSlice();
     for (entries) |entry| {
         allocator.free(entry.path.toSlice());
@@ -308,13 +320,13 @@ pub export fn upac_diff_files_attributed_free(out_c: *CAttributedDiffArray) call
 
 // Generates a list of commits for a specified branch. Converts internal commit records into a C-compatible format
 pub export fn upac_list_commits(c_repo_path: CSlice, c_branch: CSlice, c_commits: *CCommitArray) callconv(.C) i32 {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
 
     const commit_entries = rollback.listCommits(
         c_repo_path.toSlice(),
         c_branch.toSlice(),
         allocator,
-    ) catch |err| return @intFromEnum(types.fromError(err));
+    ) catch |err| return @intFromEnum(ffi_types.fromError(err));
 
     const c_commit_entries = allocator.alloc(CCommitEntry, commit_entries.len) catch {
         for (commit_entries) |entry| {
@@ -339,7 +351,7 @@ pub export fn upac_list_commits(c_repo_path: CSlice, c_branch: CSlice, c_commits
 
 // A function for cleaning up memory after retrieving the list of commits; it frees the checksum and header strings
 pub export fn upac_commits_free(c_commits: *CCommitArray) callconv(.C) void {
-    const allocator = types.allocator();
+    const allocator = ffi_types.allocator();
     const entries = c_commits.toSlice();
     for (entries) |entry| {
         allocator.free(entry.checksum.toSlice());
@@ -363,8 +375,8 @@ pub export fn upac_init(c_init_request: CInitRequest) callconv(.C) i32 {
 
     const branch = c_init_request.branch.toSlice();
 
-    init.initSystem(system_paths, repo_mode, branch, types.allocator()) catch |err|
-        return @intFromEnum(types.fromError(err));
+    init.initSystem(system_paths, repo_mode, branch, ffi_types.allocator()) catch |err|
+        return @intFromEnum(ffi_types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
 }

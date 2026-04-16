@@ -5,10 +5,12 @@ use colored::Colorize;
 
 use indicatif::ProgressBar;
 
+use std::ffi::c_void;
 use std::fs;
 
 use crate::backends::PackageMeta;
 use crate::config::Config;
+use crate::ffi::CSlice;
 use crate::upac::{UpacLib, UpacLibGuard};
 
 use self::states::state_preparing_package;
@@ -116,4 +118,22 @@ pub fn run(config: Config, args: InstallArgs) -> Result<()> {
         }
         err
     })
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+pub unsafe extern "C" fn on_install_progress(event: u8, package_name: CSlice, ctx: *mut c_void) {
+    let pb = &*(ctx as *const ProgressBar);
+    let name = unsafe { package_name.as_str() };
+
+    match event {
+        0 => pb.set_message(format!("verifying {name}...")),
+        1 => pb.set_message("opening repo...".to_string()),
+        2 => pb.set_message(format!("checking if {name} is installed...")),
+        3 => pb.set_message(format!("writing database for {name}...")),
+        4 => pb.set_message(format!("processing files for {name}...")),
+        5 => pb.set_message(format!("committing {name}...")),
+        6 => pb.println(format!("{} {name} ready", "✓".green().bold())),
+        7 => pb.println(format!("{} {name} failed", "✗".red().bold())),
+        _ => {}
+    }
 }
