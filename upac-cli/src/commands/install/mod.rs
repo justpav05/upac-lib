@@ -8,7 +8,7 @@ use indicatif::ProgressBar;
 use std::ffi::c_void;
 use std::fs;
 
-use crate::backends::PackageMeta;
+use crate::backends::{BackendLibGuard, PackageMeta};
 use crate::config::Config;
 use crate::ffi::CSlice;
 use crate::upac::{UpacLib, UpacLibGuard};
@@ -69,6 +69,7 @@ struct InstallMachine {
     progress_bar: Option<ProgressBar>,
 
     upac_lib: Option<UpacLibGuard>,
+    backend_lib: Option<BackendLibGuard>,
     config: Config,
     stack: Vec<State>,
 }
@@ -88,6 +89,7 @@ impl InstallMachine {
             tmp_dirs: Vec::new(),
             progress_bar: None,
             upac_lib: None,
+            backend_lib: None,
             config,
             stack: Vec::new(),
         }

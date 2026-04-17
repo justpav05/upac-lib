@@ -13,7 +13,7 @@ use super::{
     UpacLibGuard,
 };
 
-use crate::backends::{Backend, BackendKind};
+use crate::backends::{on_backend_progress, BackendKind, BackendLibGuard};
 use crate::ffi::{CInstallRequest, CPackageEntry, CSlice};
 
 // ── States ─────────────────────────────────────────────────────────────────
@@ -23,6 +23,9 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
     machine.progress_bar = Some(spinner("Verifying and extracting package..."));
 
     let files: Vec<String> = machine.files.clone();
+
+    let progress_bar_ptr =
+        machine.progress_bar.as_ref().unwrap() as *const ProgressBar as *mut c_void;
 
     for (index, file) in files.iter().enumerate() {
         let kind = if let Some(flag) = &machine.backend {
@@ -34,6 +37,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
         };
 
         machine.enter(State::DetectingBackend(file.clone()));
+        machine.backend_lib = Some(BackendLibGuard::load(&kind)?);
 
         machine.progress_bar.as_ref().unwrap().println(format!(
             "{} backend: {:?}",
@@ -45,8 +49,6 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
         fs::remove_dir_all(&tmp_string_path).ok();
         fs::create_dir_all(&tmp_string_path)?;
         machine.tmp_dirs.push(tmp_string_path.clone());
-
-        let backend = Backend::load(&kind)?;
 
         let abs_file = fs::canonicalize(file)
             .map_err(|err| anyhow::anyhow!("cannot resolve path '{file}': {err}"))?;
@@ -65,7 +67,15 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             .progress_bar
             .as_ref()
             .unwrap()
-            .suspend(|| backend.meta_prepare(&abs_file_str, &tmp_string_path, &checksum))
+            .suspend(|| {
+                machine.backend_lib.as_ref().unwrap().meta_prepare(
+                    &abs_file_str,
+                    &tmp_string_path,
+                    &checksum,
+                    Some(on_backend_progress),
+                    progress_bar_ptr,
+                )
+            })
             .map_err(|err| {
                 machine.progress_bar.as_ref().unwrap().finish_and_clear();
                 err

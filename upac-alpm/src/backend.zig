@@ -21,6 +21,9 @@ pub const PrepareRequest = struct {
     pkg_path: []const u8,
     out_path: []const u8,
     checksum: []const u8,
+
+    on_progress: ?BackendProgressFn = null,
+    progress_ctx: ?*anyopaque = null,
 };
 
 // Listing specific backend errors when working with archives and metadata
@@ -41,8 +44,20 @@ pub const StateId = enum {
     verifying,
     extracting,
     reading_meta,
+    special_step,
+
     done,
     failed,
+};
+
+pub const BackendProgressEvent = enum(u8) {
+    verifying = 0,
+    extracting = 1,
+    reading_meta = 2,
+    special_step = 3,
+
+    done = 4,
+    failed = 5,
 };
 
 // ── BackendFSM ───────────────────────────────────────────────────────
@@ -56,14 +71,28 @@ pub const BackendMachine = struct {
     allocator: std.mem.Allocator,
 
     // Method for transitioning to a new state with history addition
-    pub fn enter(self: *BackendMachine, id: StateId) !void {
-        try self.stack.append(id);
-        std.debug.print("[alpm → {s}]\n", .{@tagName(id)});
+    pub fn enter(self: *BackendMachine, state_id: StateId) !void {
+        try self.stack.append(state_id);
+        self.report(switch (state_id) {
+            .verifying => .verifying,
+            .extracting => .extracting,
+            .reading_meta => .reading_meta,
+            .special_step => .special_step,
+
+            .done => .done,
+            .failed => .failed,
+        });
     }
 
     // Releasing resources (stack memory) occupied by the state machine
     pub fn deinit(self: *BackendMachine) void {
         self.stack.deinit();
+    }
+
+    // Reports an installation progress event to the progress callback, if one is set
+    pub fn report(self: *BackendMachine, event: BackendProgressEvent) void {
+        const cb = self.request.on_progress orelse return;
+        cb(event, CSlice.fromSlice(self.request.pkg_path), self.request.progress_ctx);
     }
 
     // The entry and launch point of the machine, responsible for returning the correct result
@@ -122,20 +151,37 @@ const CPrepareRequest = extern struct {
     pkg_path: CSlice,
     out_path: CSlice,
     checksum: CSlice,
+
+    on_progress: ?CBackendProgressFn = null,
+    progress_ctx: ?*anyopaque = null,
 };
+
+pub const BackendProgressFn = *const fn (
+    event: BackendProgressEvent,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
+
+pub const CBackendProgressFn = *const fn (
+    event: BackendProgressEvent,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
 
 // The main allocator for the entire library
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 // ── FFI экспорты ──────────────────────────────────────────────────────────────
 // An exported C function (FFI) for initiating the preparation process from external code
-pub export fn upac_backend_prepare(request: *const CPrepareRequest, out_meta: *CPackageMeta) callconv(.C) i32 {
+pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: *CPackageMeta) callconv(.C) i32 {
     const allocator = gpa.allocator();
 
     const zig_request = PrepareRequest{
-        .pkg_path = request.pkg_path.toSlice(),
-        .out_path = request.out_path.toSlice(),
-        .checksum = request.checksum.toSlice(),
+        .pkg_path = request_c.pkg_path.toSlice(),
+        .out_path = request_c.out_path.toSlice(),
+        .checksum = request_c.checksum.toSlice(),
+        .on_progress = request_c.on_progress,
+        .progress_ctx = request_c.progress_ctx,
     };
 
     const meta = prepare(zig_request, allocator) catch |err| {
@@ -164,6 +210,19 @@ pub export fn upac_backend_prepare(request: *const CPrepareRequest, out_meta: *C
     };
 
     return 0;
+}
+
+fn onBackendProgress(event: BackendProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.C) void {
+    _ = ctx;
+    const package_name = pkg.toSlice();
+    switch (event) {
+        .Verifying => std.debug.print("→ verifying {s}...\n", .{package_name}),
+        .Reading_meta => std.debug.print("→ reading metadata for {s}...\n", .{package_name}),
+        .Special_step => std.debug.print("→ special step for {s}...\n", .{package_name}),
+        .Ready => std.debug.print("✓ {s} installed\n", .{package_name}),
+        .Failed => std.debug.print("✗ {s} failed\n", .{package_name}),
+        else => {},
+    }
 }
 
 // A function for safely clearing metadata memory allocated on the Zig side

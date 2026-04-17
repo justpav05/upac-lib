@@ -1,11 +1,26 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::{bail, Result};
 
+use indicatif::ProgressBar;
+
+use std::ffi::c_void;
+
 use libloading::{Library, Symbol};
 
 use crate::ffi::{CPackageMeta, CSlice};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
+#[repr(u8)]
+pub enum BackendProgressEvent {
+    Verifying = 0,
+    Extracting = 1,
+    ReadingMeta = 2,
+    SpecialStep = 3,
+
+    Ready = 4,
+    Failed = 5,
+}
+
 // Internal representation of package metadata on the Rust side
 #[derive(Debug)]
 pub struct PackageMeta {
@@ -89,6 +104,8 @@ pub struct CPrepareRequest {
     pkg_path: CSlice,
     out_path: CSlice,
     checksum: CSlice,
+    on_progress: Option<unsafe extern "C" fn(BackendProgressEvent, CSlice, *mut c_void)>,
+    progress_ctx: *mut c_void,
 }
 
 // A wrapper for dynamically loading libupac.so and mapping its C functions to Rust types
@@ -131,11 +148,15 @@ impl Backend {
         pkg_path: &str,
         out_path: &str,
         checksum: &str,
+        on_progress: Option<unsafe extern "C" fn(BackendProgressEvent, CSlice, *mut c_void)>,
+        progress_ctx: *mut c_void,
     ) -> Result<PackageMeta> {
         let prepare_request_c = CPrepareRequest {
             pkg_path: CSlice::from_str(pkg_path),
             out_path: CSlice::from_str(out_path),
             checksum: CSlice::from_str(checksum),
+            on_progress,
+            progress_ctx,
         };
 
         let mut meta = std::mem::MaybeUninit::<CPackageMeta>::uninit();
@@ -165,5 +186,52 @@ impl Backend {
         unsafe { (self.upac_backend_meta_free)(&mut package_meta_c) };
 
         Ok(package_meta_result)
+    }
+}
+
+pub unsafe extern "C" fn on_backend_progress(
+    event: BackendProgressEvent,
+    detail_c: CSlice,
+    ctx: *mut c_void,
+) {
+    if ctx.is_null() {
+        return;
+    }
+    let progress_bar = &*(ctx as *const ProgressBar);
+    let detail = detail_c.as_str();
+
+    match event {
+        BackendProgressEvent::Verifying => {
+            progress_bar.set_message(format!("verifying {}...", detail))
+        }
+        BackendProgressEvent::Extracting => {
+            progress_bar.set_message(format!("extracting {}...", detail))
+        }
+        BackendProgressEvent::ReadingMeta => progress_bar.set_message("reading metadata..."),
+        BackendProgressEvent::SpecialStep => progress_bar.set_message(detail.to_string()),
+        BackendProgressEvent::Ready => progress_bar.set_message("ready"),
+        BackendProgressEvent::Failed => progress_bar.set_message("failed"),
+    }
+}
+
+// An RAII wrapper that automatically calls the library initialization upon exiting the scope
+pub struct BackendLibGuard {
+    lib: Backend,
+}
+
+// Loads the library and wraps it in a Guard for automatic resource management
+impl BackendLibGuard {
+    pub fn load(kind: &BackendKind) -> Result<Self> {
+        Ok(Self {
+            lib: Backend::load(kind)?,
+        })
+    }
+}
+
+// Allows using BackendLibGuard just like the UpacLib structure itself, via dereferencing
+impl std::ops::Deref for BackendLibGuard {
+    type Target = Backend;
+    fn deref(&self) -> &Self::Target {
+        &self.lib
     }
 }
