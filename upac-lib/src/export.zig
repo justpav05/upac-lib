@@ -179,6 +179,8 @@ pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 
         .database_path = c_install_request.db_path.toSlice(),
         .branch = c_install_request.branch.toSlice(),
         .max_retries = c_install_request.max_retries,
+        .on_progress = c_install_request.on_progress,
+        .progress_ctx = c_install_request.progress_ctx,
     };
 
     installer.InstallerMachine.run(install_data, allocator) catch |err|
@@ -187,14 +189,18 @@ pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 
     return @intFromEnum(ErrorCode.ok);
 }
 
-fn onInstallProgress(event: u8, pkg: CSlice, ctx: ?*anyopaque) callconv(.C) void {
+fn onInstallProgress(event: global_types.InstallProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.C) void {
     _ = ctx;
     const package_name = pkg.toSlice();
-    switch (@as(global_types.InstallProgressEvent, @enumFromInt(event))) {
-        .verifying => std.debug.print("→ verifying {s}...\n", .{package_name}),
-        .commit => std.debug.print("→ committing {s}...\n", .{package_name}),
-        .done => std.debug.print("✓ {s} installed\n", .{package_name}),
-        .failed => std.debug.print("✗ {s} failed\n", .{package_name}),
+    switch (event) {
+        .Verifying => std.debug.print("→ verifying {s}...\n", .{package_name}),
+        .OpeningRepo => std.debug.print("→ opening repo...\n", .{}),
+        .CheckingInstalled => std.debug.print("→ checking if {s} is installed...\n", .{package_name}),
+        .WritingDatabase => std.debug.print("→ writing database for {s}...\n", .{package_name}),
+        .ProcessingFiles => std.debug.print("→ processing files for {s}...\n", .{package_name}),
+        .Committing => std.debug.print("→ committing {s}...\n", .{package_name}),
+        .Ready => std.debug.print("✓ {s} installed\n", .{package_name}),
+        .Failed => std.debug.print("✗ {s} failed\n", .{package_name}),
         else => {},
     }
 }
@@ -220,12 +226,30 @@ pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C
         .db_path = c_uninstall_request.db_path.toSlice(),
         .branch = c_uninstall_request.branch.toSlice(),
         .max_retries = c_uninstall_request.max_retries,
+        .on_progress = c_uninstall_request.on_progress,
+        .progress_ctx = c_uninstall_request.progress_ctx,
     };
 
     uninstaller.UninstallerMachine.run(uninstall_data, allocator) catch |err|
         return @intFromEnum(ffi_types.fromError(err));
 
     return @intFromEnum(ErrorCode.ok);
+}
+
+fn onUninstallProgress(event: global_types.UninstallProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.C) void {
+    _ = ctx;
+    const package_name = pkg.toSlice();
+    switch (event) {
+        .Verifying => std.debug.print("→ verifying {s}...\n", .{package_name}),
+        .OpeningRepo => std.debug.print("→ opening repo...\n", .{}),
+        .CheckingInstalled => std.debug.print("→ checking if {s} is installed...\n", .{package_name}),
+        .RemoveDbFiles => std.debug.print("→ removing database for {s}...\n", .{package_name}),
+        .ProcessingFiles => std.debug.print("→ processing files for {s}...\n", .{package_name}),
+        .Committing => std.debug.print("→ committing {s}...\n", .{package_name}),
+        .Ready => std.debug.print("✓ {s} uninstalled\n", .{package_name}),
+        .Failed => std.debug.print("✗ {s} failed\n", .{package_name}),
+        else => {},
+    }
 }
 
 // Reverts the system state to a specific commit hash in the OSTree repository

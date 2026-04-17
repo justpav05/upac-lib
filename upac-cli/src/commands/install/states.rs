@@ -83,7 +83,11 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 
 fn state_installing(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::Installing);
-    machine.progress_bar = Some(spinner("Installing..."));
+    machine
+        .progress_bar
+        .as_ref()
+        .unwrap()
+        .set_message("Installing...");
 
     let entries_c: Vec<CPackageEntry> = machine
         .prepared_packages
@@ -111,17 +115,8 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         max_retries: machine.config.step_retries,
     };
 
-    let return_code = machine
-        .progress_bar
-        .as_ref()
-        .unwrap()
-        .suspend(|| unsafe { (machine.upac_lib.as_ref().unwrap().install)(install_request_c) });
-
-    machine
-        .progress_bar
-        .as_ref()
-        .unwrap()
-        .suspend(|| UpacLib::check(return_code, "install"))?;
+    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().install)(install_request_c) };
+    UpacLib::check(return_code, "install")?;
 
     state_done(machine)
 }
@@ -152,6 +147,7 @@ fn spinner(message: &str) -> ProgressBar {
             .unwrap(),
     );
     progress_bar.set_message(message.to_owned());
+    progress_bar.println(message);
     progress_bar.enable_steady_tick(Duration::from_millis(80));
     progress_bar
 }

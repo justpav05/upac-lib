@@ -93,7 +93,7 @@ pub const InstallProgressFn = *const fn (
 ) callconv(.C) void;
 
 pub const CInstallProgressFn = *const fn (
-    event: u8,
+    event: InstallProgressEvent,
     package_name: CSlice,
     ctx: ?*anyopaque,
 ) callconv(.C) void;
@@ -122,7 +122,7 @@ pub const UninstallProgressFn = *const fn (
 ) callconv(.C) void;
 
 pub const CUninstallProgressFn = *const fn (
-    event: u8,
+    event: UninstallProgressEvent,
     package_name: CSlice,
     ctx: ?*anyopaque,
 ) callconv(.C) void;

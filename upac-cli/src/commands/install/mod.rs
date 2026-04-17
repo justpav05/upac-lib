@@ -34,6 +34,19 @@ pub struct InstallArgs {
     pub checksums: Vec<String>,
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallProgressEvent {
+    Verifying = 0,
+    OpeningRepo = 1,
+    CheckingInstalled = 2,
+    WritingDatabase = 3,
+    ProcessingFiles = 4,
+    Committing = 5,
+    Ready = 6,
+    Failed = 7,
+}
+
 // ── FSM states ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
 enum State {
@@ -121,19 +134,40 @@ pub fn run(config: Config, args: InstallArgs) -> Result<()> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-pub unsafe extern "C" fn on_install_progress(event: u8, package_name: CSlice, ctx: *mut c_void) {
-    let pb = &*(ctx as *const ProgressBar);
-    let name = unsafe { package_name.as_str() };
+pub unsafe extern "C" fn on_install_progress(
+    event_raw: u8,
+    package_name_c: CSlice,
+    ctx: *mut c_void,
+) {
+    let progress_bar = &*(ctx as *const ProgressBar);
+    let event: InstallProgressEvent = std::mem::transmute(event_raw);
+
+    let package_name = unsafe { package_name_c.as_str() };
 
     match event {
-        0 => pb.set_message(format!("verifying {name}...")),
-        1 => pb.set_message("opening repo...".to_string()),
-        2 => pb.set_message(format!("checking if {name} is installed...")),
-        3 => pb.set_message(format!("writing database for {name}...")),
-        4 => pb.set_message(format!("processing files for {name}...")),
-        5 => pb.set_message(format!("committing {name}...")),
-        6 => pb.println(format!("{} {name} ready", "✓".green().bold())),
-        7 => pb.println(format!("{} {name} failed", "✗".red().bold())),
-        _ => {}
+        InstallProgressEvent::Verifying => {
+            progress_bar.set_message(format!("verifying {package_name}..."))
+        }
+        InstallProgressEvent::OpeningRepo => {
+            progress_bar.set_message("opening repo...".to_string())
+        }
+        InstallProgressEvent::CheckingInstalled => {
+            progress_bar.set_message(format!("checking if {package_name} is installed..."))
+        }
+        InstallProgressEvent::WritingDatabase => {
+            progress_bar.set_message(format!("writing database for {package_name}..."))
+        }
+        InstallProgressEvent::ProcessingFiles => {
+            progress_bar.set_message(format!("processing files for {package_name}..."))
+        }
+        InstallProgressEvent::Committing => {
+            progress_bar.set_message(format!("committing {package_name}..."))
+        }
+        InstallProgressEvent::Ready => {
+            progress_bar.println(format!("{} {package_name}done", "✓".green().bold()))
+        }
+        InstallProgressEvent::Failed => {
+            progress_bar.println(format!("{} {package_name}failed", "✗".red().bold()))
+        }
     }
 }
