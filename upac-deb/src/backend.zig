@@ -21,6 +21,9 @@ pub const PrepareRequest = struct {
     pkg_path: []const u8,
     out_path: []const u8,
     checksum: []const u8,
+
+    on_progress: ?BackendProgressFn = null,
+    progress_ctx: ?*anyopaque = null,
 };
 
 // Listing specific backend errors when working with archives and metadata
@@ -42,8 +45,19 @@ pub const StateId = enum {
     verifying_files,
     extracting,
     reading_meta,
+
     done,
     failed,
+};
+
+pub const BackendProgressEvent = enum(u8) {
+    verifying = 0,
+    extracting = 1,
+    reading_meta = 2,
+    special_step = 3,
+
+    done = 4,
+    failed = 5,
 };
 
 // ── BackendFSM ───────────────────────────────────────────────────────
@@ -57,14 +71,33 @@ pub const BackendMachine = struct {
     allocator: std.mem.Allocator,
 
     // Method for transitioning to a new state with history addition
-    pub fn enter(self: *BackendMachine, id: StateId) !void {
-        try self.stack.append(id);
-        std.debug.print("[deb → {s}]\n", .{@tagName(id)});
+    pub fn enter(self: *BackendMachine, state_id: StateId) !void {
+        try self.stack.append(state_id);
+        self.report(switch (state_id) {
+            .verifying => .verifying,
+            .extracting => .extracting,
+            .reading_meta => .reading_meta,
+
+            .done => .done,
+            .failed => .failed,
+            else => return,
+        });
     }
 
     // Releasing resources (stack memory) occupied by the state machine
     pub fn deinit(self: *BackendMachine) void {
         self.stack.deinit();
+    }
+
+    // Reports an installation progress event to the progress callback, if one is set
+    pub fn report(self: *BackendMachine, event: BackendProgressEvent) void {
+        const cb = self.request.on_progress orelse return;
+        cb(event, CSlice.fromSlice(self.request.pkg_path), self.request.progress_ctx);
+    }
+
+    pub fn reportDetail(self: *BackendMachine, message: []const u8) void {
+        const cb = self.request.on_progress orelse return;
+        cb(.special_step, CSlice.fromSlice(message), self.request.progress_ctx);
     }
 
     // The entry and launch point of the machine, responsible for returning the correct result
@@ -123,7 +156,22 @@ const CPrepareRequest = extern struct {
     pkg_path: CSlice,
     out_path: CSlice,
     checksum: CSlice,
+
+    on_progress: ?CBackendProgressFn = null,
+    progress_ctx: ?*anyopaque = null,
 };
+
+pub const BackendProgressFn = *const fn (
+    event: BackendProgressEvent,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
+
+pub const CBackendProgressFn = *const fn (
+    event: BackendProgressEvent,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
 
 // The main allocator for the entire library
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -168,6 +216,20 @@ pub export fn upac_backend_prepare(
     };
 
     return 0;
+}
+
+fn on_backend_progress(event: BackendProgressEvent, detail_c: CSlice, ctx: ?*anyopaque) callconv(.C) void {
+    if (ctx != null) {
+        return;
+    }
+    const detail = detail_c.toSlice();
+    switch (event) {
+        .Verifying => std.debug.print("→ verifying {s}...\n", .{detail}),
+        .Reading_meta => std.debug.print("→ reading metadata for {s}...\n", .{detail}),
+        .Ready => std.debug.print("✓ {s} extracted\n", .{detail}),
+        .Failed => std.debug.print("✗ {s} failed\n", .{detail}),
+        else => {},
+    }
 }
 
 // A function for safely clearing metadata memory allocated on the Zig side

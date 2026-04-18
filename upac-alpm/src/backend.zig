@@ -77,10 +77,10 @@ pub const BackendMachine = struct {
             .verifying => .verifying,
             .extracting => .extracting,
             .reading_meta => .reading_meta,
-            .special_step => .special_step,
 
             .done => .done,
             .failed => .failed,
+            else => return,
         });
     }
 
@@ -93,6 +93,11 @@ pub const BackendMachine = struct {
     pub fn report(self: *BackendMachine, event: BackendProgressEvent) void {
         const cb = self.request.on_progress orelse return;
         cb(event, CSlice.fromSlice(self.request.pkg_path), self.request.progress_ctx);
+    }
+
+    pub fn reportDetail(self: *BackendMachine, message: []const u8) void {
+        const cb = self.request.on_progress orelse return;
+        cb(.special_step, CSlice.fromSlice(message), self.request.progress_ctx);
     }
 
     // The entry and launch point of the machine, responsible for returning the correct result
@@ -212,15 +217,16 @@ pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: 
     return 0;
 }
 
-fn onBackendProgress(event: BackendProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.C) void {
-    _ = ctx;
-    const package_name = pkg.toSlice();
+fn on_backend_progress(event: BackendProgressEvent, detail_c: CSlice, ctx: ?*anyopaque) callconv(.C) void {
+    if (ctx != null) {
+        return;
+    }
+    const detail = detail_c.toSlice();
     switch (event) {
-        .Verifying => std.debug.print("→ verifying {s}...\n", .{package_name}),
-        .Reading_meta => std.debug.print("→ reading metadata for {s}...\n", .{package_name}),
-        .Special_step => std.debug.print("→ special step for {s}...\n", .{package_name}),
-        .Ready => std.debug.print("✓ {s} installed\n", .{package_name}),
-        .Failed => std.debug.print("✗ {s} failed\n", .{package_name}),
+        .Verifying => std.debug.print("→ verifying {s}...\n", .{detail}),
+        .Reading_meta => std.debug.print("→ reading metadata for {s}...\n", .{detail}),
+        .Ready => std.debug.print("✓ {s} extracted\n", .{detail}),
+        .Failed => std.debug.print("✗ {s} failed\n", .{detail}),
         else => {},
     }
 }

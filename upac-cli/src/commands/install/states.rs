@@ -64,18 +64,16 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
         };
 
         let package_meta = machine
-            .progress_bar
+            .backend_lib
             .as_ref()
             .unwrap()
-            .suspend(|| {
-                machine.backend_lib.as_ref().unwrap().meta_prepare(
-                    &abs_file_str,
-                    &tmp_string_path,
-                    &checksum,
-                    Some(on_backend_progress),
-                    progress_bar_ptr,
-                )
-            })
+            .meta_prepare(
+                &abs_file_str,
+                &tmp_string_path,
+                &checksum,
+                Some(on_backend_progress),
+                progress_bar_ptr,
+            )
             .map_err(|err| {
                 machine.progress_bar.as_ref().unwrap().finish_and_clear();
                 err
@@ -157,7 +155,6 @@ fn spinner(message: &str) -> ProgressBar {
             .unwrap(),
     );
     progress_bar.set_message(message.to_owned());
-    progress_bar.println(message);
     progress_bar.enable_steady_tick(Duration::from_millis(80));
     progress_bar
 }
