@@ -264,7 +264,9 @@ pub const ErrorCode = enum(i32) {
 
     already_initialized = 60,
     create_dir_failed = 61,
-    ostree_init_failed = 62,
+    not_a_directory = 62,
+    ostree_init_failed = 63,
+    directory_not_empty = 64,
 };
 
 // A mapper function that translates internal Zig errors (anyerror) into ErrorCode values understandable by the external interface
@@ -287,6 +289,8 @@ pub fn fromError(err: anyerror) ErrorCode {
         error.RootNotFound => .file_not_found,
         error.AlreadyInitialized => .already_initialized,
         error.CreateDirFailed => .create_dir_failed,
+        error.NotADirectory => .not_a_directory,
+        error.DirectoryNotEmpty => .directory_not_empty,
         error.OstreeInitFailed => .ostree_init_failed,
 
         // Package Management (Install/Uninstall)

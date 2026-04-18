@@ -19,28 +19,57 @@ pub const RepoMode = enum {
 pub const InitError = error{
     AlreadyInitialized,
     RootNotFound,
+    NotADirectory,
     CreateDirFailed,
     OstreeInitFailed,
+    DirectoryNotEmpty,
 };
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn initSystem(system_paths: SystemPaths, repo_mode: RepoMode, branch: []const u8, allocator: std.mem.Allocator) !void {
-    try checkExists(system_paths.root_path);
+    if (!try checkDirExists(system_paths.root_path)) {
+        return InitError.RootNotFound;
+    }
 
-    std.fs.makeDirAbsolute(system_paths.repo_path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return InitError.CreateDirFailed,
-    };
+    if (try checkFileExists(system_paths.repo_path)) {
+        return InitError.NotADirectory;
+    }
+
+    if (!try checkDirExists(system_paths.repo_path)) {
+        std.fs.makeDirAbsolute(system_paths.repo_path) catch return InitError.CreateDirFailed;
+    } else {
+        var dir = try std.fs.openDirAbsolute(system_paths.repo_path, .{ .iterate = true });
+        defer dir.close();
+
+        var iterator = dir.iterate();
+        var is_empty = true;
+        while (try iterator.next()) |entry| {
+            is_empty = false;
+            if (std.mem.eql(u8, entry.name, "config")) return InitError.AlreadyInitialized;
+        }
+        if (!is_empty) return InitError.DirectoryNotEmpty;
+    }
 
     try initOstreeRepo(system_paths.repo_path, repo_mode, branch, allocator);
 }
 
 // ── Helpers funchtions ────────────────────────────────────────────────────────
-fn checkExists(path: []const u8) !void {
-    std.fs.accessAbsolute(path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return InitError.RootNotFound,
+fn checkDirExists(path: []const u8) !bool {
+    const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+        error.FileNotFound => return false,
         else => return err,
     };
+
+    return stat.kind == .directory;
+}
+
+fn checkFileExists(path: []const u8) !bool {
+    const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+
+    return stat.kind == .file;
 }
 
 fn initOstreeRepo(repo_path: []const u8, repo_mode: RepoMode, branch: []const u8, allocator: std.mem.Allocator) !void {
