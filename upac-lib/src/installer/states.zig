@@ -99,48 +99,24 @@ fn stateOpenRepo(machine: *InstallerMachine) anyerror!void {
 fn stateCheckInstalled(machine: *InstallerMachine) anyerror!void {
     try machine.enter(.check_installed);
 
-    const branch_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch});
-    defer machine.allocator.free(branch_c);
+    const index_path = try std.fmt.allocPrint(machine.allocator, "{s}/index.toml", .{machine.data.database_path});
+    defer machine.allocator.free(index_path);
 
-    var last_checksum: ?[*:0]u8 = null;
-    if (c_libs.ostree_repo_resolve_rev(machine.repo.?, branch_c.ptr, 1, &last_checksum, null) == 0 or last_checksum == null) {
-        machine.resetRetries();
-        return stateWriteDatabase(machine);
-    }
-    defer c_libs.g_free(@ptrCast(last_checksum));
-
-    var gerror: ?*c_libs.GError = null;
-    var commit_variant: ?*c_libs.GVariant = null;
-    defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
-
-    if (c_libs.ostree_repo_load_variant(machine.repo.?, c_libs.OSTREE_OBJECT_TYPE_COMMIT, last_checksum, &commit_variant, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        machine.resetRetries();
-        return stateWriteDatabase(machine);
-    }
-
-    var body_variant: ?*c_libs.GVariant = null;
-    defer if (body_variant) |variant| c_libs.g_variant_unref(variant);
-    body_variant = c_libs.g_variant_get_child_value(commit_variant, 4);
-
-    var body_len: usize = 0;
-    const body_ptr = c_libs.g_variant_get_string(body_variant, &body_len);
-    const body = body_ptr[0..body_len];
+    const index_content = std.fs.cwd().readFileAlloc(machine.allocator, index_path, 16 * 1024 * 1024) catch |err| switch (err) {
+        error.FileNotFound => {
+            machine.resetRetries();
+            return stateWriteDatabase(machine);
+        },
+        else => return err,
+    };
+    defer machine.allocator.free(index_content);
 
     const current_package_name = machine.data.packages[machine.current_package_index].package.meta.name;
 
-    var split_lines_iter = std.mem.splitScalar(u8, body, '\n');
-    while (split_lines_iter.next()) |line| {
-        const trimmed_line = std.mem.trim(u8, line, " \t\r");
-        if (trimmed_line.len == 0) continue;
-
-        const separator_index = std.mem.indexOfScalar(u8, trimmed_line, ' ') orelse continue;
-        const installed_package_name = trimmed_line[0..separator_index];
-
-        if (std.ascii.eqlIgnoreCase(installed_package_name, current_package_name)) {
-            stateFailed(machine);
-            return InstallerError.AlreadyInstalled;
-        }
+    const entry = try data.find(index_content, current_package_name, machine.allocator);
+    if (entry != null) {
+        stateFailed(machine);
+        return InstallerError.AlreadyInstalled;
     }
 
     machine.resetRetries();
@@ -181,6 +157,25 @@ fn stateWriteDatabase(machine: *InstallerMachine) anyerror!void {
         }
         machine.retries += 1;
         return stateWriteDatabase(machine);
+    };
+
+    const staged_index_path = try std.fmt.allocPrint(machine.allocator, "{s}/index.toml", .{staged_database_dir_path});
+    defer machine.allocator.free(staged_index_path);
+
+    const live_index_path = try std.fmt.allocPrint(machine.allocator, "{s}/index.toml", .{machine.data.database_path});
+    defer machine.allocator.free(live_index_path);
+
+    std.fs.copyFileAbsolute(live_index_path, staged_index_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => {
+            stateFailed(machine);
+            return err;
+        },
+    };
+
+    data.append(staged_index_path, current_install_entry.package.meta.name, current_install_entry.checksum, machine.allocator) catch |err| {
+        stateFailed(machine);
+        return err;
     };
 
     machine.resetRetries();

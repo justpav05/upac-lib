@@ -68,7 +68,7 @@ const IndexFSM = struct {
     }
 
     // Initializes the automaton structure and initiates the content parsing process
-    fn run(content: []const u8, package_name: []const u8, allocator: std.mem.Allocator) !IndexEntry {
+    fn run(content: []const u8, package_name: []const u8, allocator: std.mem.Allocator) !?IndexEntry {
         const package_name_lower = try std.ascii.allocLowerString(allocator, package_name);
         defer allocator.free(package_name_lower);
 
@@ -96,13 +96,13 @@ const IndexFSM = struct {
 
 // ── FSM states ────────────────────────────────────────────────────────────────
 // The initial state that transitions the automaton to parsing the first line
-fn stateStart(machine: *IndexFSM) !void {
+fn stateStart(machine: *IndexFSM) anyerror!void {
     try machine.enter(.start);
     return stateLineStart(machine);
 }
 
 // Checks the beginning of the line for characters or an end-of-file indicator
-fn stateLineStart(machine: *IndexFSM) !void {
+fn stateLineStart(machine: *IndexFSM) anyerror!void {
     try machine.enter(.line_start);
 
     if (machine.currentChar() == null) {
@@ -121,7 +121,7 @@ fn stateLineStart(machine: *IndexFSM) !void {
 }
 
 // Reads the package name up to the first space and compares it with the target
-fn stateReadingName(machine: *IndexFSM) !void {
+fn stateReadingName(machine: *IndexFSM) anyerror!void {
     try machine.enter(.reading_name);
 
     while (machine.currentChar()) |char| {
@@ -144,7 +144,7 @@ fn stateReadingName(machine: *IndexFSM) !void {
 }
 
 // Skips the current line if the package name does not match
-fn stateSkipLine(machine: *IndexFSM) !void {
+fn stateSkipLine(machine: *IndexFSM) anyerror!void {
     try machine.enter(.skip_line);
 
     while (machine.currentChar()) |char| {
@@ -156,7 +156,7 @@ fn stateSkipLine(machine: *IndexFSM) !void {
 }
 
 // Reads the packet checksum, calculates the source line length, and saves the result to IndexEntry
-fn stateReadingChecksum(machine: *IndexFSM) !void {
+fn stateReadingChecksum(machine: *IndexFSM) anyerror!void {
     try machine.enter(.reading_checksum);
 
     const checksum_start = machine.current_character_position;
@@ -185,14 +185,14 @@ fn stateReadingChecksum(machine: *IndexFSM) !void {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 // A public interface for searching the index for an entry by package name. Launches the FSM
-pub fn find(content: []const u8, package_name: []const u8, allocator: std.mem.Allocator) !?IndexEntry {
+pub fn find(content: []const u8, package_name: []const u8, allocator: std.mem.Allocator) anyerror!?IndexEntry {
     const result = try IndexFSM.run(content, package_name, allocator);
 
     return result;
 }
 
 // Appends a new line containing the package name and its hash to the end of the index file. If the file does not exist, it will be created
-pub fn append(index_path: []const u8, package_name: []const u8, checksum: []const u8, allocator: std.mem.Allocator) !void {
+pub fn append(index_path: []const u8, package_name: []const u8, checksum: []const u8, allocator: std.mem.Allocator) anyerror!void {
     const package_name_lower = try std.ascii.allocLowerString(allocator, package_name);
     defer allocator.free(package_name_lower);
 
@@ -204,7 +204,7 @@ pub fn append(index_path: []const u8, package_name: []const u8, checksum: []cons
 }
 
 // Removes an entry from the index. The function reads the entire file, extracts the segment corresponding to the entry to be deleted (using the offset and length), and overwrites the file
-pub fn remove(index_path: []const u8, entry: IndexEntry, allocator: std.mem.Allocator) !void {
+pub fn remove(index_path: []const u8, entry: IndexEntry, allocator: std.mem.Allocator) anyerror!void {
     const content = std.fs.cwd().readFileAlloc(
         allocator,
         index_path,

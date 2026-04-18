@@ -17,14 +17,14 @@ pub fn build(b: *std.Build) void {
     });
 
     shared_lib.linkLibC();
-    shared_lib.linkSystemLibrary("zstd");
-
-    shared_lib.addIncludePath(b.path("../libarchive/libarchive"));
-    shared_lib.addObjectFile(b.path("../libarchive/.libs/libarchive.a"));
+    shared_lib.linkSystemLibrary2("archive", .{
+        .preferred_link_mode = .static,
+    });
 
     shared_lib.root_module.strip = strip;
     shared_lib.root_module.stack_check = stack_check;
     shared_lib.bundle_compiler_rt = true;
+    shared_lib.link_gc_sections = false;
 
     b.installArtifact(shared_lib);
 }
