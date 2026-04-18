@@ -13,6 +13,9 @@ CARGO_TARGET ?= $(shell rustc -Vv | grep host | cut -d ' ' -f 2)
 OSTREE_REPO := https://github.com/ostreedev/ostree.git
 OSTREE_DIR  := $(ROOT_DIR)/ostree
 
+LIBARCHIVE_REPO := https://github.com/libarchive/libarchive.git
+LIBARCHIVE_DIR  := $(ROOT_DIR)/libarchive
+
 ARCH_PKG_FLAGS  ?= --nodeps --noconfirm -f
 RPM_PKG_FLAGS   ?= -bb --define "_topdir $(PKG_DIR)/rpm" \
                        --define "_rpmdir $(PKG_DIR)/rpm/RPMS" \
@@ -47,10 +50,13 @@ prepare-dirs:
 	@echo "--- Preparing directories ($(MODE) / cpu=$(CPU)) ---"
 	@mkdir -p $(OUT_BUILD_DIR)/bin $(OUT_BUILD_DIR)/lib
 	@mkdir -p $(ROOT_DIR)/ostree
+	@mkdir -p $(ROOT_DIR)/libarchive
 
 prepare-ostree:
 	@echo "--- Fetching and building static ostree in $(MODE) mode ---"
-	@git clone --depth 1 $(OSTREE_REPO) $(OSTREE_DIR);
+	@if [ ! -d "$(OSTREE_DIR)/.git" ]; then \
+		git clone --depth 1 $(OSTREE_REPO) $(OSTREE_DIR); \
+	fi
 	@cd $(OSTREE_DIR) && \
 		env NOCONFIGURE=1 ./autogen.sh && \
 		./configure \
@@ -61,11 +67,29 @@ prepare-ostree:
 			--without-curl \
 			--without-avahi \
 			--disable-man \
+			--disable-introspection \
+			CFLAGS="$(OSTREE_BUILD_CFLAGS)" && \
+		$(MAKE) -j$(shell nproc)
+
+prepare-libarchive:
+	@echo "--- Fetching and building static libarchive in $(MODE) mode ---"
+	@if [ ! -d "$(LIBARCHIVE_DIR)/.git" ]; then \
+		git clone --depth 1 $(LIBARCHIVE_REPO) $(LIBARCHIVE_DIR); \
+	fi
+	@cd $(LIBARCHIVE_DIR) && \
+		./build/autogen.sh && \
+		./configure \
+			--enable-static \
+			--disable-shared \
+			--without-xml2 \
+			--without-expat \
+			--without-openssl \
+			--with-zstd \
 			CFLAGS="$(OSTREE_BUILD_CFLAGS)" && \
 		$(MAKE) -j$(shell nproc)
 
 # ── Build ─────────────────────────────────────────────────────────────────────
-build: prepare-dirs prepare-ostree build-lib build-backends build-cli build-removing
+build: prepare-dirs prepare-ostree prepare-libarchive build-lib build-backends build-cli build-removing
 
 build-lib:
 	@echo "--- Building upac-lib in $(MODE) mode ---"
@@ -91,8 +115,9 @@ build-cli:
 	@mv $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
 
 build-removing:
-	@echo "--- Cleaning cargo temp dirs ---"
+	@echo "--- Cleaning external build artifacts ---"
 	@rm -rf $(ROOT_DIR)/ostree
+	@rm -rf $(ROOT_DIR)/libarchive
 
 	@echo "--- Cleaning cargo temp dirs ---"
 	@rm -rf $(OUT_BUILD_DIR)/$(CARGO_TARGET)
