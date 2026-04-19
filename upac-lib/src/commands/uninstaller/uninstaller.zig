@@ -3,17 +3,20 @@ const std = @import("std");
 
 const data = @import("upac-data");
 
-const types = @import("upac-types");
-const UninstallProgressEvent = types.UninstallProgressEvent;
-
-const ffi = @import("upac-ffi");
 const CSlice = ffi.CSlice;
 const UninstallProgressFn = ffi.UninstallProgressFn;
+const UninstallProgressEvent = ffi.UninstallProgressEvent;
 
-const file_mod = @import("upac-file");
-const c_libs = file_mod.c_libs;
+const file = @import("upac-file");
+const c_libs = file.c_libs;
 
 const states = @import("states.zig");
+
+// ── Public imports ─────────────────────────────────────────────────────────────────────
+pub const ffi = @import("upac-ffi");
+
+// ── Imports symbols ─────────────────────────────────────────────────────────────────────
+pub usingnamespace @import("symbols.zig");
 
 // ── Errors ─────────────────────────────────────────────────────────────────────
 // Errors specific to the removal process

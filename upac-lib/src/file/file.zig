@@ -6,6 +6,8 @@ pub const c_libs = @cImport({
     @cInclude("glib.h");
     @cInclude("gio/gio.h");
     @cInclude("fcntl.h");
+    @cInclude("glib-unix.h");
+    @cInclude("sys/statvfs.h");
 });
 
 const states = @import("states.zig");

@@ -1,9 +1,31 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
-const types = @import("upac-types");
-const InstallProgressEvent = types.InstallProgressEvent;
-const UninstallProgressEvent = types.UninstallProgressEvent;
+// ── Reimports types ─────────────────────────────────────────────────────────────────────
+const types = @import("types.zig");
+
+pub const Package = types.Package;
+pub const PackageMeta = types.PackageMeta;
+pub const PackageFile = types.PackageFile;
+
+pub const PackageDiffKind = types.PackageDiffKind;
+pub const PackageDiffEntry = types.PackageDiffEntry;
+
+pub const AttributedDiffEntry = types.AttributedDiffEntry;
+
+pub const CommitEntry = types.CommitEntry;
+
+pub const DiffKind = types.DiffKind;
+pub const DiffEntry = types.DiffEntry;
+
+pub const InstallProgressEvent = types.InstallProgressEvent;
+pub const UninstallProgressEvent = types.UninstallProgressEvent;
+
+// ── Reimports errors ─────────────────────────────────────────────────────────────────────
+const errors = @import("errors.zig");
+pub const ErrorCode = errors.ErrorCode;
+pub const Operation = errors.Operation;
+pub const fromError = errors.fromError;
 
 // A C-compatible slice analogue. It stores a pointer to the data and its length. It allows for easy conversion of data between Zig and an external interface
 pub const CSlice = extern struct {
@@ -225,119 +247,13 @@ pub const CRepoMode = enum(u8) {
     bare_user = 2,
 };
 
-// A listing of all possible return codes used to signal success or specific runtime errors
-pub const ErrorCode = enum(i32) {
-    ok = 0,
-
-    unexpected = 1,
-    out_of_memory = 2,
-    invalid_path = 3,
-    file_not_found = 4,
-    permission_denied = 5,
-
-    lock_would_block = 10,
-
-    db_missing_field = 20,
-    db_missing_section = 21,
-    db_invalid_entry = 22,
-    db_parse_error = 23,
-
-    install_already_installed = 30,
-    install_failed = 31,
-    install_package_path_not_found = 32,
-    install_repo_path_not_found = 33,
-    install_checksum_failed = 34,
-    install_repo_write_failed = 35,
-    install_mtree_insert_failed = 36,
-    install_file_already_exists = 37,
-
-    uninstall_not_found = 40,
-    uninstall_failed = 41,
-
-    ostree_repo_open = 50,
-    ostree_commit = 51,
-    ostree_diff = 52,
-    ostree_rollback = 53,
-    ostree_no_parent = 54,
-    ostree_staging_failed = 55,
-    ostree_swap_failed = 56,
-
-    already_initialized = 60,
-    create_dir_failed = 61,
-    not_a_directory = 62,
-    ostree_init_failed = 63,
-    directory_not_empty = 64,
-};
-
-// A mapper function that translates internal Zig errors (anyerror) into ErrorCode values understandable by the external interface
-pub fn fromError(err: anyerror) ErrorCode {
-    return switch (err) {
-        // System & File System
-        error.OutOfMemory => .out_of_memory,
-        error.InvalidPath, error.BadPathName => .invalid_path,
-        error.FileNotFound => .file_not_found,
-        error.AccessDenied => .permission_denied,
-        error.WouldBlock => .lock_would_block,
-
-        // Database
-        error.MissingField => .db_missing_field,
-        error.MissingSection => .db_missing_section,
-        error.InvalidEntry => .db_invalid_entry,
-        error.ParseError => .db_parse_error,
-
-        // Init Sequence
-        error.RootNotFound => .file_not_found,
-        error.AlreadyInitialized => .already_initialized,
-        error.CreateDirFailed => .create_dir_failed,
-        error.NotADirectory => .not_a_directory,
-        error.DirectoryNotEmpty => .directory_not_empty,
-        error.OstreeInitFailed => .ostree_init_failed,
-
-        // Package Management (Install/Uninstall)
-        error.AlreadyInstalled => .install_already_installed,
-        error.InstallFailed, error.MaxRetriesExceeded => .install_failed,
-        error.PackagePathNotFound => .install_package_path_not_found,
-        error.RepoPathNotFound => .install_repo_path_not_found,
-        error.ChecksumFailed => .install_checksum_failed,
-        error.RepoWriteFailed => .install_repo_write_failed,
-        error.MtreeInsertFailed => .install_mtree_insert_failed,
-        error.FileAlreadyExists => .install_file_already_exists,
-        error.PackageNotFound => .uninstall_not_found,
-        error.UninstallFailed => .uninstall_failed,
-        error.MissingRepository => .ostree_repo_open,
-
-        // OSTree Operations
-        error.RepoOpenFailed => .ostree_repo_open,
-        error.CommitFailed => .ostree_commit,
-        error.DiffFailed => .ostree_diff,
-        error.RollbackFailed => .ostree_rollback,
-        error.NoPreviousCommit => .ostree_no_parent,
-        error.StagingFailed => .ostree_staging_failed,
-        error.SwapFailed => .ostree_swap_failed,
-
-        // Fallback for unmapped errors
-        else => .unexpected,
-    };
-}
-
-// The main memory allocator used in the library
 var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
 
-// Returns the project's Global Allocator (GPA), used for all operations in the FFI layer
 pub fn allocator() std.mem.Allocator {
     return gpa.allocator();
 }
 
-// A universal exportable function for deallocating memory based on a pointer and length from the calling code
-pub export fn upac_free(ptr: *anyopaque, len: usize) callconv(.C) void {
-    const slice = @as([*]u8, @ptrCast(ptr))[0..len];
-    gpa.allocator().free(slice);
-}
-
-// Finalizes the allocator and outputs a warning to the console if any memory leaks were detected during program execution
-pub export fn upac_deinit() callconv(.C) void {
+pub fn deinit() void {
     const result = gpa.deinit();
-    if (result == .leak) {
-        std.debug.print("[upac] WARNING: memory leak detected\n", .{});
-    }
+    if (result == .leak) std.debug.print("[upac] WARNING: memory leak detected\n", .{});
 }

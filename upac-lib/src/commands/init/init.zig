@@ -4,6 +4,11 @@ const posix = std.posix;
 const types = @import("upac-file");
 const c_libs = types.c_libs;
 
+pub const ffi = @import("upac-ffi");
+
+// ── Imports symbols ─────────────────────────────────────────────────────────────────────
+pub usingnamespace @import("symbols.zig");
+
 // ── Public types ────────────────────────────────────────────────────────────
 pub const SystemPaths = struct {
     repo_path: []const u8,

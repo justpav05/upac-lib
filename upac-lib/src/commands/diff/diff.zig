@@ -1,17 +1,24 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const std = @import("std");
-
 const file = @import("upac-file");
-const c_libs = file.c_libs;
 
-const data = @import("upac-data");
+const PackageDiffEntry = ffi.PackageDiffEntry;
+const AttributedDiffEntry = ffi.AttributedDiffEntry;
 
-const types = @import("upac-types");
-const PackageDiffEntry = types.PackageDiffEntry;
-const AttributedDiffEntry = types.AttributedDiffEntry;
+const DiffEntry = ffi.DiffEntry;
 
-const DiffEntry = types.DiffEntry;
+// ── Pub imports ─────────────────────────────────────────────────────────────────────
+pub const std = @import("std");
+pub const c_libs = file.c_libs;
 
+pub const data = @import("upac-data");
+pub const ffi = @import("upac-ffi");
+
+pub const rollback = @import("upac-rollback");
+
+// ── Imports symbols ─────────────────────────────────────────────────────────────────────
+pub usingnamespace @import("symbols.zig");
+
+// ── Errors ─────────────────────────────────────────────────────────────────────
 pub const DiffError = error{
     RepoOpenFailed,
     CommitNotFound,

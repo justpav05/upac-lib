@@ -1,7 +1,7 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
-const types = @import("upac-types");
+const types = @import("upac-ffi");
 const PackageMeta = types.PackageMeta;
 
 // ── Meta format ─────────────────────────────────────────────────────────────

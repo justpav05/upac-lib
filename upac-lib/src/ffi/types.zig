@@ -78,13 +78,16 @@ pub const DiffEntry = struct {
 
 pub const InstallProgressEvent = enum(u8) {
     verifying = 0,
-    open_repo = 1,
-    check_installed = 2,
-    write_database = 3,
-    process_files = 4,
-    commit = 5,
-    done = 6,
-    failed = 7,
+    check_space = 1,
+    open_repo = 2,
+    check_installed = 3,
+    write_database = 4,
+    process_files = 5,
+    commit = 6,
+    checkout = 7,
+
+    done = 8,
+    failed = 9,
 };
 
 pub const UninstallProgressEvent = enum(u8) {

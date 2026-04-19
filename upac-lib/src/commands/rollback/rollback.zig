@@ -1,11 +1,16 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const std = @import("std");
 
-const types = @import("upac-types");
-const CommitEntry = types.CommitEntry;
+const CommitEntry = ffi.CommitEntry;
 
 const file = @import("upac-file");
 const c_libs = file.c_libs;
+
+// ── Imports symbols ─────────────────────────────────────────────────────────────────────
+pub usingnamespace @import("symbols.zig");
+
+// ──Public imports ─────────────────────────────────────────────────────────────────────
+pub const ffi = @import("upac-ffi");
 
 // ── Errors ─────────────────────────────────────────────────────────────────────
 // Specific rollback errors: failure to open the repository, missing specified commit, or failure to compute the difference between versions
