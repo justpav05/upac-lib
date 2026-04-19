@@ -314,6 +314,7 @@ fn stateCommit(machine: *InstallerMachine) InstallerError!void {
     return stateCheckout(machine);
 }
 
+// Checks out the committed tree into a temporary staging directory, then atomically swaps it with the real target using renameat2(RENAME_EXCHANGE)
 fn stateCheckout(machine: *InstallerMachine) InstallerError!void {
     machine.enter(.checkout) catch return InstallerError.OutOfMemory;
 
@@ -322,20 +323,71 @@ fn stateCheckout(machine: *InstallerMachine) InstallerError!void {
 
     const repo = machine.repo orelse return stateFailed(machine);
 
-    const root_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.root_path});
+    const root_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.root_path}) catch {
+        stateFailed(machine);
+        return InstallerError.AllocZFailed;
+    };
     defer machine.allocator.free(root_path_c);
 
-    const branch_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch});
-    defer machine.allocator.free(branch_c);
+    const timestamp = std.time.milliTimestamp();
+    const staging_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}-staging-{d}", .{ machine.data.root_path, timestamp }) catch {
+        stateFailed(machine);
+        return InstallerError.AllocZFailed;
+    };
+    defer machine.allocator.free(staging_path_c);
 
     var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, root_path_c.ptr, machine.commit_checksum.?, machine.cancellable, &gerror) == 0) {
-        if (gerror) |err| std.debug.print("checkout_at failed: {s}\n", .{err.message});
+    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, staging_path_c.ptr, machine.commit_checksum.?, machine.cancellable, &gerror) == 0) {
+        std.fs.deleteTreeAbsolute(staging_path_c) catch {
+            stateFailed(machine);
+            return InstallerError.CheckoutFailed;
+        };
+
         return machine.retry(stateCheckout);
     }
+
+    const RENAME_EXCHANGE = 2;
+    const AT_FDCWD: usize = @bitCast(@as(isize, -100));
+
+    const staging_usr_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/usr", .{staging_path_c}) catch {
+        std.fs.deleteTreeAbsolute(staging_path_c) catch {
+            stateFailed(machine);
+            return InstallerError.CheckoutFailed;
+        };
+        stateFailed(machine);
+        return InstallerError.AllocZFailed;
+    };
+    defer machine.allocator.free(staging_usr_path_c);
+
+    const root_path_usr_c = std.fmt.allocPrintZ(machine.allocator, "{s}/usr", .{machine.data.root_path}) catch {
+        std.fs.deleteTreeAbsolute(staging_path_c) catch {
+            stateFailed(machine);
+            return InstallerError.CheckoutFailed;
+        };
+        stateFailed(machine);
+        return InstallerError.AllocZFailed;
+    };
+    defer machine.allocator.free(root_path_usr_c);
+
+    const result = std.os.linux.syscall5(.renameat2, AT_FDCWD, @intFromPtr(staging_usr_path_c.ptr), AT_FDCWD, @intFromPtr(root_path_usr_c.ptr), RENAME_EXCHANGE);
+
+    const errno_value = std.os.linux.E.init(result);
+    if (errno_value != .SUCCESS) {
+        std.fs.deleteTreeAbsolute(staging_path_c) catch {
+            stateFailed(machine);
+            return InstallerError.CheckoutFailed;
+        };
+        stateFailed(machine);
+        return InstallerError.CheckoutFailed;
+    }
+
+    std.fs.deleteTreeAbsolute(staging_path_c) catch {
+        stateFailed(machine);
+        return InstallerError.CheckoutFailed;
+    };
 
     machine.resetRetries();
     return stateDone(machine);
@@ -351,13 +403,15 @@ pub fn stateFailed(machine: *InstallerMachine) void {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
+    const branch_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch}) catch null;
+    defer if (branch_c) |branch| machine.allocator.free(branch);
+
+    if (machine.staging_path) |staging| std.fs.deleteTreeAbsolute(staging) catch {};
+
     if (machine.repo) |repo| {
         _ = c_libs.ostree_repo_abort_transaction(repo, null, &gerror);
 
         if (machine.commit_checksum != null) {
-            const branch_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch}) catch null;
-            defer if (branch_c) |branch| machine.allocator.free(branch);
-
             if (branch_c) |branch| _ = c_libs.ostree_repo_set_ref_immediate(repo, null, branch.ptr, null, null, null);
         }
     }

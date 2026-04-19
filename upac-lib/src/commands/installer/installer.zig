@@ -103,6 +103,8 @@ pub const InstallerMachine = struct {
 
     current_package_index: usize = 0,
 
+    staging_path: ?[:0]const u8 = null,
+
     stack: std.ArrayList(StateId),
     cancellable: ?*c_libs.GCancellable = null,
     allocator: std.mem.Allocator,
@@ -150,6 +152,8 @@ pub const InstallerMachine = struct {
 
         if (self.commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
         if (self.previous_commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
+
+        if (self.staging_path) |ptr| self.allocator.free(ptr);
 
         if (self.cancellable) |cancellable| c_libs.g_object_unref(cancellable);
         self.stack.deinit();
@@ -305,6 +309,9 @@ fn signalMonitorThread(machine: *InstallerMachine, sfd: i32, efd: i32) void {
     if (fds[0].revents & std.os.linux.POLL.IN != 0) {
         var info: std.os.linux.signalfd_siginfo = undefined;
         _ = std.os.linux.syscall3(.read, @as(usize, @intCast(sfd)), @intFromPtr(&info), @sizeOf(@TypeOf(info)));
-        if (info.signo == std.os.linux.SIG.INT) if (machine.cancellable) |cancellable| c_libs.g_cancellable_cancel(cancellable);
+
+        if (info.signo == std.os.linux.SIG.INT or info.signo == std.os.linux.SIG.TERM) {
+            if (machine.cancellable) |cancellable| c_libs.g_cancellable_cancel(cancellable);
+        }
     }
 }
