@@ -25,3 +25,4 @@ pub const readMeta = database.readMeta;
 pub const readFiles = database.readFiles;
 
 pub const freeFileMap = database.freeFileMap;
+pub const freePackageMeta = database.freePackageMeta;

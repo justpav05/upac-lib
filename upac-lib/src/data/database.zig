@@ -42,6 +42,16 @@ pub fn freeFileMap(file_map: *FileMap, allocator: std.mem.Allocator) void {
     file_map.deinit();
 }
 
+pub fn freePackageMeta(meta: PackageMeta, allocator: std.mem.Allocator) void {
+    allocator.free(meta.name);
+    allocator.free(meta.version);
+    allocator.free(meta.author);
+    allocator.free(meta.description);
+    allocator.free(meta.license);
+    allocator.free(meta.url);
+    allocator.free(meta.checksum);
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 // A high-level function that sequentially writes the package's metadata and file list to the database
 pub fn writePackage(database_path: []const u8, package_checksum: []const u8, package_meta: PackageMeta, files: FileMap, allocator: std.mem.Allocator) !void {

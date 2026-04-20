@@ -1,30 +1,31 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const init = @import("init.zig");
-const ffi = init.ffi;
+const std = init.std;
 
-const CInitRequest = ffi.CInitRequest;
+const CRepoMode = init.ffi.CRepoMode;
+const CInitRequest = init.ffi.CInitRequest;
 
-const ErrorCode = ffi.ErrorCode;
-const Operation = ffi.Operation;
-const fromError = ffi.fromError;
+const ErrorCode = init.ffi.ErrorCode;
+const Operation = init.ffi.Operation;
+const fromError = init.ffi.fromError;
 
 // Initializes system paths and the OSTree repository in the selected mode (archive, bare, etc.)
-pub export fn upac_init(c_init_request: CInitRequest) callconv(.C) i32 {
-    const system_paths = init.SystemPaths{
-        .repo_path = c_init_request.system_paths.repo_path.toSlice(),
-        .root_path = c_init_request.system_paths.root_path.toSlice(),
-    };
+pub export fn upac_init(init_request_c: CInitRequest) callconv(.C) i32 {
+    init_request_c.validate() catch return @intFromEnum(fromError(error.InvalidEntry, Operation.init));
 
-    const repo_mode: init.RepoMode = switch (c_init_request.repo_mode) {
+    const repo_mode: init.RepoMode = switch (init_request_c.repo_mode) {
         .archive => .archive,
         .bare => .bare,
         .bare_user => .bare_user,
     };
 
-    const branch = c_init_request.branch.toSlice();
+    const addition_prefixes_c = init_request_c.addition_prefixes.toSlice();
+    const addition_prefixes = init.ffi.allocator().alloc([]const u8, addition_prefixes_c.len) catch return @intFromEnum(fromError(error.OutOfMemory, Operation.init));
+    defer init.ffi.allocator().free(addition_prefixes);
 
-    init.initSystem(system_paths, repo_mode, branch, ffi.allocator()) catch |err|
-        return @intFromEnum(fromError(err, Operation.init));
+    for (addition_prefixes_c, 0..) |prefix, index| addition_prefixes[index] = prefix.toSlice();
+
+    init.initSystem(init_request_c.repo_path.toSlice(), init_request_c.root_path.toSlice(), repo_mode, init_request_c.branch.toSlice(), init_request_c.prefix.toSlice(), addition_prefixes, init.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.init));
 
     return @intFromEnum(ErrorCode.ok);
 }

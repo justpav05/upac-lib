@@ -46,7 +46,6 @@ pub fn build(b: *std.Build) void {
     upac_diff.addImport("upac-ffi", upac_ffi);
     upac_diff.addImport("upac-file", upac_file);
     upac_diff.addImport("upac-data", upac_data);
-    upac_diff.addImport("upac-rollback", upac_rollback);
 
     // ── Init ──────────────────────────────────────────────────────────────────
     const upac_init = b.addModule("upac-init", .{ .root_source_file = b.path("src/commands/init/init.zig"), .target = target, .optimize = optimize });

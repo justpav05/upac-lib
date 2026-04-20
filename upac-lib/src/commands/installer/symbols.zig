@@ -13,31 +13,28 @@ const Operation = installer.ffi.Operation;
 const fromError = installer.ffi.fromError;
 
 // The main entry point for package installation. It gathers installation data from the request, initializes the installation engine, and returns an error code as an i32
-pub export fn upac_install(c_install_request: CInstallRequest) callconv(.C) i32 {
-    const allocator = installer.ffi.allocator();
+pub export fn upac_install(install_request_c: CInstallRequest) callconv(.C) i32 {
+    install_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.install));
 
-    const packages_c = c_install_request.packages[0..c_install_request.packages_len];
-
-    const install_entries = allocator.alloc(installer.InstallEntry, packages_c.len) catch
-        return @intFromEnum(ErrorCode.out_of_memory);
-    defer allocator.free(install_entries);
-
-    for (packages_c, 0..) |c_entry, index| {
-        install_entries[index] = .{ .package = .{ .meta = toMeta(c_entry.meta), .files = &.{} }, .temp_path = c_entry.temp_path.toSlice(), .checksum = c_entry.checksum.toSlice() };
-    }
+    const install_entries = collectInstallEntries(install_request_c, installer.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.install));
+    defer installer.ffi.allocator().free(install_entries);
 
     const install_data = installer.InstallData{
+        .max_retries = install_request_c.max_retries,
         .packages = install_entries,
-        .repo_path = c_install_request.repo_path.toSlice(),
-        .root_path = c_install_request.root_path.toSlice(),
-        .database_path = c_install_request.db_path.toSlice(),
-        .branch = c_install_request.branch.toSlice(),
-        .max_retries = c_install_request.max_retries,
-        .on_progress = c_install_request.on_progress,
-        .progress_ctx = c_install_request.progress_ctx,
+
+        .repo_path = install_request_c.repo_path.toSlice(),
+        .root_path = install_request_c.root_path.toSlice(),
+        .database_path = install_request_c.db_path.toSlice(),
+
+        .branch = install_request_c.branch.toSlice(),
+        .prefix_directory = install_request_c.prefix_directory.toSlice(),
+
+        .on_progress = install_request_c.on_progress,
+        .progress_ctx = install_request_c.progress_ctx,
     };
 
-    installer.InstallerMachine.run(install_data, allocator) catch |err|
+    installer.InstallerMachine.run(install_data, installer.ffi.allocator()) catch |err|
         return @intFromEnum(fromError(err, Operation.install));
 
     return @intFromEnum(ErrorCode.ok);
@@ -74,4 +71,30 @@ fn toMeta(c_package_meta: CPackageMeta) PackageMeta {
         .installed_at = c_package_meta.installed_at,
         .checksum = c_package_meta.checksum.toSlice(),
     };
+}
+
+fn collectInstallEntries(c_install_request: CInstallRequest, allocator: std.mem.Allocator) ![]installer.InstallEntry {
+    if (c_install_request.packages_count > 0 and c_install_request.packages == null) {
+        return error.InvalidEntry;
+    }
+
+    const pkgs_ptr = c_install_request.packages orelse return &[_]installer.InstallEntry{};
+
+    const packages_entrys_c = pkgs_ptr[0..c_install_request.packages_count];
+
+    const install_entries = allocator.alloc(installer.InstallEntry, packages_entrys_c.len) catch return error.OutOfMemory;
+    errdefer allocator.free(install_entries);
+
+    for (packages_entrys_c, 0..) |package_entry_c, index| {
+        install_entries[index] = .{
+            .package = .{
+                .meta = toMeta(package_entry_c.meta),
+                .files = &.{},
+            },
+            .temp_path = package_entry_c.temp_path.toSlice(),
+            .checksum = package_entry_c.checksum.toSlice(),
+        };
+    }
+
+    return install_entries;
 }

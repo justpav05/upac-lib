@@ -76,27 +76,47 @@ pub const DiffEntry = struct {
     kind: DiffKind,
 };
 
-pub const InstallProgressEvent = enum(u8) {
+pub const InstallStateId = enum(u8) {
     verifying = 0,
     check_space = 1,
     open_repo = 2,
     check_installed = 3,
     write_database = 4,
-    process_files = 5,
+    process_db_files = 5,
     commit = 6,
     checkout = 7,
+    atomic_swap = 8,
+    cleanup = 9,
 
-    done = 8,
-    failed = 9,
+    done = 10,
+    failed = 11,
 };
 
-pub const UninstallProgressEvent = enum(u8) {
+pub const UninstallStateId = enum(u8) {
     verifying = 0,
     open_repo = 1,
     check_installed = 2,
-    remove_db_files = 3,
-    process_files = 4,
-    commit = 5,
-    done = 6,
-    failed = 7,
+    load_files = 3,
+    remove_files = 4,
+    remove_db_files = 5,
+    commit = 6,
+    checkout_staging = 7,
+    atomic_swap = 8,
+    cleanup_staging = 9,
+
+    done = 10,
+    failed = 11,
+};
+
+pub const RollbackStateId = enum(u8) {
+    verifying = 0,
+    open_repo = 1,
+    resolve_commit = 2,
+    checkout_staging = 3,
+    atomic_swap = 4,
+    cleanup_staging = 5,
+    update_ref = 6,
+
+    done = 7,
+    failed = 8,
 };

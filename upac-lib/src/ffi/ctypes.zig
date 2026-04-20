@@ -18,8 +18,9 @@ pub const CommitEntry = types.CommitEntry;
 pub const DiffKind = types.DiffKind;
 pub const DiffEntry = types.DiffEntry;
 
-pub const InstallProgressEvent = types.InstallProgressEvent;
-pub const UninstallProgressEvent = types.UninstallProgressEvent;
+pub const InstallStateId = types.InstallStateId;
+pub const UninstallStateId = types.UninstallStateId;
+pub const RollbackStateId = types.RollbackStateId;
 
 // ── Reimports errors ─────────────────────────────────────────────────────────────────────
 const errors = @import("errors.zig");
@@ -29,7 +30,7 @@ pub const fromError = errors.fromError;
 
 // A C-compatible slice analogue. It stores a pointer to the data and its length. It allows for easy conversion of data between Zig and an external interface
 pub const CSlice = extern struct {
-    ptr: [*]const u8,
+    ptr: ?[*]const u8,
     len: usize,
 
     // Converts a native Zig slice into a C-compatible CSlice struct, packaging the pointer and length
@@ -39,12 +40,16 @@ pub const CSlice = extern struct {
 
     // It performs the inverse operation—reconstructing a safe Zig slice from data received via a C interface—so that it can be manipulated using standard language constructs
     pub fn toSlice(self: CSlice) []const u8 {
-        return self.ptr[0..self.len];
+        const ptr = self.ptr orelse return "";
+
+        if (self.len > std.posix.PATH_MAX) return "";
+
+        return ptr[0..self.len];
     }
 
     // A simple check to determine whether a passed string or data array is empty (i.e., has zero length)
     pub fn isEmpty(self: CSlice) bool {
-        return self.len == 0;
+        return self.len == 0 or self.ptr == null;
     }
 };
 
@@ -68,6 +73,13 @@ pub const CPackageEntry = extern struct {
     meta: CPackageMeta,
     temp_path: CSlice,
     checksum: CSlice,
+
+    pub fn validate(self: CPackageEntry) !void {
+        try self.meta.validate();
+
+        if (self.temp_path.isEmpty()) return error.InvalidEntry;
+        if (self.checksum.isEmpty()) return error.InvalidEntry;
+    }
 };
 
 // A packet metadata structure adapted for transmission via C
@@ -80,6 +92,14 @@ pub const CPackageMeta = extern struct {
     url: CSlice,
     installed_at: i64,
     checksum: CSlice,
+
+    pub fn validate(self: CPackageMeta) !void {
+        if (self.name.isEmpty()) return error.InvalidEntry;
+        if (self.version.isEmpty()) return error.InvalidEntry;
+        if (self.author.isEmpty()) return error.InvalidEntry;
+        if (self.license.isEmpty()) return error.InvalidEntry;
+        if (self.checksum.isEmpty()) return error.InvalidEntry;
+    }
 };
 
 pub const CPackageMetaArray = extern struct {
@@ -93,36 +113,57 @@ pub const CPackageMetaArray = extern struct {
 
 // Parameter sets for the сorresponding operation — Installation
 pub const CInstallRequest = extern struct {
-    packages: [*]const CPackageEntry,
-    packages_len: usize,
+    struct_size: usize = @sizeOf(CInstallRequest),
+
+    packages: ?[*]const CPackageEntry,
+    packages_count: usize,
 
     repo_path: CSlice,
     root_path: CSlice,
     db_path: CSlice,
 
     branch: CSlice,
+    prefix_directory: CSlice,
 
     on_progress: ?CInstallProgressFn = null,
     progress_ctx: ?*anyopaque = null,
 
     max_retries: u8,
+
+    pub fn validate(self: CInstallRequest) !void {
+        if (self.struct_size != @sizeOf(CInstallRequest)) return error.AbiMismatch;
+
+        if (self.packages_count > 0 and self.packages == null) return error.InvalidEntry;
+
+        if (self.repo_path.isEmpty()) return error.InvalidEntry;
+        if (self.root_path.isEmpty()) return error.InvalidEntry;
+        if (self.db_path.isEmpty()) return error.InvalidEntry;
+        if (self.branch.isEmpty()) return error.InvalidEntry;
+        if (self.prefix_directory.isEmpty()) return error.InvalidEntry;
+
+        if (self.packages) |pkgs| {
+            for (pkgs[0..self.packages_count]) |pkg| try pkg.validate();
+        }
+    }
 };
 
 pub const InstallProgressFn = *const fn (
-    event: InstallProgressEvent,
+    event: InstallStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
 ) callconv(.C) void;
 
 pub const CInstallProgressFn = *const fn (
-    event: InstallProgressEvent,
+    event: InstallStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
 ) callconv(.C) void;
 
 // // Parameter sets for the сorresponding operation — Uninstallation
 pub const CUninstallRequest = extern struct {
-    package_names: [*]const CSlice,
+    struct_size: usize = @sizeOf(CUninstallRequest),
+
+    package_names: ?[*]const CSlice,
     package_names_len: usize,
 
     repo_path: CSlice,
@@ -130,21 +171,40 @@ pub const CUninstallRequest = extern struct {
     db_path: CSlice,
 
     branch: CSlice,
+    prefix_directory: CSlice,
 
     on_progress: ?CUninstallProgressFn = null,
     progress_ctx: ?*anyopaque = null,
 
     max_retries: u8,
+
+    pub fn validate(self: CUninstallRequest) !void {
+        if (self.struct_size != @sizeOf(CUninstallRequest)) return error.AbiMismatch;
+
+        if (self.package_names_len > 0 and self.package_names == null) return error.InvalidEntry;
+
+        if (self.repo_path.isEmpty()) return error.InvalidEntry;
+        if (self.root_path.isEmpty()) return error.InvalidEntry;
+        if (self.db_path.isEmpty()) return error.InvalidEntry;
+        if (self.branch.isEmpty()) return error.InvalidEntry;
+        if (self.prefix_directory.isEmpty()) return error.InvalidEntry;
+
+        if (self.package_names) |names| {
+            for (names[0..self.package_names_len]) |name| {
+                if (name.isEmpty()) return error.InvalidEntry;
+            }
+        }
+    }
 };
 
 pub const UninstallProgressFn = *const fn (
-    event: UninstallProgressEvent,
+    event: UninstallStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
 ) callconv(.C) void;
 
 pub const CUninstallProgressFn = *const fn (
-    event: UninstallProgressEvent,
+    event: UninstallStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
 ) callconv(.C) void;
@@ -219,25 +279,66 @@ pub const CCommitArray = extern struct {
 
 // // Parameter sets for the сorresponding operation — Rollback
 pub const CRollbackRequest = extern struct {
+    struct_size: usize = @sizeOf(CRollbackRequest),
+
     root_path: CSlice,
     repo_path: CSlice,
 
     branch: CSlice,
+    prefix: CSlice,
 
     commit_hash: CSlice,
+
+    pub fn validate(self: CRollbackRequest) !void {
+        if (self.struct_size != @sizeOf(CRollbackRequest)) return error.AbiMismatch;
+
+        if (self.root_path.isEmpty()) return error.InvalidEntry;
+        if (self.repo_path.isEmpty()) return error.InvalidEntry;
+
+        if (self.branch.isEmpty()) return error.InvalidEntry;
+        if (self.commit_hash.isEmpty()) return error.InvalidEntry;
+    }
 };
 
-// A set of paths required to initialize the system
-pub const CSystemPaths = extern struct {
-    repo_path: CSlice,
-    root_path: CSlice,
-};
+pub const RollbackProgressFn = *const fn (
+    event: RollbackStateId,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
+
+pub const CRollbackProgressFn = *const fn (
+    event: RollbackStateId,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.C) void;
 
 // Request structure for initializing the system with branch specification
 pub const CInitRequest = extern struct {
-    system_paths: CSystemPaths,
+    struct_size: usize = @sizeOf(CInitRequest),
+
+    repo_path: CSlice,
+    root_path: CSlice,
+
+    prefix: CSlice,
+    addition_prefixes: CSliceArray,
+
     repo_mode: CRepoMode,
     branch: CSlice,
+
+    pub fn validate(self: CInitRequest) !void {
+        if (self.struct_size != @sizeOf(CInitRequest)) return error.AbiMismatch;
+
+        if (self.repo_path.isEmpty()) return error.InvalidEntry;
+        if (self.root_path.isEmpty()) return error.InvalidEntry;
+        if (self.prefix.isEmpty()) return error.InvalidEntry;
+        if (self.branch.isEmpty()) return error.InvalidEntry;
+
+        _ = std.meta.intToEnum(CRepoMode, @intFromEnum(self.repo_mode)) catch return error.InvalidEntry;
+
+        for (self.addition_prefixes.toSlice()) |p| {
+            if (p.isEmpty()) return error.InvalidEntry;
+        }
+    }
 };
 
 // Defines the operating mode of the OSTree repository

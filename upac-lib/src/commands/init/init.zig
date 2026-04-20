@@ -1,4 +1,4 @@
-const std = @import("std");
+// ── Imports ─────────────────────────────────────────────────────────────────────
 const posix = std.posix;
 
 const types = @import("upac-file");
@@ -6,15 +6,13 @@ const c_libs = types.c_libs;
 
 pub const ffi = @import("upac-ffi");
 
+// ── Public imports ─────────────────────────────────────────────────────────────────────
+pub const std = @import("std");
+
 // ── Imports symbols ─────────────────────────────────────────────────────────────────────
 pub usingnamespace @import("symbols.zig");
 
 // ── Public types ────────────────────────────────────────────────────────────
-pub const SystemPaths = struct {
-    repo_path: []const u8,
-    root_path: []const u8,
-};
-
 pub const RepoMode = enum {
     archive,
     bare,
@@ -24,6 +22,8 @@ pub const RepoMode = enum {
 pub const InitError = error{
     AlreadyInitialized,
     RootNotFound,
+    PrefixNotFound,
+    AdditionalPrefixNotFound,
     NotADirectory,
     CreateDirFailed,
     OstreeInitFailed,
@@ -31,19 +31,27 @@ pub const InitError = error{
 };
 
 // ── Public API ─────────────────────────────────────────────────────────────
-pub fn initSystem(system_paths: SystemPaths, repo_mode: RepoMode, branch: []const u8, allocator: std.mem.Allocator) !void {
-    if (!try checkDirExists(system_paths.root_path)) {
-        return InitError.RootNotFound;
+pub fn initSystem(repo_path: []const u8, root_path: []const u8, repo_mode: RepoMode, branch: []const u8, prefix: []const u8, additional_prefixes: [][]const u8, allocator: std.mem.Allocator) !void {
+    if (!try checkDirExists(root_path)) return InitError.RootNotFound;
+
+    const prefix_path = std.fs.path.join(allocator, &[_][]const u8{ root_path, prefix }) catch return InitError.PrefixNotFound;
+    defer allocator.free(prefix_path);
+
+    if (!try checkDirExists(prefix_path)) std.fs.makeDirAbsolute(prefix_path) catch return InitError.CreateDirFailed;
+
+    for (additional_prefixes) |additional_prefix| {
+        const additional_prefix_path = std.fs.path.join(allocator, &[_][]const u8{ root_path, additional_prefix }) catch return InitError.AdditionalPrefixNotFound;
+        defer allocator.free(additional_prefix_path);
+
+        if (!try checkDirExists(additional_prefix_path)) std.fs.makeDirAbsolute(additional_prefix_path) catch return InitError.CreateDirFailed;
     }
 
-    if (try checkFileExists(system_paths.repo_path)) {
-        return InitError.NotADirectory;
-    }
+    if (try checkFileExists(repo_path)) return InitError.NotADirectory;
 
-    if (!try checkDirExists(system_paths.repo_path)) {
-        std.fs.makeDirAbsolute(system_paths.repo_path) catch return InitError.CreateDirFailed;
+    if (!try checkDirExists(repo_path)) {
+        std.fs.makeDirAbsolute(repo_path) catch return InitError.CreateDirFailed;
     } else {
-        var dir = try std.fs.openDirAbsolute(system_paths.repo_path, .{ .iterate = true });
+        var dir = try std.fs.openDirAbsolute(repo_path, .{ .iterate = true });
         defer dir.close();
 
         var iterator = dir.iterate();
@@ -55,7 +63,7 @@ pub fn initSystem(system_paths: SystemPaths, repo_mode: RepoMode, branch: []cons
         if (!is_empty) return InitError.DirectoryNotEmpty;
     }
 
-    try initOstreeRepo(system_paths.repo_path, repo_mode, branch, allocator);
+    try initOstreeRepo(repo_path, repo_mode, branch, allocator);
 }
 
 // ── Helpers funchtions ────────────────────────────────────────────────────────
@@ -78,6 +86,9 @@ fn checkFileExists(path: []const u8) !bool {
 }
 
 fn initOstreeRepo(repo_path: []const u8, repo_mode: RepoMode, branch: []const u8, allocator: std.mem.Allocator) !void {
+    var gerror: ?*c_libs.GError = null;
+    defer if (gerror) |err| c_libs.g_error_free(err);
+
     const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
     defer allocator.free(repo_path_c);
 
@@ -93,25 +104,17 @@ fn initOstreeRepo(repo_path: []const u8, repo_mode: RepoMode, branch: []const u8
         .bare_user => c_libs.OSTREE_REPO_MODE_BARE_USER,
     };
 
-    var gerr: ?*c_libs.GError = null;
-    if (c_libs.ostree_repo_create(struct_ostree_repo, ostree_mode, null, &gerr) == 0) {
-        if (gerr) |err| c_libs.g_error_free(err);
-        return InitError.OstreeInitFailed;
-    }
+    if (c_libs.ostree_repo_create(struct_ostree_repo, ostree_mode, null, &gerror) == 0) return InitError.OstreeInitFailed;
 
     var transaction_err: ?*c_libs.GError = null;
-    if (c_libs.ostree_repo_prepare_transaction(struct_ostree_repo, null, null, &transaction_err) == 0) {
-        if (transaction_err) |e| c_libs.g_error_free(e);
-        return InitError.OstreeInitFailed;
-    }
+    if (c_libs.ostree_repo_prepare_transaction(struct_ostree_repo, null, null, &transaction_err) == 0) return InitError.OstreeInitFailed;
 
     const branch_c = try std.fmt.allocPrintZ(allocator, "{s}", .{branch});
     defer allocator.free(branch_c);
 
     c_libs.ostree_repo_transaction_set_ref(struct_ostree_repo, null, branch_c.ptr, null);
 
-    if (c_libs.ostree_repo_commit_transaction(struct_ostree_repo, null, null, &gerr) == 0) {
-        if (gerr) |err| c_libs.g_error_free(err);
+    if (c_libs.ostree_repo_commit_transaction(struct_ostree_repo, null, null, &gerror) == 0) {
         _ = c_libs.ostree_repo_abort_transaction(struct_ostree_repo, null, null);
         return InitError.OstreeInitFailed;
     }

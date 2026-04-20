@@ -5,7 +5,6 @@ const c_libs = diff.c_libs;
 const data = diff.data;
 
 const CSlice = diff.ffi.CSlice;
-
 const CPackageMeta = diff.ffi.CPackageMeta;
 const CPackageMetaArray = diff.ffi.CPackageMetaArray;
 
@@ -22,21 +21,14 @@ const ErrorCode = diff.ffi.ErrorCode;
 const Operation = diff.ffi.Operation;
 const fromError = diff.ffi.fromError;
 
-const rollback = diff.rollback;
-
 pub export fn upac_diff_packages(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, out_c: *CPackageDiffArray) callconv(.C) i32 {
-    const allocator = diff.ffi.allocator();
+    validateDiffPackagesRequest(repo_path_c, from_ref_c, to_ref_c, out_c) catch |err| return @intFromEnum(fromError(err, Operation.diff));
 
-    const pkg_entries = diff.diffPackages(
-        repo_path_c.toSlice(),
-        from_ref_c.toSlice(),
-        to_ref_c.toSlice(),
-        allocator,
-    ) catch |err| return @intFromEnum(fromError(err, Operation.diff));
+    const pkg_entries = diff.diffPackages(repo_path_c.toSlice(), from_ref_c.toSlice(), to_ref_c.toSlice(), diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.diff));
 
-    const entries_c = allocator.alloc(CPackageDiffEntry, pkg_entries.len) catch {
-        for (pkg_entries) |entry| allocator.free(entry.name);
-        allocator.free(pkg_entries);
+    const entries_c = diff.ffi.allocator().alloc(CPackageDiffEntry, pkg_entries.len) catch {
+        for (pkg_entries) |entry| diff.ffi.allocator().free(entry.name);
+        diff.ffi.allocator().free(pkg_entries);
         return @intFromEnum(ErrorCode.out_of_memory);
     };
 
@@ -50,37 +42,42 @@ pub export fn upac_diff_packages(repo_path_c: CSlice, from_ref_c: CSlice, to_ref
             },
         };
     }
-    allocator.free(pkg_entries);
+    diff.ffi.allocator().free(pkg_entries);
 
     out_c.* = .{ .ptr = entries_c.ptr, .len = entries_c.len };
     return @intFromEnum(ErrorCode.ok);
 }
 
+fn validateDiffPackagesRequest(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, out_c: *CPackageDiffArray) !void {
+    if (repo_path_c.isEmpty()) return error.InvalidEntry;
+    if (from_ref_c.isEmpty()) return error.InvalidEntry;
+    if (to_ref_c.isEmpty()) return error.InvalidEntry;
+    if (std.mem.eql(u8, from_ref_c.toSlice(), to_ref_c.toSlice())) return error.InvalidEntry;
+
+    _ = out_c;
+}
+
 pub export fn upac_diff_packages_free(c_out: *CPackageDiffArray) callconv(.C) void {
     const allocator = diff.ffi.allocator();
     const entries = c_out.toSlice();
+
     for (entries) |entry| allocator.free(entry.name.toSlice());
-    allocator.free(entries);
+
+    diff.ffi.allocator().free(entries);
 }
 
 pub export fn upac_diff_files_attributed(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, root_path_c: CSlice, db_path_c: CSlice, out_c: *CAttributedDiffArray) callconv(.C) i32 {
-    const allocator = diff.ffi.allocator();
+    validateListCommitsRequest(repo_path_c, from_ref_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.diff));
+    validateListCommitsRequest(repo_path_c, to_ref_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.diff));
 
-    const entries = diff.diffFilesAttributed(
-        repo_path_c.toSlice(),
-        from_ref_c.toSlice(),
-        to_ref_c.toSlice(),
-        root_path_c.toSlice(),
-        db_path_c.toSlice(),
-        allocator,
-    ) catch |err| return @intFromEnum(fromError(err, Operation.diff));
+    const entries = diff.diffFilesAttributed(repo_path_c.toSlice(), from_ref_c.toSlice(), to_ref_c.toSlice(), root_path_c.toSlice(), db_path_c.toSlice(), diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.diff));
 
-    const entries_c = allocator.alloc(CAttributedDiffEntry, entries.len) catch {
+    const entries_c = diff.ffi.allocator().alloc(CAttributedDiffEntry, entries.len) catch {
         for (entries) |entry| {
-            allocator.free(entry.path);
-            allocator.free(entry.package_name);
+            diff.ffi.allocator().free(entry.path);
+            diff.ffi.allocator().free(entry.package_name);
         }
-        allocator.free(entries);
+        diff.ffi.allocator().free(entries);
         return @intFromEnum(ErrorCode.out_of_memory);
     };
 
@@ -91,100 +88,60 @@ pub export fn upac_diff_files_attributed(repo_path_c: CSlice, from_ref_c: CSlice
             .package_name = CSlice.fromSlice(entries[index].package_name),
         };
     }
-    allocator.free(entries);
+    diff.ffi.allocator().free(entries);
 
     out_c.* = .{ .ptr = entries_c.ptr, .len = entries_c.len };
     return @intFromEnum(ErrorCode.ok);
 }
 
-pub export fn upac_diff_files_attributed_free(out_c: *CAttributedDiffArray) callconv(.C) void {
-    const allocator = diff.ffi.allocator();
-    const entries = out_c.toSlice();
-    for (entries) |entry| {
-        allocator.free(entry.path.toSlice());
-        allocator.free(entry.package_name.toSlice());
-    }
-    allocator.free(entries);
+fn validateListCommitsRequest(repo_path: CSlice, branch: CSlice) !void {
+    if (repo_path.isEmpty()) return error.InvalidEntry;
+    if (branch.isEmpty()) return error.InvalidEntry;
 }
 
-pub export fn upac_list_packages(c_repo_path: CSlice, c_branch: CSlice, c_db_path: CSlice, c_out: *CPackageMetaArray) callconv(.C) i32 {
-    const allocator = diff.ffi.allocator();
+pub export fn upac_diff_files_attributed_free(out_c: *CAttributedDiffArray) callconv(.C) void {
+    const entries = out_c.toSlice();
+    for (entries) |entry| {
+        diff.ffi.allocator().free(entry.path.toSlice());
+        diff.ffi.allocator().free(entry.package_name.toSlice());
+    }
+    diff.ffi.allocator().free(entries);
+}
 
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
+pub export fn upac_list_packages(repo_path_c: CSlice, branch_c: CSlice, db_path_c: CSlice, out_c: *CPackageMetaArray) callconv(.C) i32 {
+    validateListPackagesRequest(repo_path_c, branch_c, db_path_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
 
-    const repo_path_c = std.fmt.allocPrintZ(allocator, "{s}", .{c_repo_path.toSlice()}) catch
+    const packages = diff.listPackages(repo_path_c.toSlice(), branch_c.toSlice(), db_path_c.toSlice(), diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.list));
+
+    const entries_c = diff.ffi.allocator().alloc(CPackageMeta, packages.len) catch {
+        for (packages) |pkg| data.freePackageMeta(pkg, diff.ffi.allocator());
+        diff.ffi.allocator().free(packages);
         return @intFromEnum(ErrorCode.out_of_memory);
-    defer allocator.free(repo_path_c);
+    };
 
-    const branch_c = std.fmt.allocPrintZ(allocator, "{s}", .{c_branch.toSlice()}) catch
-        return @intFromEnum(ErrorCode.out_of_memory);
-    defer allocator.free(branch_c);
-
-    const gfile = c_libs.g_file_new_for_path(repo_path_c.ptr);
-    defer c_libs.g_object_unref(gfile);
-
-    const repo = c_libs.ostree_repo_new(gfile);
-    defer c_libs.g_object_unref(repo);
-
-    if (c_libs.ostree_repo_open(repo, null, &gerror) == 0) {
-        return @intFromEnum(ErrorCode.ostree_repo_open_failed);
+    for (entries_c, 0..) |*entry_c, index| {
+        const pkg = packages[index];
+        entry_c.* = .{
+            .name = CSlice.fromSlice(pkg.name),
+            .version = CSlice.fromSlice(pkg.version),
+            .author = CSlice.fromSlice(pkg.author),
+            .description = CSlice.fromSlice(pkg.description),
+            .license = CSlice.fromSlice(pkg.license),
+            .url = CSlice.fromSlice(pkg.url),
+            .installed_at = pkg.installed_at,
+            .checksum = CSlice.fromSlice(pkg.checksum),
+        };
     }
+    diff.ffi.allocator().free(packages);
 
-    var head_checksum: ?[*:0]u8 = null;
-    if (c_libs.ostree_repo_resolve_rev(repo, branch_c.ptr, 1, &head_checksum, null) == 0 or head_checksum == null) {
-        c_out.* = .{ .ptr = undefined, .len = 0 };
-        return @intFromEnum(ErrorCode.ok);
-    }
-    defer c_libs.g_free(@ptrCast(head_checksum));
-
-    var commit_variant: ?*c_libs.GVariant = null;
-    defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
-
-    if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, head_checksum, &commit_variant, &gerror) == 0) return @intFromEnum(ErrorCode.ostree_repo_open_failed);
-
-    var body_variant: ?*c_libs.GVariant = null;
-    defer if (body_variant) |variant| c_libs.g_variant_unref(variant);
-
-    body_variant = c_libs.g_variant_get_child_value(commit_variant, 4);
-
-    var body_len: usize = 0;
-    const body_ptr = c_libs.g_variant_get_string(body_variant, &body_len);
-    const body = body_ptr[0..body_len];
-
-    var meta_list = std.ArrayList(CPackageMeta).init(allocator);
-    errdefer {
-        for (meta_list.items) |*item| freeCPackageMeta(item, allocator);
-        meta_list.deinit();
-    }
-
-    var line_iter = std.mem.splitScalar(u8, body, '\n');
-    while (line_iter.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-
-        const space_index = std.mem.indexOfScalar(u8, trimmed, ' ') orelse continue;
-        const pkg_checksum = std.mem.trim(u8, trimmed[space_index + 1 ..], " \t");
-
-        const package_meta = data.readMeta(c_db_path.toSlice(), pkg_checksum, allocator) catch continue;
-
-        meta_list.append(.{
-            .name = CSlice.fromSlice(package_meta.name),
-            .version = CSlice.fromSlice(package_meta.version),
-            .author = CSlice.fromSlice(package_meta.author),
-            .description = CSlice.fromSlice(package_meta.description),
-            .license = CSlice.fromSlice(package_meta.license),
-            .url = CSlice.fromSlice(package_meta.url),
-            .installed_at = package_meta.installed_at,
-            .checksum = CSlice.fromSlice(package_meta.checksum),
-        }) catch return @intFromEnum(ErrorCode.out_of_memory);
-    }
-
-    const slice = meta_list.toOwnedSlice() catch
-        return @intFromEnum(ErrorCode.out_of_memory);
-
-    c_out.* = .{ .ptr = slice.ptr, .len = slice.len };
+    out_c.* = .{ .ptr = entries_c.ptr, .len = entries_c.len };
     return @intFromEnum(ErrorCode.ok);
+}
+
+fn validateListPackagesRequest(repo_path: CSlice, branch: CSlice, db_path: CSlice) !void {
+    if (repo_path.isEmpty()) return error.InvalidEntry;
+    if (branch.isEmpty()) return error.InvalidEntry;
+    if (db_path.isEmpty()) return error.InvalidEntry;
 }
 
 fn freeCPackageMeta(meta: *CPackageMeta, allocator: std.mem.Allocator) void {
@@ -197,49 +154,53 @@ fn freeCPackageMeta(meta: *CPackageMeta, allocator: std.mem.Allocator) void {
     allocator.free(meta.checksum.toSlice());
 }
 
-pub export fn upac_packages_free(package_meta_array_c: *CPackageMetaArray) callconv(.C) void {
-    const allocator = diff.ffi.allocator();
-    const entries = package_meta_array_c.toSlice();
-
-    for (entries) |*entry| freeCPackageMeta(entry, allocator);
-    allocator.free(entries);
+pub export fn upac_packages_free(out_c: *CPackageMetaArray) callconv(.C) void {
+    const entries = out_c.toSlice();
+    for (entries) |*entry| freeCPackageMeta(entry, diff.ffi.allocator());
+    diff.ffi.allocator().free(entries);
 }
 
-// Generates a list of commits for a specified branch. Converts internal commit records into a C-compatible format
-pub export fn upac_list_commits(repo_path_c: CSlice, branch_c: CSlice, c_commits: *CCommitArray) callconv(.C) i32 {
-    const allocator = diff.ffi.allocator();
+pub export fn upac_list_commits(repo_path_c: CSlice, branch_c: CSlice, out_c: *CCommitArray) callconv(.C) i32 {
+    validateListCommitsRequest(repo_path_c, branch_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
 
-    const commit_entries = rollback.listCommits(
-        repo_path_c.toSlice(),
-        branch_c.toSlice(),
-        allocator,
-    ) catch |err| return @intFromEnum(fromError(err, Operation.list));
+    const commit_entries = diff.listCommits(repo_path_c.toSlice(), branch_c.toSlice(), diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.list));
 
-    const c_commit_entries = allocator.alloc(CCommitEntry, commit_entries.len) catch {
+    const entries_c = diff.ffi.allocator().alloc(CCommitEntry, commit_entries.len) catch {
         for (commit_entries) |entry| {
-            allocator.free(entry.checksum);
-            allocator.free(entry.subject);
+            diff.ffi.allocator().free(entry.checksum);
+            diff.ffi.allocator().free(entry.subject);
         }
-        allocator.free(commit_entries);
+        diff.ffi.allocator().free(commit_entries);
         return @intFromEnum(ErrorCode.out_of_memory);
     };
 
     for (commit_entries, 0..) |entry, index| {
-        c_commit_entries[index] = .{
+        entries_c[index] = .{
             .checksum = CSlice.fromSlice(entry.checksum),
             .subject = CSlice.fromSlice(entry.subject),
         };
     }
-    allocator.free(commit_entries);
+    diff.ffi.allocator().free(commit_entries);
 
-    c_commits.* = .{ .ptr = c_commit_entries.ptr, .len = c_commit_entries.len };
+    out_c.* = .{ .ptr = entries_c.ptr, .len = entries_c.len };
     return @intFromEnum(ErrorCode.ok);
 }
 
-// A function for cleaning up memory after retrieving the list of commits; it frees the checksum and header strings
-pub export fn upac_commits_free(c_commits: *CCommitArray) callconv(.C) void {
+fn validateDiffFilesAttributedRequest(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, root_path: CSlice, db_path: CSlice) !void {
+    if (root_path.isEmpty()) return error.InvalidEntry;
+    if (repo_path.isEmpty()) return error.InvalidEntry;
+
+    if (from_ref.isEmpty()) return error.InvalidEntry;
+    if (to_ref.isEmpty()) return error.InvalidEntry;
+
+    if (db_path.isEmpty()) return error.InvalidEntry;
+
+    if (std.mem.eql(u8, from_ref.toSlice(), to_ref.toSlice())) return error.InvalidEntry;
+}
+
+pub export fn upac_commits_free(out_c: *CCommitArray) callconv(.C) void {
     const allocator = diff.ffi.allocator();
-    const entries = c_commits.toSlice();
+    const entries = out_c.toSlice();
     for (entries) |entry| {
         allocator.free(entry.checksum.toSlice());
         allocator.free(entry.subject.toSlice());

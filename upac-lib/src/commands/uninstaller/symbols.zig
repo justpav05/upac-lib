@@ -11,31 +11,34 @@ const Operation = uninstaller.ffi.Operation;
 const fromError = uninstaller.ffi.fromError;
 
 // An exported function for deleting a package. It extracts the parameters (paths, package name, retry limits) and initiates the deletion process
-pub export fn upac_uninstall(c_uninstall_request: CUninstallRequest) callconv(.C) i32 {
-    const allocator = uninstaller.ffi.allocator();
+pub export fn upac_uninstall(uninstall_request_c: CUninstallRequest) callconv(.C) i32 {
+    uninstall_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.uninstall));
 
-    const names_c = c_uninstall_request.package_names[0..c_uninstall_request.package_names_len];
+    const packages_names_c_null = uninstall_request_c.package_names orelse return @intFromEnum(fromError(error.InvalidEntry, Operation.install));
 
-    const package_names = allocator.alloc([]const u8, names_c.len) catch
+    const packages_names_c = packages_names_c_null[0..uninstall_request_c.package_names_len];
+
+    const package_names = uninstaller.ffi.allocator().alloc([]const u8, packages_names_c.len) catch
         return @intFromEnum(ErrorCode.out_of_memory);
-    defer allocator.free(package_names);
+    defer uninstaller.ffi.allocator().free(package_names);
 
-    for (names_c, 0..) |name_c, index| {
-        package_names[index] = name_c.toSlice();
+    for (packages_names_c, 0..) |package_name_c, index| {
+        package_names[index] = package_name_c.toSlice();
     }
 
     const uninstall_data = uninstaller.UninstallData{
         .package_names = package_names,
-        .repo_path = c_uninstall_request.repo_path.toSlice(),
-        .root_path = c_uninstall_request.root_path.toSlice(),
-        .db_path = c_uninstall_request.db_path.toSlice(),
-        .branch = c_uninstall_request.branch.toSlice(),
-        .max_retries = c_uninstall_request.max_retries,
-        .on_progress = c_uninstall_request.on_progress,
-        .progress_ctx = c_uninstall_request.progress_ctx,
+        .repo_path = uninstall_request_c.repo_path.toSlice(),
+        .root_path = uninstall_request_c.root_path.toSlice(),
+        .db_path = uninstall_request_c.db_path.toSlice(),
+        .branch = uninstall_request_c.branch.toSlice(),
+        .prefix_directory = uninstall_request_c.prefix_directory.toSlice(),
+        .max_retries = uninstall_request_c.max_retries,
+        .on_progress = uninstall_request_c.on_progress,
+        .progress_ctx = uninstall_request_c.progress_ctx,
     };
 
-    uninstaller.UninstallerMachine.run(uninstall_data, allocator) catch |err|
+    uninstaller.UninstallerMachine.run(uninstall_data, uninstaller.ffi.allocator()) catch |err|
         return @intFromEnum(fromError(err, Operation.uninstall));
 
     return @intFromEnum(ErrorCode.ok);

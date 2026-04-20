@@ -10,6 +10,7 @@ pub const ErrorCode = enum(i32) {
     permission_denied = 4,
     invalid_path = 5,
     no_space_left = 6,
+    abi_mismatch = 7,
 
     tread_error = 9,
     lock_would_block = 10,
@@ -92,6 +93,7 @@ pub fn fromError(err: anyerror, operation: Operation) ErrorCode {
         error.InvalidPath, error.BadPathName, error.RepoPathNotFound => .invalid_path,
         error.FileNotFound => .file_not_found,
         error.AccessDenied => .permission_denied,
+        error.AbiMismatch => .abi_mismatch,
         error.WouldBlock => .lock_would_block,
         error.ErrorTreadError => .tread_error,
         error.NotEnoughSpace => .no_space_left,

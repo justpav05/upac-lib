@@ -1,185 +1,179 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const std = @import("std");
-
+const CSlice = ffi.CSlice;
 const CommitEntry = ffi.CommitEntry;
 
-const file = @import("upac-file");
-const c_libs = file.c_libs;
+const RollbackStateId = ffi.RollbackStateId;
+const RollbackProgressFn = ffi.RollbackProgressFn;
+
+const states = @import("states.zig");
+const stateFailed = states.stateFailed;
+const stateVerifying = states.stateVerifying;
 
 // ── Imports symbols ─────────────────────────────────────────────────────────────────────
 pub usingnamespace @import("symbols.zig");
 
 // ──Public imports ─────────────────────────────────────────────────────────────────────
+pub const std = @import("std");
 pub const ffi = @import("upac-ffi");
+
+pub const file = @import("upac-file");
+pub const c_libs = file.c_libs;
 
 // ── Errors ─────────────────────────────────────────────────────────────────────
 // Specific rollback errors: failure to open the repository, missing specified commit, or failure to compute the difference between versions
 pub const RollbackError = error{
     RepoOpenFailed,
+    RepoTransactionFailed,
     CommitNotFound,
     RollbackFailed,
     StagingFailed,
     SwapFailed,
     CleanupFailed,
+    AllocZFailed,
+    OutOfMemory,
+    Cancelled,
+    MaxRetriesExceeded,
+};
+
+var cancel_requested = std.atomic.Value(bool).init(false);
+
+fn installSignalHandler(sig: c_int) callconv(.C) void {
+    _ = sig;
+    cancel_requested.store(true, .release);
+}
+
+pub const RollbackData = struct {
+    repo_path: []const u8,
+    root_path: []const u8,
+
+    branch: []const u8,
+    prefix: []const u8,
+
+    commit_hash: []const u8,
+    on_progress: ?RollbackProgressFn = null,
+    progress_ctx: ?*anyopaque = null,
+
+    max_retries: u8 = 0,
 };
 
 // ── Rollback ────────────────────────────────────────────────────────────────────
-// The primary function of the coordinator — performs an atomic rollback to a target commit.
-pub fn rollback(repo_path: []const u8, branch: []const u8, commit_hash: []const u8, root_path: []const u8, allocator: std.mem.Allocator) !void {
-    const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
-    defer allocator.free(repo_path_c);
+pub const RollbackMachine = struct {
+    data: RollbackData,
+    retries: u8,
 
-    const branch_c = try std.fmt.allocPrintZ(allocator, "{s}", .{branch});
-    defer allocator.free(branch_c);
+    repo: ?*c_libs.OstreeRepo = null,
+    branch_c: ?[:0]const u8 = null,
 
-    const commit_hash_c = try std.fmt.allocPrintZ(allocator, "{s}", .{commit_hash});
-    defer allocator.free(commit_hash_c);
+    resolved_checksum: ?[*:0]u8 = null,
+    staging_path: ?[:0]const u8 = null,
 
+    stack: std.ArrayList(RollbackStateId),
+    gerror: ?*c_libs.GError = null,
+    allocator: std.mem.Allocator,
+
+    pub fn enter(self: *RollbackMachine, state_id: RollbackStateId) !void {
+        if (cancel_requested.load(.acquire)) {
+            stateFailed(self);
+            return RollbackError.Cancelled;
+        }
+
+        try self.stack.append(state_id);
+        self.report(state_id);
+    }
+
+    pub fn resetRetries(self: *RollbackMachine) void {
+        self.retries = 0;
+    }
+
+    pub fn exhausted(self: *RollbackMachine) bool {
+        return self.retries > self.data.max_retries;
+    }
+
+    pub fn retry(self: *RollbackMachine, comptime state_fn: anytype) RollbackError!void {
+        if (self.exhausted()) {
+            stateFailed(self);
+            return RollbackError.MaxRetriesExceeded;
+        }
+        self.retries += 1;
+        if (self.gerror) |err| {
+            c_libs.g_error_free(err);
+            self.gerror = null;
+        }
+        return state_fn(self);
+    }
+
+    // Reports an installation progress event to the progress callback, if one is set
+    pub fn report(self: *RollbackMachine, event: RollbackStateId) void {
+        const cb = self.data.on_progress orelse return;
+        cb(event, CSlice.fromSlice(self.data.commit_hash), self.data.progress_ctx);
+    }
+
+    pub fn deinit(self: *RollbackMachine) void {
+        if (self.staging_path) |path| self.allocator.free(path);
+        if (self.resolved_checksum) |checksum| c_libs.g_free(@ptrCast(checksum));
+
+        if (self.branch_c) |branch| self.allocator.free(branch);
+        if (self.repo) |repo| c_libs.g_object_unref(repo);
+
+        if (self.gerror) |err| c_libs.g_error_free(err);
+
+        self.stack.deinit();
+    }
+
+    pub fn run(data: RollbackData, allocator: std.mem.Allocator) !void {
+        cancel_requested.store(false, .release);
+
+        const sigaction = std.posix.Sigaction{ .handler = .{ .handler = installSignalHandler }, .mask = std.posix.empty_sigset, .flags = 0 };
+        std.posix.sigaction(std.posix.SIG.INT, &sigaction, null) catch {};
+        std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null) catch {};
+
+        var machine = RollbackMachine{
+            .data = data,
+
+            .retries = 0,
+
+            .stack = std.ArrayList(RollbackStateId).init(allocator),
+            .allocator = allocator,
+        };
+        defer machine.deinit();
+        errdefer stateFailed(&machine);
+
+        try states.stateVerifying(&machine);
+    }
+};
+
+// Resolve a temporary directory adjacent to root_path (e.g. /usr → /usr-rollback-<timestamp>)
+pub fn resolveStagingDir(root_path: []const u8, prefix: []const u8, allocator: std.mem.Allocator) ![:0]const u8 {
     const root_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{root_path});
     defer allocator.free(root_path_c);
 
-    var gerror: ?*c_libs.GError = null;
-
-    const gfile = c_libs.g_file_new_for_path(repo_path_c.ptr);
-    defer c_libs.g_object_unref(gfile);
-
-    const repo = c_libs.ostree_repo_new(gfile);
-    defer c_libs.g_object_unref(repo);
-
-    if (c_libs.ostree_repo_open(repo, null, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        return RollbackError.RepoOpenFailed;
-    }
-
-    const resolved_checksum = try resolveCommit(repo.?, commit_hash_c);
-    defer c_libs.g_free(@ptrCast(resolved_checksum));
-
-    const staging_path = try resolveStagingDir(root_path_c, allocator);
-    defer allocator.free(staging_path);
-    errdefer std.fs.deleteTreeAbsolute(staging_path) catch {};
-
-    const staging_root_path = try resolveStagingRootDir(root_path_c, allocator);
-    defer allocator.free(staging_root_path);
-
-    const staging_usr_path = try resolveStagingUsrDir(staging_path, allocator);
-    defer allocator.free(staging_usr_path);
-
-    try checkoutToStaging(repo.?, resolved_checksum, staging_path);
-
-    try atomicSwap(staging_root_path, staging_usr_path);
-
-    try cleanupOldRoot(staging_path);
-
-    try updateBranchRef(repo.?, branch_c, resolved_checksum);
-}
-
-// Allows retrieving the change history for a specific branch
-pub fn listCommits(repo_path: []const u8, branch: []const u8, allocator: std.mem.Allocator) ![]CommitEntry {
-    const repo_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{repo_path});
-    defer allocator.free(repo_path_c);
-    const branch_c = try std.fmt.allocPrintZ(allocator, "{s}", .{branch});
-    defer allocator.free(branch_c);
-
-    var gerror: ?*c_libs.GError = null;
-
-    const gfile = c_libs.g_file_new_for_path(repo_path_c.ptr);
-    defer c_libs.g_object_unref(gfile);
-
-    const repo = c_libs.ostree_repo_new(gfile);
-    defer c_libs.g_object_unref(repo);
-
-    if (c_libs.ostree_repo_open(repo, null, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        return RollbackError.RepoOpenFailed;
-    }
-
-    var entries = std.ArrayList(CommitEntry).init(allocator);
-    errdefer {
-        for (entries.items) |entry| {
-            allocator.free(entry.checksum);
-            allocator.free(entry.subject);
-        }
-        entries.deinit();
-    }
-
-    var current_checksum: ?[*:0]u8 = null;
-    if (c_libs.ostree_repo_resolve_rev(repo, branch_c.ptr, 0, &current_checksum, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        return entries.toOwnedSlice();
-    }
-
-    var checksum = current_checksum;
-    while (checksum) |current_cs| {
-        var commit_variant: ?*c_libs.GVariant = null;
-
-        if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, current_cs, &commit_variant, &gerror) == 0) {
-            if (gerror) |err| c_libs.g_error_free(err);
-            break;
-        }
-        defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
-
-        var subject_variant: ?*c_libs.GVariant = null;
-        subject_variant = c_libs.g_variant_get_child_value(commit_variant, 3);
-        defer if (subject_variant) |variant| c_libs.g_variant_unref(variant);
-
-        var subject_len: usize = 0;
-        const subject_ptr = c_libs.g_variant_get_string(subject_variant, &subject_len);
-
-        try entries.append(CommitEntry{
-            .checksum = try allocator.dupe(u8, std.mem.span(current_cs)),
-            .subject = try allocator.dupe(u8, subject_ptr[0..subject_len]),
-        });
-
-        const parent_checksum = c_libs.ostree_commit_get_parent(commit_variant);
-        if (current_checksum != null and current_checksum != checksum)
-            c_libs.g_free(@ptrCast(checksum));
-        checksum = parent_checksum;
-    }
-
-    if (current_checksum) |cs| c_libs.g_free(@ptrCast(cs));
-    return entries.toOwnedSlice();
-}
-
-// ── Helpers functions ───────────────────────────────────────────────────────
-// Resolves a commit hash string to a full checksum via ostree_repo_resolve_rev
-fn resolveCommit(repo: *c_libs.OstreeRepo, commit_hash_c: [:0]const u8) ![*:0]u8 {
-    var gerror: ?*c_libs.GError = null;
-    var resolved: ?[*:0]u8 = null;
-
-    if (c_libs.ostree_repo_resolve_rev(repo, commit_hash_c.ptr, 0, &resolved, &gerror) == 0) {
-        if (gerror) |err| c_libs.g_error_free(err);
-        return RollbackError.CommitNotFound;
-    }
-
-    return resolved orelse RollbackError.CommitNotFound;
-}
-
-// Resolve a temporary directory adjacent to root_path (e.g. /usr → /usr-rollback-<timestamp>)
-fn resolveStagingDir(root_path_c: [:0]const u8, allocator: std.mem.Allocator) ![:0]const u8 {
     const timestamp = std.time.milliTimestamp();
     const staging_path_c = if (root_path_c[root_path_c.len - 1] == '/')
-        try std.fmt.allocPrintZ(allocator, "{s}usr-rollback-{d}", .{ root_path_c[0 .. root_path_c.len - 1], timestamp })
+        try std.fmt.allocPrintZ(allocator, "{s}{s}-rollback-{d}", .{ root_path_c[0 .. root_path_c.len - 1], prefix, timestamp })
     else
-        try std.fmt.allocPrintZ(allocator, "{s}/usr-rollback-{d}", .{ root_path_c, timestamp });
+        try std.fmt.allocPrintZ(allocator, "{s}/{}-rollback-{d}", .{ root_path_c, prefix, timestamp });
     errdefer allocator.free(staging_path_c);
 
     return staging_path_c;
 }
 
 // Resolve a root dir (e.g. /usr → /usr-rollback-<timestamp>)
-fn resolveStagingRootDir(root_path_c: [:0]const u8, allocator: std.mem.Allocator) ![:0]const u8 {
+pub fn resolveStagingRootDir(root_path: []const u8, prefix: []const u8, allocator: std.mem.Allocator) ![:0]const u8 {
+    const root_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{root_path});
+    defer allocator.free(root_path_c);
+
     const staging_root_path_c = if (root_path_c[root_path_c.len - 1] == '/')
-        try std.fmt.allocPrintZ(allocator, "{s}usr", .{root_path_c[0 .. root_path_c.len - 1]})
+        try std.fmt.allocPrintZ(allocator, "{s}{s}", .{ root_path_c[0 .. root_path_c.len - 1], prefix })
     else
-        try std.fmt.allocPrintZ(allocator, "{s}/usr", .{root_path_c});
+        try std.fmt.allocPrintZ(allocator, "{s}/{s}", .{ root_path_c, prefix });
     errdefer allocator.free(staging_root_path_c);
 
     return staging_root_path_c;
 }
 
 // Resolve a temp dir with usr dir (e.g. /usr → /usr-rollback-<timestamp>)
-fn resolveStagingUsrDir(staging_path: []const u8, allocator: std.mem.Allocator) ![:0]const u8 {
-    const staging_usr_path_c = try std.fmt.allocPrintZ(allocator, "{s}/usr", .{staging_path});
+pub fn resolveStagingPrefixDir(staging_path: []const u8, prefix: []const u8, allocator: std.mem.Allocator) ![:0]const u8 {
+    const staging_usr_path_c = try std.fmt.allocPrintZ(allocator, "{s}/{s}", .{ staging_path, prefix });
     errdefer allocator.free(staging_usr_path_c);
 
     return staging_usr_path_c;

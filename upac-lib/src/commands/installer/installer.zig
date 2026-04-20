@@ -1,15 +1,13 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const std = @import("std");
-
 const data = @import("upac-data");
 
 const CSlice = ffi.CSlice;
 
+const InstallStateId = ffi.InstallStateId;
+const InstallProgressFn = ffi.InstallProgressFn;
+
 const Package = ffi.Package;
 const PackageMeta = ffi.PackageMeta;
-
-const InstallProgressFn = ffi.InstallProgressFn;
-const InstallProgressEvent = ffi.InstallProgressEvent;
 
 const file = @import("upac-file");
 const c_libs = file.c_libs;
@@ -18,6 +16,7 @@ const states = @import("states.zig");
 const stateFailed = states.stateFailed;
 
 // ── Public imports ─────────────────────────────────────────────────────────────────────
+pub const std = @import("std");
 pub const ffi = @import("upac-ffi");
 
 // ── Imports symbols ─────────────────────────────────────────────────────────────────────
@@ -26,46 +25,32 @@ pub usingnamespace @import("symbols.zig");
 // ── Errors ────────────────────────────────────────────────────────────────────
 //
 pub const InstallerError = error{
-    // Package errors
+    // Special errors
     AlreadyInstalled,
-    PackagePathNotFound,
-    // Space errors
+    PackageNotFound,
     NotEnoughSpace,
     CheckSpaceFailed,
-    // Repo errors
-    RepoPathNotFound,
-    RepoOpenFailed,
-    RepoTransactionFailed,
-    // Database errors
     WriteDatabaseFailed,
     CollectFileChecksumsFailed,
-    // Checkout errors
-    CheckoutFailed,
-    // Stateg errors
-    AllocZFailed,
     MakeFailed,
+    // Global errors
+    PathNotFound,
+    RepoOpenFailed,
+    RepoTransactionFailed,
+    CheckoutFailed,
+    AllocZFailed,
     OutOfMemory,
-    ErrorTreadError,
-    // Retry errors
     Cancelled,
     MaxRetriesExceeded,
 };
 
-// ── StateId ───────────────────────────────────────────────────────────────────
-// Listing of all stages of the installation's lifecycle
-pub const StateId = enum {
-    verifying,
-    check_space,
-    open_repo,
-    check_installed,
-    write_database,
-    process_db_files,
-    commit,
-    checkout,
+// ── Cancelled signal handler ─────────────────────────────────────────────────────────
+var cancel_requested = std.atomic.Value(bool).init(false);
 
-    done,
-    failed,
-};
+fn installSignalHandler(sig: c_int) callconv(.C) void {
+    _ = sig;
+    cancel_requested.store(true, .release);
+}
 
 pub const InstallEntry = struct {
     package: Package,
@@ -83,6 +68,7 @@ pub const InstallData = struct {
     database_path: []const u8,
 
     branch: []const u8,
+    prefix_directory: []const u8,
 
     on_progress: ?InstallProgressFn = null,
     progress_ctx: ?*anyopaque = null,
@@ -94,45 +80,31 @@ pub const InstallData = struct {
 // The main structure of a finite-state machine, with information persistence between states
 pub const InstallerMachine = struct {
     data: InstallData,
+    current_package_index: usize = 0,
     retries: u8,
 
     repo: ?*c_libs.OstreeRepo,
     mtree: ?*c_libs.OstreeMutableTree,
+
+    staging_path: ?[:0]const u8 = null,
     commit_checksum: ?[*:0]u8 = null,
     previous_commit_checksum: ?[*:0]u8 = null,
 
-    current_package_index: usize = 0,
+    branch_c: ?[*:0]const u8 = null,
 
-    staging_path: ?[:0]const u8 = null,
-
-    stack: std.ArrayList(StateId),
-    cancellable: ?*c_libs.GCancellable = null,
+    stack: std.ArrayList(InstallStateId),
+    gerror: ?*c_libs.GError = null,
     allocator: std.mem.Allocator,
 
     // Registers a transition to a new state, saving it to the stack. This allows for the reconstruction of the sequence of actions during debugging
-    pub fn enter(self: *InstallerMachine, state_id: StateId) !void {
-        if (self.cancellable) |cancellable| {
-            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
-                stateFailed(self);
-                return InstallerError.Cancelled;
-            }
+    pub fn enter(self: *InstallerMachine, state_id: InstallStateId) !void {
+        if (cancel_requested.load(.acquire)) {
+            stateFailed(self);
+            return InstallerError.Cancelled;
         }
 
         try self.stack.append(state_id);
-
-        self.report(switch (state_id) {
-            .verifying => .verifying,
-            .check_space => .check_space,
-            .open_repo => .open_repo,
-            .check_installed => .check_installed,
-            .write_database => .write_database,
-            .commit => .commit,
-            .checkout => .checkout,
-
-            .done => .done,
-            .failed => .failed,
-            else => return,
-        });
+        self.report(state_id);
     }
 
     // Resets the attempt counter before starting a new operation
@@ -150,12 +122,13 @@ pub const InstallerMachine = struct {
         if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
         if (self.repo) |repo| c_libs.g_object_unref(repo);
 
+        if (self.staging_path) |ptr| self.allocator.free(ptr);
         if (self.commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
         if (self.previous_commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
 
-        if (self.staging_path) |ptr| self.allocator.free(ptr);
+        if (self.branch_c) |ptr| self.allocator.free(std.mem.span(ptr));
+        if (self.gerror) |ptr| c_libs.g_error_free(@ptrCast(ptr));
 
-        if (self.cancellable) |cancellable| c_libs.g_object_unref(cancellable);
         self.stack.deinit();
     }
 
@@ -165,6 +138,7 @@ pub const InstallerMachine = struct {
             return InstallerError.MaxRetriesExceeded;
         }
         self.retries += 1;
+        self.gerror = null;
         try self.resetTransaction();
         return state_fn(self);
     }
@@ -179,7 +153,7 @@ pub const InstallerMachine = struct {
     }
 
     // Reports an installation progress event to the progress callback, if one is set
-    pub fn report(self: *InstallerMachine, event: InstallProgressEvent) void {
+    pub fn report(self: *InstallerMachine, event: InstallStateId) void {
         const cb = self.data.on_progress orelse return;
         const name = if (self.current_package_index < self.data.packages.len)
             self.data.packages[self.current_package_index].package.meta.name
@@ -190,44 +164,25 @@ pub const InstallerMachine = struct {
 
     // Initializes the machine, creates the state stack, and launches the first stage—verification
     pub fn run(install_data: InstallData, allocator: std.mem.Allocator) InstallerError!void {
-        var set = std.os.linux.empty_sigset;
-        std.os.linux.sigaddset(&set, std.os.linux.SIG.INT);
-        std.os.linux.sigaddset(&set, std.os.linux.SIG.TERM);
-        _ = std.os.linux.sigprocmask(std.os.linux.SIG.BLOCK, &set, null);
+        cancel_requested.store(false, .release);
 
-        const raw_sfd = std.os.linux.syscall4(.signalfd4, @as(usize, @bitCast(@as(isize, -1))), @intFromPtr(&set), @sizeOf(std.os.linux.sigset_t), 0);
-        const raw_efd = std.os.linux.syscall2(.eventfd2, 0, 0);
-
-        const sfd: i32 = @truncate(@as(isize, @bitCast(raw_sfd)));
-        defer _ = std.os.linux.close(@intCast(sfd));
-
-        const efd: i32 = @truncate(@as(isize, @bitCast(raw_efd)));
-        defer _ = std.os.linux.close(@intCast(efd));
+        const sigaction = std.posix.Sigaction{ .handler = .{ .handler = installSignalHandler }, .mask = std.posix.empty_sigset, .flags = 0 };
+        std.posix.sigaction(std.posix.SIG.INT, &sigaction, null) catch {};
+        std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null) catch {};
 
         var machine = InstallerMachine{
             .data = install_data,
-
+            .current_package_index = 0,
             .retries = 0,
 
             .repo = null,
             .mtree = null,
 
-            .current_package_index = 0,
-
-            .stack = std.ArrayList(StateId).init(allocator),
-            .cancellable = c_libs.g_cancellable_new(),
+            .stack = std.ArrayList(InstallStateId).init(allocator),
             .allocator = allocator,
         };
         defer machine.deinit();
         errdefer stateFailed(&machine);
-
-        const args = .{ &machine, sfd, efd };
-        const thread = std.Thread.spawn(.{}, signalMonitorThread, args) catch return InstallerError.ErrorTreadError;
-        defer {
-            const one: u64 = 1;
-            _ = std.os.linux.syscall3(.write, @as(usize, @intCast(efd)), @intFromPtr(&one), @sizeOf(u64));
-            thread.join();
-        }
 
         try states.stateVerifying(&machine);
     }
@@ -294,24 +249,4 @@ pub fn dirSize(allocator: std.mem.Allocator, path: []const u8) !u64 {
         }
     }
     return total_size;
-}
-
-fn signalMonitorThread(machine: *InstallerMachine, sfd: i32, efd: i32) void {
-    var fds = [2]std.os.linux.pollfd{
-        .{ .fd = sfd, .events = std.os.linux.POLL.IN, .revents = 0 },
-        .{ .fd = efd, .events = std.os.linux.POLL.IN, .revents = 0 },
-    };
-
-    _ = std.os.linux.syscall3(.poll, @intFromPtr(&fds), 2, @bitCast(@as(isize, -1)));
-
-    if (fds[1].revents & std.os.linux.POLL.IN != 0) return;
-
-    if (fds[0].revents & std.os.linux.POLL.IN != 0) {
-        var info: std.os.linux.signalfd_siginfo = undefined;
-        _ = std.os.linux.syscall3(.read, @as(usize, @intCast(sfd)), @intFromPtr(&info), @sizeOf(@TypeOf(info)));
-
-        if (info.signo == std.os.linux.SIG.INT or info.signo == std.os.linux.SIG.TERM) {
-            if (machine.cancellable) |cancellable| c_libs.g_cancellable_cancel(cancellable);
-        }
-    }
 }
