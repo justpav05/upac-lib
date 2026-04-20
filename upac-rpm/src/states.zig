@@ -107,14 +107,17 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
             return BackendError.MetadataNotFound;
         },
         .installed_at = std.time.timestamp(),
-        .checksum = machine.allocator.dupe(u8, machine.request.checksum),
+        .checksum = machine.allocator.dupe(u8, machine.request.checksum) catch {
+            stateFailed(machine);
+            return BackendError.MetadataNotFound;
+        },
     };
 
     return stateExtracting(machine);
 }
 
 // Unpacks the contents of an archive into a target directory using libarchive
-fn stateExtracting(machine: *Machine) anyerror!void {
+fn stateExtracting(machine: *Machine) BackendError!void {
     machine.enter(.extracting) catch {
         stateFailed(machine);
         return BackendError.OutOfMemory;
@@ -126,7 +129,7 @@ fn stateExtracting(machine: *Machine) anyerror!void {
     };
     defer machine.allocator.free(package_path_c);
 
-    const temp_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.output_path}) catch {
+    const temp_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/upac_{d}", .{ machine.request.temp_dir, std.time.milliTimestamp() }) catch {
         stateFailed(machine);
         return BackendError.OutOfMemory;
     };
