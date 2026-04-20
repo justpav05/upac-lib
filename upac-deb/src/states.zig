@@ -14,23 +14,26 @@ const c_libs = @cImport({
 
 // ── States ─────────────────────────────────────────────────────────────────
 // Archive integrity check status: calculating SHA256 and comparing against expected value
-pub fn stateVerifying(machine: *Machine) anyerror!void {
-    try machine.enter(.verifying);
-
-    const path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.pkg_path});
-    defer machine.allocator.free(path_c);
-
-    const file = std.fs.openFileAbsolute(path_c, .{}) catch |err| {
+pub fn stateVerifying(machine: *Machine) BackendError!void {
+    machine.enter(.verifying) catch {
         stateFailed(machine);
-        return err;
+        return BackendError.OutOfMemory;
     };
-    defer file.close();
+
+    const package_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.pkg_path});
+    defer machine.allocator.free(package_path_c);
+
+    const package_file = std.fs.openFileAbsolute(package_path_c, .{}) catch {
+        stateFailed(machine);
+        return BackendError.ReadFailed;
+    };
+    defer package_file.close();
 
     var sha256_hasher = std.crypto.hash.sha2.Sha256.init(.{});
     var sha256_buf: [4096]u8 = undefined;
 
     while (true) {
-        const number = file.read(&sha256_buf) catch {
+        const number = package_file.read(&sha256_buf) catch {
             stateFailed(machine);
             return BackendError.ReadFailed;
         };
@@ -56,14 +59,25 @@ pub fn stateVerifying(machine: *Machine) anyerror!void {
 }
 
 // Unpacking state: uses libarchive to extract files to the temp directory
-fn stateExtracting(machine: *Machine) anyerror!void {
-    try machine.enter(.extracting);
+fn stateExtracting(machine: *Machine) BackendError!void {
+    machine.enter(.extracting) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
 
-    const package_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.pkg_path});
+    const package_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.pkg_path}) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
     defer machine.allocator.free(package_path_c);
 
-    const temp_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.out_path});
-    defer machine.allocator.free(temp_path_c);
+    const temp_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}/upac_{d}", .{ machine.request.temp_dir, std.time.milliTimestamp() });
+    std.fs.makeDirAbsolute(temp_path_c) catch {
+        machine.allocator.free(temp_path_c);
+        stateFailed(machine);
+        return BackendError.TempDirFailed;
+    };
+    machine.temp_path = temp_path_c;
 
     const archive_reader = c_libs.archive_read_new() orelse {
         stateFailed(machine);
@@ -94,12 +108,21 @@ fn stateExtracting(machine: *Machine) anyerror!void {
     _ = c_libs.archive_write_disk_set_standard_lookup(archive_writer);
 
     var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const cwd_path = try std.posix.getcwd(&buf);
+    const cwd_path = std.posix.getcwd(&buf) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
 
-    var old_dir = try std.fs.openDirAbsolute(cwd_path, .{});
+    var old_dir = std.fs.openDirAbsolute(cwd_path, .{}) catch {
+        stateFailed(machine);
+        return BackendError.ReadFailed;
+    };
     defer old_dir.close();
 
-    try posix.chdir(temp_path_c);
+    posix.chdir(temp_path_c) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
     defer old_dir.setAsCwd() catch {};
 
     var entry: ?*c_libs.archive_entry = null;
@@ -108,7 +131,10 @@ fn stateExtracting(machine: *Machine) anyerror!void {
 
         if (std.mem.startsWith(u8, entry_name, "data.tar")) {
             const size = @as(usize, @intCast(c_libs.archive_entry_size(entry)));
-            const buffer = try machine.allocator.alloc(u8, size);
+            const buffer = machine.allocator.alloc(u8, size) catch {
+                stateFailed(machine);
+                return BackendError.OutOfMemory;
+            };
             defer machine.allocator.free(buffer);
 
             if (c_libs.archive_read_data(archive_reader, buffer.ptr, size) < 0) {
@@ -159,30 +185,39 @@ fn stateExtracting(machine: *Machine) anyerror!void {
 }
 
 // Verifies the checksums of files listed in md5sums against their actual contents on disk
-fn stateVerifyingFiles(machine: *Machine) anyerror!void {
-    try machine.enter(.verifying_files);
+fn stateVerifyingFiles(machine: *Machine) BackendError!void {
+    machine.enter(.special_step) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
     machine.reportDetail("verifying archive integrity...");
 
-    const md5_path = try std.fs.path.join(machine.allocator, &.{ machine.request.out_path, "md5sums" });
+    const md5_path = std.fs.path.join(machine.allocator, &.{ machine.request.temp_dir, "md5sums" }) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
     defer machine.allocator.free(md5_path);
 
     const content = std.fs.cwd().readFileAlloc(machine.allocator, md5_path, 10 * 1024 * 1024) catch |err| {
         if (err == error.FileNotFound) return stateReadingMeta(machine);
         stateFailed(machine);
-        return err;
+        return BackendError.ReadFailed;
     };
     defer machine.allocator.free(content);
 
     var split_lines_iterator = std.mem.splitScalar(u8, content, '\n');
     while (split_lines_iterator.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \r");
-        if (trimmed.len == 0) continue;
+        const trimmed_line = std.mem.trim(u8, line, " \r");
+        if (trimmed_line.len == 0) continue;
 
-        var token_iter = std.mem.tokenizeAny(u8, trimmed, " \t");
+        var token_iter = std.mem.tokenizeAny(u8, trimmed_line, " \t");
         const expected_hash_hex = token_iter.next() orelse continue;
         const file_path = token_iter.rest();
 
-        const full_file_path = try std.fs.path.join(machine.allocator, &.{ machine.request.out_path, file_path });
+        const full_file_path = std.fs.path.join(machine.allocator, &.{ machine.request.temp_dir, file_path }) catch {
+            stateFailed(machine);
+            return BackendError.OutOfMemory;
+        };
         defer machine.allocator.free(full_file_path);
 
         const file = std.fs.openFileAbsolute(full_file_path, .{}) catch {
@@ -194,7 +229,10 @@ fn stateVerifyingFiles(machine: *Machine) anyerror!void {
         var md5_hasher = std.crypto.hash.Md5.init(.{});
         var md5_buf: [4096]u8 = undefined;
         while (true) {
-            const number = try file.read(&md5_buf);
+            const number = file.read(&md5_buf) catch {
+                stateFailed(machine);
+                return BackendError.ReadFailed;
+            };
             if (number == 0) break;
             md5_hasher.update(md5_buf[0..number]);
         }
@@ -202,7 +240,10 @@ fn stateVerifyingFiles(machine: *Machine) anyerror!void {
         var digest: [std.crypto.hash.Md5.digest_length]u8 = undefined;
         md5_hasher.final(&digest);
         var actual_hex: [std.crypto.hash.Md5.digest_length * 2]u8 = undefined;
-        _ = try std.fmt.bufPrint(&actual_hex, "{}", .{std.fmt.fmtSliceHexLower(&digest)});
+        _ = std.fmt.bufPrint(&actual_hex, "{}", .{std.fmt.fmtSliceHexLower(&digest)}) catch {
+            stateFailed(machine);
+            return BackendError.OutOfMemory;
+        };
 
         if (!std.mem.eql(u8, &actual_hex, expected_hash_hex)) {
             stateFailed(machine);
@@ -214,10 +255,16 @@ fn stateVerifyingFiles(machine: *Machine) anyerror!void {
 }
 
 // Extracts package metadata from the nested control.tar archive and parses the control file
-fn stateReadingMeta(machine: *Machine) anyerror!void {
-    try machine.enter(.reading_meta);
+fn stateReadingMeta(machine: *Machine) BackendError!void {
+    machine.enter(.reading_meta) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
 
-    const pkg_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.pkg_path});
+    const pkg_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.pkg_path}) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
     defer machine.allocator.free(pkg_path_c);
 
     const archive_reader = c_libs.archive_read_new() orelse return BackendError.ArchiveOpenFailed;
@@ -318,11 +365,19 @@ fn stateReadingMeta(machine: *Machine) anyerror!void {
 }
 
 // The final state representing the successful completion of all processing stages
-fn stateDone(backend_machine: *Machine) anyerror!void {
-    try backend_machine.enter(.done);
+fn stateDone(machine: *Machine) BackendError!void {
+    machine.enter(.done) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
 }
 
 // An error state signaling that the machine failed to reach the required state at a certain stage
-fn stateFailed(backend_machine: *Machine) void {
-    _ = backend_machine.enter(.failed) catch {};
+pub fn stateFailed(machine: *Machine) void {
+    if (machine.temp_path) |path| {
+        std.fs.deleteTreeAbsolute(path) catch {};
+        machine.allocator.free(path);
+        machine.temp_path = null;
+    }
+    _ = machine.enter(.failed) catch {};
 }
