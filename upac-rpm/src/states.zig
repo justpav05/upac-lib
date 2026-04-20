@@ -15,15 +15,21 @@ const c_libs = @cImport({
 
 // ── States ─────────────────────────────────────────────────────────────────
 // Archive integrity check status: calculating SHA256 and comparing against expected value
-pub fn stateVerifying(machine: *Machine) anyerror!void {
-    try machine.enter(.verifying);
+pub fn stateVerifying(machine: *Machine) BackendError!void {
+    machine.enter(.verifying) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
 
-    const package_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.package_path});
+    const package_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.package_path}) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
     defer machine.allocator.free(package_path_c);
 
-    const package_file = std.fs.openFileAbsolute(package_path_c, .{}) catch |err| {
+    const package_file = std.fs.openFileAbsolute(package_path_c, .{}) catch {
         stateFailed(machine);
-        return err;
+        return BackendError.ReadFailed;
     };
     defer package_file.close();
 
@@ -57,33 +63,51 @@ pub fn stateVerifying(machine: *Machine) anyerror!void {
 }
 
 // Parses the RPM header to extract package information into the machine metadata
-fn stateReadingMeta(machine: *Machine) anyerror!void {
-    try machine.enter(.reading_meta);
+fn stateReadingMeta(machine: *Machine) BackendError!void {
+    machine.enter(.reading_meta) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
 
-    const package_file = try std.fs.openFileAbsolute(machine.request.package_path, .{});
+    const package_file = std.fs.openFileAbsolute(machine.request.package_path, .{}) catch {
+        stateFailed(machine);
+        return BackendError.ReadFailed;
+    };
     defer package_file.close();
 
-    var rpm_header = rpm_parser.parseHeader(machine.allocator, package_file) catch |err| {
+    var rpm_header = rpm_parser.parseHeader(machine.allocator, package_file) catch {
         stateFailed(machine);
-        return err;
+        return BackendError.InvalidPackage;
     };
     defer rpm_header.deinit(machine.allocator);
 
     machine.meta = PackageMeta{
-        .name = try machine.allocator.dupe(u8, rpm_header.name orelse {
+        .name = machine.allocator.dupe(u8, rpm_header.name.?) catch {
             stateFailed(machine);
             return BackendError.MetadataNotFound;
-        }),
-        .version = try machine.allocator.dupe(u8, rpm_header.version orelse {
+        },
+        .version = machine.allocator.dupe(u8, rpm_header.version.?) catch {
             stateFailed(machine);
             return BackendError.MetadataNotFound;
-        }),
-        .author = try machine.allocator.dupe(u8, rpm_header.packager orelse ""),
-        .description = try machine.allocator.dupe(u8, rpm_header.summary orelse ""),
-        .license = try machine.allocator.dupe(u8, rpm_header.license orelse ""),
-        .url = try machine.allocator.dupe(u8, rpm_header.url orelse ""),
+        },
+        .author = machine.allocator.dupe(u8, rpm_header.packager orelse "") catch {
+            stateFailed(machine);
+            return BackendError.MetadataNotFound;
+        },
+        .description = machine.allocator.dupe(u8, rpm_header.summary orelse "") catch {
+            stateFailed(machine);
+            return BackendError.MetadataNotFound;
+        },
+        .license = machine.allocator.dupe(u8, rpm_header.license orelse "") catch {
+            stateFailed(machine);
+            return BackendError.MetadataNotFound;
+        },
+        .url = machine.allocator.dupe(u8, rpm_header.url orelse "") catch {
+            stateFailed(machine);
+            return BackendError.MetadataNotFound;
+        },
         .installed_at = std.time.timestamp(),
-        .checksum = try machine.allocator.dupe(u8, machine.request.checksum),
+        .checksum = machine.allocator.dupe(u8, machine.request.checksum),
     };
 
     return stateExtracting(machine);
@@ -91,13 +115,27 @@ fn stateReadingMeta(machine: *Machine) anyerror!void {
 
 // Unpacks the contents of an archive into a target directory using libarchive
 fn stateExtracting(machine: *Machine) anyerror!void {
-    try machine.enter(.extracting);
+    machine.enter(.extracting) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
 
-    const package_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.package_path});
+    const package_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.package_path}) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
     defer machine.allocator.free(package_path_c);
 
-    const output_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.output_path});
-    defer machine.allocator.free(output_path_c);
+    const temp_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.output_path}) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
+    std.fs.makeDirAbsolute(temp_path_c) catch {
+        machine.allocator.free(temp_path_c);
+        stateFailed(machine);
+        return BackendError.TempDirFailed;
+    };
+    machine.temp_path = temp_path_c;
 
     const archive_reader = c_libs.archive_read_new() orelse {
         stateFailed(machine);
@@ -128,12 +166,21 @@ fn stateExtracting(machine: *Machine) anyerror!void {
     _ = c_libs.archive_write_disk_set_standard_lookup(archive_writer);
 
     var current_directory_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const current_directory_path = try std.posix.getcwd(&current_directory_buffer);
+    const current_directory_path = std.posix.getcwd(&current_directory_buffer) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
 
-    var original_directory = try std.fs.openDirAbsolute(current_directory_path, .{});
+    var original_directory = std.fs.openDirAbsolute(current_directory_path, .{}) catch {
+        stateFailed(machine);
+        return BackendError.ReadFailed;
+    };
     defer original_directory.close();
 
-    try std.posix.chdir(output_path_c);
+    std.posix.chdir(temp_path_c) catch {
+        stateFailed(machine);
+        return BackendError.TempDirFailed;
+    };
     defer original_directory.setAsCwd() catch {};
 
     while (true) {
@@ -178,11 +225,19 @@ fn stateExtracting(machine: *Machine) anyerror!void {
 }
 
 // The final state representing the successful completion of all processing stages
-fn stateDone(machine: *Machine) anyerror!void {
-    try machine.enter(.done);
+fn stateDone(machine: *Machine) BackendError!void {
+    machine.enter(.done) catch {
+        stateFailed(machine);
+        return BackendError.OutOfMemory;
+    };
 }
 
 // An error state signaling that the machine failed to reach the required state at a certain stage
-fn stateFailed(machine: *Machine) void {
+pub fn stateFailed(machine: *Machine) void {
+    if (machine.temp_path) |path| {
+        std.fs.deleteTreeAbsolute(path) catch {};
+        machine.allocator.free(path);
+        machine.temp_path = null;
+    }
     _ = machine.enter(.failed) catch {};
 }
