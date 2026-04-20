@@ -117,7 +117,6 @@ pub const BackendMachine = struct {
             .meta = null,
         };
         defer machine.deinit();
-
         try states.stateVerifying(&machine);
 
         return PrepareResult{
