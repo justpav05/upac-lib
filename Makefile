@@ -89,7 +89,7 @@ prepare-libarchive:
 		$(MAKE) -j$(shell nproc)
 
 # ── Build ─────────────────────────────────────────────────────────────────────
-build: prepare-dirs prepare-ostree build-lib build-backends build-cli build-removing
+build: prepare-dirs prepare-ostree prepare-libarchive build-lib build-backends build-cli build-removing
 
 build-lib:
 	@echo "--- Building upac-lib in $(MODE) mode ---"
