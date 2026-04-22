@@ -184,36 +184,41 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
     };
     defer machine.allocator.free(content);
 
-    // Парсим .PKGINFO
     var name: ?[]const u8 = null;
     var version: ?[]const u8 = null;
+    var arch: ?[]const u8 = null;
     var description: ?[]const u8 = null;
     var url: ?[]const u8 = null;
     var packager: ?[]const u8 = null;
     var license: ?[]const u8 = null;
+    var size: u32 = 0;
 
     errdefer {
-        if (name) |v| machine.allocator.free(v);
-        if (version) |v| machine.allocator.free(v);
-        if (description) |v| machine.allocator.free(v);
-        if (url) |v| machine.allocator.free(v);
-        if (packager) |v| machine.allocator.free(v);
-        if (license) |v| machine.allocator.free(v);
+        if (name) |value| machine.allocator.free(value);
+        if (version) |value| machine.allocator.free(value);
+        if (arch) |value| machine.allocator.free(value);
+        if (description) |value| machine.allocator.free(value);
+        if (url) |value| machine.allocator.free(value);
+        if (packager) |value| machine.allocator.free(value);
+        if (license) |value| machine.allocator.free(value);
     }
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+        const trimmed_line = std.mem.trim(u8, line, " \t\r");
+        if (trimmed_line.len == 0 or trimmed_line[0] == '#') continue;
 
-        const sep = std.mem.indexOf(u8, trimmed, " = ") orelse continue;
-        const key = std.mem.trim(u8, trimmed[0..sep], " \t");
-        const value = std.mem.trim(u8, trimmed[sep + 3 ..], " \t");
+        const separator_index = std.mem.indexOf(u8, trimmed_line, " = ") orelse continue;
+
+        const key = std.mem.trim(u8, trimmed_line[0..separator_index], " \t");
+        const value = std.mem.trim(u8, trimmed_line[separator_index + 3 ..], " \t");
 
         if (std.mem.eql(u8, key, "pkgname")) {
             name = try machine.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "pkgver")) {
             version = try machine.allocator.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "arch")) {
+            arch = try machine.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "pkgdesc")) {
             description = try machine.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "url")) {
@@ -222,6 +227,8 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
             packager = try machine.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "license")) {
             license = try machine.allocator.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "size")) {
+            size = std.fmt.parseInt(u32, value, 10) catch 0;
         }
     }
 
@@ -233,7 +240,10 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
     machine.meta = PackageMeta{
         .name = name.?,
         .version = version.?,
+        .arch = arch orelse try machine.allocator.dupe(u8, "any"),
+        .size = size,
         .author = packager orelse try machine.allocator.dupe(u8, ""),
+        .packager = packager orelse try machine.allocator.dupe(u8, ""),
         .description = description orelse try machine.allocator.dupe(u8, ""),
         .license = license orelse try machine.allocator.dupe(u8, ""),
         .url = url orelse try machine.allocator.dupe(u8, ""),

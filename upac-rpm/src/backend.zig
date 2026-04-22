@@ -230,6 +230,7 @@ pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: 
     };
 
     const result = BackendMachine.run(zig_request, gpa.allocator()) catch |err| return @intFromEnum(fromError(err));
+
     const out_meta_ptr = gpa.allocator().create(CPackageMeta) catch return @intFromEnum(BackendErrorCode.alloc_failed);
 
     out_meta_ptr.* = CPackageMeta{

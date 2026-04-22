@@ -160,6 +160,8 @@ const CSlice = extern struct {
 
 // A C-compatible representation of package metadata for export to other languages
 const CPackageMeta = extern struct {
+    struct_size: usize = @sizeOf(CPackageMeta),
+
     name: CSlice,
     version: CSlice,
     architecture: CSlice,
@@ -216,7 +218,7 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 // ── FFI экспорты ──────────────────────────────────────────────────────────────
 // An exported C function (FFI) for initiating the preparation process from external code
-pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: *CPackageMeta, out_temp_path: *CSlice) callconv(.C) i32 {
+pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: *?*anyopaque, out_temp_path: *CSlice) callconv(.C) i32 {
     request_c.validate() catch |err| return @intFromEnum(fromError(err));
 
     const zig_request = PrepareRequest{
@@ -230,22 +232,26 @@ pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: 
 
     const result = BackendMachine.run(zig_request, gpa.allocator()) catch |err| return @intFromEnum(fromError(err));
 
-    out_meta.* = CPackageMeta{
-        .name = CSlice.fromSlice(result.meta.name),
-        .version = CSlice.fromSlice(result.meta.version),
-        .architecture = CSlice.fromSlice(result.meta.architecture),
-        .author = CSlice.fromSlice(result.meta.author),
-        .description = CSlice.fromSlice(result.meta.description),
-        .license = CSlice.fromSlice(result.meta.license),
-        .url = CSlice.fromSlice(result.meta.url),
-        .packager = CSlice.fromSlice(result.meta.packager),
-        .checksum = CSlice.fromSlice(result.meta.checksum),
-        .size = result.meta.size,
-        ._padding = 0,
+    const out_meta_ptr = gpa.allocator().create(CPackageMeta) catch return @intFromEnum(BackendErrorCode.alloc_failed);
+
+    out_meta_ptr.* = CPackageMeta{
+        .struct_size = @sizeOf(CPackageMeta),
+
+        .name = dupeToCSlice(gpa.allocator(), result.meta.name) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
+        .version = dupeToCSlice(gpa.allocator(), result.meta.version) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
+        .size = @intCast(result.meta.size),
+        .architecture = dupeToCSlice(gpa.allocator(), result.meta.architecture) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
+        .author = dupeToCSlice(gpa.allocator(), result.meta.author) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
+        .description = dupeToCSlice(gpa.allocator(), result.meta.description) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
+        .license = dupeToCSlice(gpa.allocator(), result.meta.license) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
+        .url = dupeToCSlice(gpa.allocator(), result.meta.url) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
+        .packager = dupeToCSlice(gpa.allocator(), result.meta.packager) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
         .installed_at = result.meta.installed_at,
+        .checksum = dupeToCSlice(gpa.allocator(), result.meta.checksum) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
     };
 
-    out_temp_path.* = CSlice.fromSlice(result.temp_path);
+    out_meta.* = out_meta_ptr;
+    out_temp_path.* = dupeToCSlice(gpa.allocator(), result.temp_path) catch return @intFromEnum(fromError(BackendError.AllocZFailed));
 
     return @intFromEnum(BackendErrorCode.ok);
 }
@@ -258,6 +264,11 @@ fn on_backend_progress(event: StateId, detail_c: CSlice, ctx: ?*anyopaque) callc
     _ = detail_c;
 }
 
+fn dupeToCSlice(allocator: std.mem.Allocator, slice: []const u8) BackendError!CSlice {
+    const dupe_slice = allocator.dupe(u8, slice) catch return BackendError.AllocZFailed;
+    return CSlice.fromSlice(dupe_slice);
+}
+
 pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.C) void {
     const path = path_c.toSlice();
 
@@ -266,15 +277,25 @@ pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.C) void {
 }
 
 // A function for safely clearing metadata memory allocated on the Zig side
-pub export fn upac_backend_meta_free(meta: *CPackageMeta) callconv(.C) void {
-    gpa.allocator().free(meta.name.toSlice());
-    gpa.allocator().free(meta.version.toSlice());
-    gpa.allocator().free(meta.architecture.toSlice());
-    gpa.allocator().free(meta.description.toSlice());
-    gpa.allocator().free(meta.license.toSlice());
-    gpa.allocator().free(meta.url.toSlice());
-    gpa.allocator().free(meta.packager.toSlice());
-    gpa.allocator().free(meta.checksum.toSlice());
+pub export fn upac_backend_meta_free(package_meta_c: *CPackageMeta) callconv(.C) void {
+    gpa.allocator().free(package_meta_c.name.toSlice());
+    gpa.allocator().free(package_meta_c.version.toSlice());
+    gpa.allocator().free(package_meta_c.architecture.toSlice());
+    gpa.allocator().free(package_meta_c.description.toSlice());
+    gpa.allocator().free(package_meta_c.license.toSlice());
+    gpa.allocator().free(package_meta_c.url.toSlice());
+    gpa.allocator().free(package_meta_c.packager.toSlice());
+    gpa.allocator().free(package_meta_c.checksum.toSlice());
+
+    gpa.allocator().destroy(package_meta_c);
+}
+
+pub export fn upac_backend_meta_get_name(meta: *const CPackageMeta) callconv(.C) CSlice {
+    return meta.name;
+}
+
+pub export fn upac_backend_meta_get_version(meta: *const CPackageMeta) callconv(.C) CSlice {
+    return meta.version;
 }
 
 pub const BackendErrorCode = enum(i32) {
