@@ -90,6 +90,11 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
             stateFailed(machine);
             return BackendError.MetadataNotFound;
         },
+        .size = rpm_header.size,
+        .arch = machine.allocator.dupe(u8, rpm_header.arch.?) catch {
+            stateFailed(machine);
+            return BackendError.MetadataNotFound;
+        },
         .author = machine.allocator.dupe(u8, rpm_header.packager orelse "") catch {
             stateFailed(machine);
             return BackendError.MetadataNotFound;
@@ -99,6 +104,10 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
             return BackendError.MetadataNotFound;
         },
         .license = machine.allocator.dupe(u8, rpm_header.license orelse "") catch {
+            stateFailed(machine);
+            return BackendError.MetadataNotFound;
+        },
+        .packager = machine.allocator.dupe(u8, rpm_header.packager orelse "") catch {
             stateFailed(machine);
             return BackendError.MetadataNotFound;
         },

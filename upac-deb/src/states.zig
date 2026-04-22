@@ -319,6 +319,8 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
 
     var name: ?[]const u8 = null;
     var version: ?[]const u8 = null;
+    var size: u32 = 0;
+    var architecture: ?[]const u8 = null;
     var description: ?[]const u8 = null;
     var url: ?[]const u8 = null;
     var packager: ?[]const u8 = null;
@@ -336,6 +338,10 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
             name = try machine.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "Version")) {
             version = try machine.allocator.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "Installed-Size")) {
+            size = std.fmt.parseInt(u32, std.mem.trim(u8, value, " \t"), 10) catch 0;
+        } else if (std.mem.eql(u8, key, "Architecture")) {
+            architecture = try machine.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "Description")) {
             description = try machine.allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "Homepage")) {
@@ -354,9 +360,12 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
         .name = name.?,
         .version = version.?,
         .author = packager orelse try machine.allocator.dupe(u8, "Unknown"),
-        .description = description orelse try machine.allocator.dupe(u8, ""),
+        .size = size,
+        .architecture = architecture orelse try machine.allocator.dupe(u8, "No architecture"),
+        .description = description orelse try machine.allocator.dupe(u8, "No description"),
         .license = try machine.allocator.dupe(u8, "Unknown"),
-        .url = url orelse try machine.allocator.dupe(u8, ""),
+        .url = url orelse try machine.allocator.dupe(u8, "No url"),
+        .packager = packager orelse try machine.allocator.dupe(u8, "Unknown"),
         .installed_at = std.time.timestamp(),
         .checksum = try machine.allocator.dupe(u8, machine.request.checksum),
     };

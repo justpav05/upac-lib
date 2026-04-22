@@ -9,10 +9,13 @@ const stateFailed = states.stateFailed;
 pub const PackageMeta = struct {
     name: []const u8,
     version: []const u8,
+    size: u32,
+    architecture: []const u8,
     author: []const u8,
     description: []const u8,
     license: []const u8,
     url: []const u8,
+    packager: []const u8,
     installed_at: i64,
     checksum: []const u8,
 };
@@ -119,9 +122,12 @@ pub const BackendMachine = struct {
         defer machine.deinit();
         try states.stateVerifying(&machine);
 
+        const temp_path = machine.temp_path orelse return BackendError.TempDirFailed;
+        machine.temp_path = null;
+
         return PrepareResult{
             .meta = machine.meta orelse return BackendError.InvalidPackage,
-            .temp_path = machine.temp_path orelse return BackendError.TempDirFailed,
+            .temp_path = temp_path,
         };
     }
 };
@@ -156,12 +162,16 @@ const CSlice = extern struct {
 const CPackageMeta = extern struct {
     name: CSlice,
     version: CSlice,
+    architecture: CSlice,
     author: CSlice,
     description: CSlice,
     license: CSlice,
     url: CSlice,
-    installed_at: i64,
+    packager: CSlice,
     checksum: CSlice,
+    size: u32,
+    _padding: u32 = 0,
+    installed_at: i64,
 };
 
 // C-compatible request parameter structure for use in FFI
@@ -223,12 +233,16 @@ pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: 
     out_meta.* = CPackageMeta{
         .name = CSlice.fromSlice(result.meta.name),
         .version = CSlice.fromSlice(result.meta.version),
+        .architecture = CSlice.fromSlice(result.meta.architecture),
         .author = CSlice.fromSlice(result.meta.author),
         .description = CSlice.fromSlice(result.meta.description),
         .license = CSlice.fromSlice(result.meta.license),
         .url = CSlice.fromSlice(result.meta.url),
-        .installed_at = result.meta.installed_at,
+        .packager = CSlice.fromSlice(result.meta.packager),
         .checksum = CSlice.fromSlice(result.meta.checksum),
+        .size = result.meta.size,
+        ._padding = 0,
+        .installed_at = result.meta.installed_at,
     };
 
     out_temp_path.* = CSlice.fromSlice(result.temp_path);
@@ -240,28 +254,26 @@ fn on_backend_progress(event: StateId, detail_c: CSlice, ctx: ?*anyopaque) callc
     if (ctx != null) {
         return;
     }
-    const detail = detail_c.toSlice();
-    switch (event) {
-        .verifying => std.debug.print("→ verifying {s}...\n", .{detail}),
-        .reading_meta => std.debug.print("→ reading metadata for {s}...\n", .{detail}),
-        .done => std.debug.print("✓ {s} extracted\n", .{detail}),
-        .failed => std.debug.print("✗ {s} failed\n", .{detail}),
-        else => {},
-    }
+    _ = event;
+    _ = detail_c;
 }
 
 pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.C) void {
-    std.fs.deleteTreeAbsolute(path_c.toSlice()) catch {};
+    const path = path_c.toSlice();
+
+    std.fs.deleteTreeAbsolute(path) catch {};
+    gpa.allocator().free(path);
 }
 
 // A function for safely clearing metadata memory allocated on the Zig side
 pub export fn upac_backend_meta_free(meta: *CPackageMeta) callconv(.C) void {
     gpa.allocator().free(meta.name.toSlice());
     gpa.allocator().free(meta.version.toSlice());
-    gpa.allocator().free(meta.author.toSlice());
+    gpa.allocator().free(meta.architecture.toSlice());
     gpa.allocator().free(meta.description.toSlice());
     gpa.allocator().free(meta.license.toSlice());
     gpa.allocator().free(meta.url.toSlice());
+    gpa.allocator().free(meta.packager.toSlice());
     gpa.allocator().free(meta.checksum.toSlice());
 }
 

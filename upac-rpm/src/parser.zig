@@ -13,8 +13,10 @@ const RpmTag = enum(u32) {
     summary = 1004,
     description = 1005,
     license = 1014,
+    packager = 1015,
     url = 1020,
-    packager = 1022,
+    arch = 1022,
+    size = 1023,
     _,
 };
 
@@ -38,8 +40,10 @@ const RpmTagType = enum(u32) {
 pub const RpmHeader = struct {
     name: ?[]const u8,
     version: ?[]const u8,
+    size: u32,
     release: ?[]const u8,
     summary: ?[]const u8,
+    arch: ?[]const u8,
     license: ?[]const u8,
     url: ?[]const u8,
     packager: ?[]const u8,
@@ -50,6 +54,7 @@ pub const RpmHeader = struct {
         if (self.version) |value| allocator.free(value);
         if (self.release) |value| allocator.free(value);
         if (self.summary) |value| allocator.free(value);
+        if (self.arch) |value| allocator.free(value);
         if (self.license) |value| allocator.free(value);
         if (self.url) |value| allocator.free(value);
         if (self.packager) |value| allocator.free(value);
@@ -166,8 +171,10 @@ fn readHeaderSection(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader
     var rpm_header = RpmHeader{
         .name = null,
         .version = null,
+        .size = 0,
         .release = null,
         .summary = null,
+        .arch = null,
         .license = null,
         .url = null,
         .packager = null,
@@ -180,8 +187,15 @@ fn readHeaderSection(allocator: std.mem.Allocator, file: std.fs.File) !RpmHeader
         switch (rpm_tag) {
             .name => rpm_header.name = try readString(allocator, data_block, tag_entry.offset),
             .version => rpm_header.version = try readString(allocator, data_block, tag_entry.offset),
+            .size => {
+                const raw_bytes = data_block[tag_entry.offset .. tag_entry.offset + 4];
+                const value = std.mem.readInt(i32, raw_bytes[0..4], .big);
+
+                rpm_header.size = @intCast(value);
+            },
             .release => rpm_header.release = try readString(allocator, data_block, tag_entry.offset),
             .summary => rpm_header.summary = try readString(allocator, data_block, tag_entry.offset),
+            .arch => rpm_header.arch = try readString(allocator, data_block, tag_entry.offset),
             .license => rpm_header.license = try readString(allocator, data_block, tag_entry.offset),
             .url => rpm_header.url = try readString(allocator, data_block, tag_entry.offset),
             .packager => rpm_header.packager = try readString(allocator, data_block, tag_entry.offset),
