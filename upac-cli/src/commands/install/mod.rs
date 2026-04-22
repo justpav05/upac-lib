@@ -5,23 +5,18 @@ use colored::Colorize;
 
 use indicatif::ProgressBar;
 
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::Arc;
 
-use crate::backends::{BackendLibGuard, PackageMeta};
+use crate::backends::{BackendKind, BackendLibGuard};
 use crate::config::Config;
-use crate::ffi::CSlice;
+use crate::ffi::{CPackageEntry, CSlice};
 use crate::upac::{UpacLib, UpacLibGuard};
 
 use self::states::state_preparing_package;
 
 mod states;
-
-// ── Prepared package ───────────────────────────────────────────────────────────────────────
-struct PreparedPackage {
-    meta: PackageMeta,
-    temp_path: String,
-    checksum: String,
-}
 
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
 #[derive(clap::Args)]
@@ -44,17 +39,22 @@ enum State {
     Failed(String),
 }
 
+struct PreparedPackageInternal {
+    entry: CPackageEntry,
+    backend: Arc<BackendLibGuard>,
+}
+
 // ── FSM machine ───────────────────────────────────────────────────────────────────────
 struct InstallMachine {
     files: Vec<String>,
     backend: Option<String>,
     checksums: Vec<String>,
 
-    prepared_packages: Vec<PreparedPackage>,
+    prepared_packages: Vec<PreparedPackageInternal>,
     progress_bar: Option<ProgressBar>,
 
     upac_lib: Option<UpacLibGuard>,
-    backend_lib: Option<BackendLibGuard>,
+    loaded_backends: HashMap<BackendKind, Arc<BackendLibGuard>>,
     config: Config,
     stack: Vec<State>,
 }
@@ -73,7 +73,7 @@ impl InstallMachine {
             prepared_packages: Vec::new(),
             progress_bar: None,
             upac_lib: None,
-            backend_lib: None,
+            loaded_backends: HashMap::new(),
             config,
             stack: Vec::new(),
         }

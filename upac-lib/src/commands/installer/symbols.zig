@@ -16,6 +16,8 @@ const fromError = installer.ffi.fromError;
 pub export fn upac_install(install_request_c: CInstallRequest) callconv(.C) i32 {
     install_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.install));
 
+    std.debug.print("{any}", .{install_request_c});
+
     const install_entries = collectInstallEntries(install_request_c, installer.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.install));
     defer installer.ffi.allocator().free(install_entries);
 

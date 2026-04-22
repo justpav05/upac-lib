@@ -1,6 +1,5 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use std::ffi::c_void;
-use std::os::raw::c_int;
 use std::slice;
 use std::str;
 
@@ -54,36 +53,14 @@ impl CSliceArray {
 // ── Metadata and Packages ──────────────────────────────────────────────────────
 // Describes a specific package for installation, including the temporary path and checksum
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CPackageEntry {
-    pub meta: CPackageMeta,
+    pub meta: PackageMetaHandle,
     pub temp_path: CSlice,
     pub checksum: CSlice,
 }
 
-// A structure containing the package description (name, version, author, etc.) in FFI format
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct CPackageMeta {
-    pub name: CSlice,
-    pub version: CSlice,
-    pub architecture: CSlice,
-    pub author: CSlice,
-    pub description: CSlice,
-    pub license: CSlice,
-    pub url: CSlice,
-    pub packager: CSlice,
-    pub checksum: CSlice,
-    pub size: u32,
-    pub _padding: u32,
-    pub installed_at: i64,
-}
-
-// Represents a dynamic array of metadata allocated on the Zig side
-#[repr(C)]
-pub struct CPackageMetaArray {
-    pub ptr: *mut CPackageMeta,
-    pub len: usize,
-}
+pub type PackageMetaHandle = *mut std::ffi::c_void;
 
 // ── Requests ───────────────────────────────────────────────────────────────────
 // Data container for the installation operation: list of packages, paths, and repository settings

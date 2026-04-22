@@ -7,7 +7,7 @@ use std::str;
 
 use crate::ffi::{
     CAttributedDiffArray, CCommitArray, CInitRequest, CInstallRequest, CPackageDiffArray,
-    CPackageMetaArray, CRollbackRequest, CSlice, CUninstallRequest,
+    CRollbackRequest, CSlice, CUninstallRequest,
 };
 
 // ── Wrapper around libupac.so ────────────────────────────────────────────────────
@@ -15,9 +15,8 @@ use crate::ffi::{
 pub struct UpacLib {
     _lib: Library,
 
-    pub list_packages: unsafe extern "C" fn(CSlice, CSlice, CSlice, *mut CPackageMetaArray) -> i32,
-    pub packages_free: unsafe extern "C" fn(*mut CPackageMetaArray),
-
+    // pub list_packages: unsafe extern "C" fn(CSlice, CSlice, CSlice, *mut CPackageMetaArray) -> i32,
+    //pub packages_free: unsafe extern "C" fn(*mut CPackageMetaArray),
     pub install: unsafe extern "C" fn(CInstallRequest) -> i32,
     pub uninstall: unsafe extern "C" fn(CUninstallRequest) -> i32,
     pub rollback: unsafe extern "C" fn(CRollbackRequest) -> i32,
@@ -60,9 +59,8 @@ impl UpacLib {
         }
 
         Ok(Self {
-            list_packages: sym!(b"upac_list_packages"),
-            packages_free: sym!(b"upac_packages_free"),
-
+            //list_packages: sym!(b"upac_list_packages"),
+            //packages_free: sym!(b"upac_packages_free"),
             install: sym!(b"upac_install"),
             uninstall: sym!(b"upac_uninstall"),
             rollback: sym!(b"upac_rollback"),

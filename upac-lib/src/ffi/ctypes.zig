@@ -84,6 +84,8 @@ pub const CPackageEntry = extern struct {
 
 // A packet metadata structure adapted for transmission via C
 pub const CPackageMeta = extern struct {
+    struct_size: usize = @sizeOf(CPackageMeta),
+
     name: CSlice,
     version: CSlice,
     architecture: CSlice,
@@ -98,6 +100,8 @@ pub const CPackageMeta = extern struct {
     installed_at: i64,
 
     pub fn validate(self: CPackageMeta) !void {
+        if (self.struct_size != @sizeOf(CPackageMeta)) return error.AbiMismatch;
+
         if (self.name.isEmpty()) return error.InvalidEntry;
         if (self.version.isEmpty()) return error.InvalidEntry;
         if (self.architecture.isEmpty()) return error.InvalidEntry;

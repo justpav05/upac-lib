@@ -6,11 +6,12 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::io::Read;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::{
-    c_void, on_install_progress, Colorize, InstallMachine, PreparedPackage, Result, State, UpacLib,
-    UpacLibGuard,
+    c_void, on_install_progress, Colorize, InstallMachine, PreparedPackageInternal, Result, State,
+    UpacLib, UpacLibGuard,
 };
 
 use crate::backends::{on_backend_progress, BackendKind, BackendLibGuard};
@@ -28,6 +29,8 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
         machine.progress_bar.as_ref().unwrap() as *const ProgressBar as *mut c_void;
 
     for (index, file) in files.iter().enumerate() {
+        machine.enter(State::DetectingBackend(file.clone()));
+
         let kind = if let Some(flag) = &machine.backend {
             BackendKind::from_flag(flag)?
         } else {
@@ -36,14 +39,22 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             })?
         };
 
-        machine.enter(State::DetectingBackend(file.clone()));
-        machine.backend_lib = Some(BackendLibGuard::load(&kind)?);
+        let backend = machine
+            .loaded_backends
+            .entry(kind.clone())
+            .or_insert_with(|| {
+                Arc::new(
+                    BackendLibGuard::load(&kind)
+                        .expect(format!("Failed to load backend lib for {}", kind).as_str()),
+                )
+            })
+            .clone();
 
-        machine.progress_bar.as_ref().unwrap().println(format!(
-            "{} backend: {:?}",
-            "→".cyan(),
-            kind
-        ));
+        machine
+            .progress_bar
+            .as_ref()
+            .unwrap()
+            .println(format!("{} backend: {}", "→".cyan(), kind));
 
         let tmp_string_path = env::temp_dir()
             .to_str()
@@ -63,10 +74,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             machine.checksums[index].clone()
         };
 
-        let (package_meta, actual_temp_path) = machine
-            .backend_lib
-            .as_ref()
-            .unwrap()
+        let (package_meta_c, temp_path_c) = backend
             .meta_prepare(
                 &abs_file_str,
                 &tmp_string_path,
@@ -79,11 +87,18 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
                 err
             })?;
 
-        machine.prepared_packages.push(PreparedPackage {
-            meta: package_meta,
-            temp_path: actual_temp_path,
-            checksum,
-        });
+        let package_entry_c = CPackageEntry {
+            meta: package_meta_c,
+            temp_path: temp_path_c,
+            checksum: CSlice::from_str(checksum.as_str()),
+        };
+
+        let prepared_package_internal = PreparedPackageInternal {
+            entry: package_entry_c,
+            backend,
+        };
+
+        machine.prepared_packages.push(prepared_package_internal);
     }
 
     state_installing(machine)
@@ -92,24 +107,20 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 fn state_installing(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::Installing);
 
-    let entries_c: Vec<CPackageEntry> = machine
-        .prepared_packages
-        .iter()
-        .map(|pkg| CPackageEntry {
-            meta: pkg.meta.as_c(),
-            temp_path: CSlice::from_str(&pkg.temp_path),
-            checksum: CSlice::from_str(&pkg.checksum),
-        })
-        .collect();
-
     let progress_bar_ptr =
         machine.progress_bar.as_ref().unwrap() as *const ProgressBar as *mut c_void;
+
+    let packages_c: Vec<CPackageEntry> = machine
+        .prepared_packages
+        .iter()
+        .map(|package| package.entry)
+        .collect();
 
     let install_request_c = CInstallRequest {
         struct_size: size_of::<CInstallRequest>(),
 
-        packages: entries_c.as_ptr(),
-        packages_count: entries_c.len(),
+        packages: packages_c.as_ptr(),
+        packages_count: packages_c.len(),
 
         repo_path: CSlice::from_str(&machine.config.paths.repo_path),
         root_path: CSlice::from_str(&machine.config.paths.root_path),
@@ -134,13 +145,17 @@ fn state_done(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::Done);
     machine.progress_bar.as_ref().unwrap().finish_and_clear();
 
-    for pkg in &machine.prepared_packages {
-        println!(
-            "{} installed {} {}",
-            "✓".green().bold(),
-            pkg.meta.name.bold(),
-            pkg.meta.version.dimmed()
-        );
+    for package in &machine.prepared_packages {
+        let backend = &package.backend;
+
+        let name_slice = unsafe { (backend.upac_backend_meta_get_name)(package.entry.meta) };
+        let version_slice = unsafe { (backend.upac_backend_meta_get_version)(package.entry.meta) };
+
+        println!("Installed: {} {}", unsafe { name_slice.as_str() }, unsafe {
+            version_slice.as_str()
+        });
+
+        unsafe { (backend.upac_backend_meta_free)(package.entry.meta) };
     }
 
     Ok(())

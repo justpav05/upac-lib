@@ -4,11 +4,13 @@ use anyhow::{bail, Result};
 use indicatif::ProgressBar;
 
 use std::ffi::c_void;
+use std::fmt::{Display, Formatter};
 use std::mem::MaybeUninit;
+use std::ptr::null_mut;
 
 use libloading::{Library, Symbol};
 
-use crate::ffi::{CPackageMeta, CSlice};
+use crate::ffi::{CSlice, PackageMetaHandle};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 #[repr(u8)]
@@ -22,49 +24,23 @@ pub enum BackendProgressEvent {
     Failed = 5,
 }
 
-// Internal representation of package metadata on the Rust side
-#[derive(Debug)]
-pub struct PackageMeta {
-    pub name: String,
-    pub version: String,
-    pub size: u32,
-    pub architecture: String,
-    pub author: String,
-    pub description: String,
-    pub license: String,
-    pub url: String,
-    pub packager: String,
-    pub installed_at: i64,
-    pub checksum: String,
-}
-
-impl PackageMeta {
-    // Converts the PackageMeta struct to a C-compatible struct for FFI calls
-    pub fn as_c(&self) -> CPackageMeta {
-        CPackageMeta {
-            name: CSlice::from_str(&self.name),
-            version: CSlice::from_str(&self.version),
-            size: self.size,
-            architecture: CSlice::from_str(&self.architecture),
-            author: CSlice::from_str(&self.author),
-            description: CSlice::from_str(&self.description),
-            license: CSlice::from_str(&self.license),
-            url: CSlice::from_str(&self.url),
-            packager: CSlice::from_str(&self.packager),
-            installed_at: self.installed_at,
-            checksum: CSlice::from_str(&self.checksum),
-            _padding: 0,
-        }
-    }
-}
-
 // ── Backend Definition ────────────────────────────────────────
 // Represents the type of backend (ALPM, RPM, DEB) for a package
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum BackendKind {
     Alpm,
     Rpm,
     Deb,
+}
+
+impl Display for BackendKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BackendKind::Alpm => write!(f, "alpm"),
+            BackendKind::Rpm => write!(f, "rpm"),
+            BackendKind::Deb => write!(f, "deb"),
+        }
+    }
 }
 
 impl BackendKind {
@@ -124,8 +100,12 @@ pub struct Backend {
     _lib: Library,
 
     pub upac_backend_prepare:
-        unsafe extern "C" fn(*const CPrepareRequest, *mut CPackageMeta, *mut CSlice) -> i32,
-    pub upac_backend_meta_free: unsafe extern "C" fn(*mut CPackageMeta),
+        unsafe extern "C" fn(*const CPrepareRequest, PackageMetaHandle, *mut CSlice) -> i32,
+    pub upac_backend_meta_free: unsafe extern "C" fn(PackageMetaHandle),
+
+    pub upac_backend_meta_get_name: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
+    pub upac_backend_meta_get_version: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
+
     pub upac_backend_cleanup: unsafe extern "C" fn(CSlice),
 }
 
@@ -148,7 +128,12 @@ impl Backend {
 
         Ok(Self {
             upac_backend_prepare: sym!("upac_backend_prepare"),
+
             upac_backend_meta_free: sym!("upac_backend_meta_free"),
+
+            upac_backend_meta_get_name: sym!("upac_backend_meta_get_name"),
+            upac_backend_meta_get_version: sym!("upac_backend_meta_get_version"),
+
             upac_backend_cleanup: sym!("upac_backend_cleanup"),
 
             _lib: lib,
@@ -163,9 +148,10 @@ impl Backend {
         checksum: &str,
         on_progress: Option<unsafe extern "C" fn(BackendProgressEvent, CSlice, *mut c_void)>,
         progress_ctx: *mut c_void,
-    ) -> Result<(PackageMeta, String)> {
-        let req = CPrepareRequest {
-            struct_size: std::mem::size_of::<CPrepareRequest>(),
+    ) -> Result<(PackageMetaHandle, CSlice)> {
+        let prepare_request_c = CPrepareRequest {
+            struct_size: size_of::<CPrepareRequest>(),
+
             pkg_path: CSlice::from_str(pkg_path),
             temp_dir: CSlice::from_str(temp_dir),
             checksum: CSlice::from_str(checksum),
@@ -173,43 +159,23 @@ impl Backend {
             progress_ctx,
         };
 
-        let mut package_meta_out = MaybeUninit::<CPackageMeta>::uninit();
-        let mut temp_path_out = MaybeUninit::<CSlice>::uninit();
+        let package_meta_handle: PackageMetaHandle = null_mut();
+        let mut package_temp_path = MaybeUninit::<CSlice>::uninit();
 
         let code = unsafe {
             (self.upac_backend_prepare)(
-                &req,
-                package_meta_out.as_mut_ptr(),
-                temp_path_out.as_mut_ptr(),
+                &prepare_request_c,
+                package_meta_handle,
+                package_temp_path.as_mut_ptr(),
             )
         };
         if code != 0 {
             anyhow::bail!("Backend prepare failed with code {code}");
         }
 
-        let mut package_meta_c = unsafe { package_meta_out.assume_init() };
-        let package_temp_path_c = unsafe { temp_path_out.assume_init() };
+        let package_temp_path_c = unsafe { package_temp_path.assume_init() };
 
-        let package_meta = unsafe {
-            PackageMeta {
-                name: package_meta_c.name.as_str().to_owned(),
-                version: package_meta_c.version.as_str().to_owned(),
-                size: package_meta_c.size as u32,
-                architecture: package_meta_c.architecture.as_str().to_owned(),
-                author: package_meta_c.author.as_str().to_owned(),
-                description: package_meta_c.description.as_str().to_owned(),
-                license: package_meta_c.license.as_str().to_owned(),
-                url: package_meta_c.url.as_str().to_owned(),
-                packager: package_meta_c.packager.as_str().to_owned(),
-                installed_at: package_meta_c.installed_at,
-                checksum: package_meta_c.checksum.as_str().to_owned(),
-            }
-        };
-        let package_temp_path = unsafe { package_temp_path_c.as_str().to_owned() };
-
-        unsafe { (self.upac_backend_meta_free)(&mut package_meta_c) };
-
-        Ok((package_meta, package_temp_path))
+        Ok((package_meta_handle, package_temp_path_c))
     }
 }
 

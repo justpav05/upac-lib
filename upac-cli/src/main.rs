@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use commands::diff::DiffArgs;
 use commands::init::InitArgs;
 use commands::install::InstallArgs;
-use commands::list::ListArgs;
+//use commands::list::ListArgs;
 use commands::remove::RemoveArgs;
 use commands::rollback::RollbackArgs;
 
@@ -28,7 +28,7 @@ mod commands {
     pub mod rollback;
 
     pub mod diff;
-    pub mod list;
+    //pub mod list;
 
     pub mod init;
 }
@@ -49,7 +49,7 @@ enum Command {
     Remove(RemoveArgs),
     Rollback(RollbackArgs),
 
-    List(ListArgs),
+    // List(ListArgs),
     Diff(DiffArgs),
     Init(InitArgs),
 }
@@ -84,9 +84,9 @@ fn run() -> Result<()> {
         Command::Remove(args) => {
             commands::remove::run(config, args)?;
         }
-        Command::List(args) => {
-            commands::list::run(config, args)?;
-        }
+        // Command::List(args) => {
+        //     commands::list::run(config, args)?;
+        // }
         Command::Diff(args) => {
             commands::diff::run(config, args)?;
         }
