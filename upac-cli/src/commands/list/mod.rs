@@ -3,7 +3,9 @@ use anyhow::Result;
 
 use colored::Colorize;
 
-use self::states::state_fetching_commits;
+use std::ffi::c_void;
+
+use self::states::state_fetching_mode;
 
 use crate::config::Config;
 use crate::upac::{UpacLib, UpacLibGuard};
@@ -27,6 +29,26 @@ struct CommitRow {
     subject: String,
 }
 
+pub struct HandleGuard {
+    pub handle: *mut c_void,
+    free_fn: unsafe extern "C" fn(*mut c_void),
+}
+
+impl HandleGuard {
+    pub fn new(handle: *mut c_void, free_fn: unsafe extern "C" fn(*mut c_void)) -> Self {
+        Self { handle, free_fn }
+    }
+}
+
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { (self.free_fn)(self.handle) };
+            self.handle = std::ptr::null_mut();
+        }
+    }
+}
+
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
 #[derive(clap::Args)]
 pub struct ListArgs {
@@ -39,8 +61,12 @@ pub struct ListArgs {
 // ── FSM states ────────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
 enum State {
-    FetchingCommits,
-    Printing,
+    FetchingMode,
+    GetPackages,
+    GetCommits,
+    PrintCommits,
+    PrintPackages,
+
     Done,
     Failed(String),
 }
@@ -83,7 +109,7 @@ impl ListMachine {
 pub fn run(config: Config, args: ListArgs) -> Result<()> {
     let mut list_machine = ListMachine::new(config, args.commit, args.full);
 
-    state_fetching_commits(&mut list_machine).map_err(|err| {
+    state_fetching_mode(&mut list_machine).map_err(|err| {
         if !matches!(list_machine.stack.last(), Some(State::Failed(_))) {
             list_machine.enter(State::Failed(err.to_string()));
         }
@@ -96,4 +122,20 @@ pub fn run(config: Config, args: ListArgs) -> Result<()> {
         }
         err
     })
+}
+
+pub fn format_size(bytes: u32) -> String {
+    const KB: u32 = 1024;
+    const MB: u32 = 1024 * KB;
+    const GB: u32 = 1024 * MB;
+
+    if bytes >= GB {
+        format!("{:.1} GiB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MiB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KiB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }

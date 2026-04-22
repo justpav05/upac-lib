@@ -3,6 +3,7 @@ use anyhow::{bail, Result};
 
 use libloading::{Library, Symbol};
 
+use std::ffi::c_void;
 use std::str;
 
 use crate::ffi::{
@@ -15,8 +16,6 @@ use crate::ffi::{
 pub struct UpacLib {
     _lib: Library,
 
-    // pub list_packages: unsafe extern "C" fn(CSlice, CSlice, CSlice, *mut CPackageMetaArray) -> i32,
-    //pub packages_free: unsafe extern "C" fn(*mut CPackageMetaArray),
     pub install: unsafe extern "C" fn(CInstallRequest) -> i32,
     pub uninstall: unsafe extern "C" fn(CUninstallRequest) -> i32,
     pub rollback: unsafe extern "C" fn(CRollbackRequest) -> i32,
@@ -32,6 +31,19 @@ pub struct UpacLib {
         *mut CAttributedDiffArray,
     ) -> i32,
     pub diff_files_attributed_free: unsafe extern "C" fn(*mut CAttributedDiffArray),
+
+    pub list_packages: unsafe extern "C" fn(CSlice, CSlice, CSlice, *mut *mut c_void) -> i32,
+    pub packages_free: unsafe extern "C" fn(*mut c_void),
+    pub packages_count: unsafe extern "C" fn(*mut c_void) -> usize,
+
+    pub package_get_name: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
+    pub package_get_version: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
+    pub package_get_size: unsafe extern "C" fn(*mut c_void, usize) -> u32,
+    pub package_get_architecture: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
+    pub package_get_author: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
+    pub package_get_license: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
+    pub package_get_url: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
+    pub package_get_packager: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
 
     pub list_commits: unsafe extern "C" fn(CSlice, CSlice, *mut CCommitArray) -> i32,
     pub commits_free: unsafe extern "C" fn(*mut CCommitArray),
@@ -59,8 +71,6 @@ impl UpacLib {
         }
 
         Ok(Self {
-            //list_packages: sym!(b"upac_list_packages"),
-            //packages_free: sym!(b"upac_packages_free"),
             install: sym!(b"upac_install"),
             uninstall: sym!(b"upac_uninstall"),
             rollback: sym!(b"upac_rollback"),
@@ -69,6 +79,19 @@ impl UpacLib {
             diff_packages_free: sym!(b"upac_diff_packages_free"),
             diff_files_attributed: sym!(b"upac_diff_files_attributed"),
             diff_files_attributed_free: sym!(b"upac_diff_files_attributed_free"),
+
+            list_packages: sym!(b"upac_list_packages"),
+            packages_free: sym!(b"upac_packages_free"),
+            packages_count: sym!(b"upac_packages_count"),
+
+            package_get_name: sym!(b"upac_package_get_name"),
+            package_get_version: sym!(b"upac_package_get_version"),
+            package_get_size: sym!(b"upac_package_get_size"),
+            package_get_architecture: sym!(b"upac_package_get_architecture"),
+            package_get_author: sym!(b"upac_package_get_author"),
+            package_get_license: sym!(b"upac_package_get_license"),
+            package_get_url: sym!(b"upac_package_get_url"),
+            package_get_packager: sym!(b"upac_package_get_packager"),
 
             list_commits: sym!(b"upac_list_commits"),
             commits_free: sym!(b"upac_commits_free"),
@@ -118,13 +141,13 @@ impl UpacLib {
             33 => "install: checkout failed",
             34 => "install: install cancelled",
             35 => "install: max retries exceeded",
-            36 => "install_check_space_failed",
-            37 => "install_make_failed",
+            36 => "install: check space failed",
+            37 => "install: make failed",
 
             40 => "package not found for uninstall",
             41 => "uninstall failed",
-            42 => "uninstall_file_map_corrupted",
-            43 => "uninstall_staging_not_cleaned",
+            42 => "uninstall: file map corrupted",
+            43 => "uninstall: staging not cleaned",
 
             50 => "ostree: failed to open repository",
             51 => "ostree: transaction failed",

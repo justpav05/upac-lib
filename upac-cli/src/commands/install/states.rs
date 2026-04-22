@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{
-    c_void, on_install_progress, Colorize, InstallMachine, PreparedPackageInternal, Result, State,
-    UpacLib, UpacLibGuard,
+    c_void, on_install_progress, Colorize, InstallMachine, PreparedPackage, Result, State, UpacLib,
+    UpacLibGuard,
 };
 
 use crate::backends::{on_backend_progress, BackendKind, BackendLibGuard};
@@ -74,7 +74,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             machine.checksums[index].clone()
         };
 
-        let (package_meta_c, temp_path_c) = backend
+        let (meta_handle, temp_path_c) = backend
             .meta_prepare(
                 &abs_file_str,
                 &tmp_string_path,
@@ -87,18 +87,14 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
                 err
             })?;
 
-        let package_entry_c = CPackageEntry {
-            meta: package_meta_c,
-            temp_path: temp_path_c,
-            checksum: CSlice::from_str(checksum.as_str()),
-        };
-
-        let prepared_package_internal = PreparedPackageInternal {
-            entry: package_entry_c,
+        let prepared_packege = PreparedPackage {
+            meta_handle,
+            temp_path_c,
+            checksum,
             backend,
         };
 
-        machine.prepared_packages.push(prepared_package_internal);
+        machine.prepared_packages.push(prepared_packege);
     }
 
     state_installing(machine)
@@ -113,7 +109,7 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
     let packages_c: Vec<CPackageEntry> = machine
         .prepared_packages
         .iter()
-        .map(|package| package.entry)
+        .map(|prepared_package| prepared_package.as_c_entry())
         .collect();
 
     let install_request_c = CInstallRequest {
@@ -147,15 +143,13 @@ fn state_done(machine: &mut InstallMachine) -> Result<()> {
 
     for package in &machine.prepared_packages {
         let backend = &package.backend;
+        let name_slice_c = unsafe { (backend.backend_meta_get_name)(package.meta_handle) };
+        let version_slice_c = unsafe { (backend.backend_meta_get_version)(package.meta_handle) };
 
-        let name_slice = unsafe { (backend.upac_backend_meta_get_name)(package.entry.meta) };
-        let version_slice = unsafe { (backend.upac_backend_meta_get_version)(package.entry.meta) };
+        let name = unsafe { name_slice_c.as_str() }.to_owned();
+        let version = unsafe { version_slice_c.as_str() }.to_owned();
 
-        println!("Installed: {} {}", unsafe { name_slice.as_str() }, unsafe {
-            version_slice.as_str()
-        });
-
-        unsafe { (backend.upac_backend_meta_free)(package.entry.meta) };
+        println!("Installed: {} {}", name, version);
     }
 
     Ok(())

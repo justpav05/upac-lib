@@ -99,14 +99,14 @@ pub struct CPrepareRequest {
 pub struct Backend {
     _lib: Library,
 
-    pub upac_backend_prepare:
-        unsafe extern "C" fn(*const CPrepareRequest, PackageMetaHandle, *mut CSlice) -> i32,
-    pub upac_backend_meta_free: unsafe extern "C" fn(PackageMetaHandle),
+    pub backend_prepare:
+        unsafe extern "C" fn(*const CPrepareRequest, *mut PackageMetaHandle, *mut CSlice) -> i32,
+    pub backend_meta_free: unsafe extern "C" fn(PackageMetaHandle),
 
-    pub upac_backend_meta_get_name: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
-    pub upac_backend_meta_get_version: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
+    pub backend_meta_get_name: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
+    pub backend_meta_get_version: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
 
-    pub upac_backend_cleanup: unsafe extern "C" fn(CSlice),
+    pub backend_cleanup: unsafe extern "C" fn(CSlice),
 }
 
 impl Backend {
@@ -127,14 +127,14 @@ impl Backend {
         }
 
         Ok(Self {
-            upac_backend_prepare: sym!("upac_backend_prepare"),
+            backend_prepare: sym!("upac_backend_prepare"),
 
-            upac_backend_meta_free: sym!("upac_backend_meta_free"),
+            backend_meta_free: sym!("upac_backend_meta_free"),
 
-            upac_backend_meta_get_name: sym!("upac_backend_meta_get_name"),
-            upac_backend_meta_get_version: sym!("upac_backend_meta_get_version"),
+            backend_meta_get_name: sym!("upac_backend_meta_get_name"),
+            backend_meta_get_version: sym!("upac_backend_meta_get_version"),
 
-            upac_backend_cleanup: sym!("upac_backend_cleanup"),
+            backend_cleanup: sym!("upac_backend_cleanup"),
 
             _lib: lib,
         })
@@ -159,18 +159,22 @@ impl Backend {
             progress_ctx,
         };
 
-        let package_meta_handle: PackageMetaHandle = null_mut();
+        let mut package_meta_handle: PackageMetaHandle = null_mut();
         let mut package_temp_path = MaybeUninit::<CSlice>::uninit();
 
         let code = unsafe {
-            (self.upac_backend_prepare)(
+            (self.backend_prepare)(
                 &prepare_request_c,
-                package_meta_handle,
+                &mut package_meta_handle,
                 package_temp_path.as_mut_ptr(),
             )
         };
         if code != 0 {
             anyhow::bail!("Backend prepare failed with code {code}");
+        }
+
+        if package_meta_handle.is_null() {
+            anyhow::bail!("Backend returned null meta handle (code 0)");
         }
 
         let package_temp_path_c = unsafe { package_temp_path.assume_init() };

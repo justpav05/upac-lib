@@ -7,11 +7,12 @@ use indicatif::ProgressBar;
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::ptr::{null, null_mut};
 use std::sync::Arc;
 
 use crate::backends::{BackendKind, BackendLibGuard};
 use crate::config::Config;
-use crate::ffi::{CPackageEntry, CSlice};
+use crate::ffi::{CPackageEntry, CSlice, PackageMetaHandle};
 use crate::upac::{UpacLib, UpacLibGuard};
 
 use self::states::state_preparing_package;
@@ -39,9 +40,39 @@ enum State {
     Failed(String),
 }
 
-struct PreparedPackageInternal {
-    entry: CPackageEntry,
-    backend: Arc<BackendLibGuard>,
+pub struct PreparedPackage {
+    pub meta_handle: PackageMetaHandle,
+    pub temp_path_c: CSlice,
+    pub checksum: String,
+    pub backend: Arc<BackendLibGuard>,
+}
+
+impl PreparedPackage {
+    pub fn as_c_entry(&self) -> CPackageEntry {
+        CPackageEntry {
+            meta: self.meta_handle,
+            temp_path: self.temp_path_c,
+            checksum: CSlice::from_str(&self.checksum),
+        }
+    }
+}
+
+impl Drop for PreparedPackage {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.meta_handle.is_null() {
+                (self.backend.backend_meta_free)(self.meta_handle);
+                self.meta_handle = null_mut();
+            }
+            if !self.temp_path_c.ptr.is_null() {
+                (self.backend.backend_cleanup)(self.temp_path_c);
+                self.temp_path_c = CSlice {
+                    ptr: null(),
+                    len: 0,
+                };
+            }
+        }
+    }
 }
 
 // ── FSM machine ───────────────────────────────────────────────────────────────────────
@@ -50,7 +81,7 @@ struct InstallMachine {
     backend: Option<String>,
     checksums: Vec<String>,
 
-    prepared_packages: Vec<PreparedPackageInternal>,
+    prepared_packages: Vec<PreparedPackage>,
     progress_bar: Option<ProgressBar>,
 
     upac_lib: Option<UpacLibGuard>,
