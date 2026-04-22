@@ -70,13 +70,13 @@ pub const CPackageDiffKind = enum(u8) {
 };
 
 pub const CPackageEntry = extern struct {
-    meta: CPackageMeta,
+    meta: *CPackageMeta,
     temp_path: CSlice,
     checksum: CSlice,
 
     pub fn validate(self: CPackageEntry) !void {
+        if (@intFromPtr(self.meta) == 0) return error.InvalidEntry;
         try self.meta.validate();
-
         if (self.temp_path.isEmpty()) return error.InvalidEntry;
         if (self.checksum.isEmpty()) return error.InvalidEntry;
     }

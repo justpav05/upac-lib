@@ -4,6 +4,8 @@ const std = diff.std;
 const c_libs = diff.c_libs;
 const data = diff.data;
 
+const PackageMeta = diff.ffi.PackageMeta;
+
 const CSlice = diff.ffi.CSlice;
 const CPackageMeta = diff.ffi.CPackageMeta;
 const CPackageMetaArray = diff.ffi.CPackageMetaArray;
@@ -23,6 +25,11 @@ const Operation = diff.ffi.Operation;
 const fromError = diff.ffi.fromError;
 const onCancelSignal = diff.onCancelSignal;
 const signalLoopThread = diff.signalLoopThread;
+
+const PackageListInner = struct {
+    packages: []PackageMeta,
+    allocator: std.mem.Allocator,
+};
 
 pub export fn upac_diff_packages(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, out_c: *CPackageDiffArray) callconv(.C) i32 {
     validateDiffPackagesRequest(repo_path_c, from_ref_c, to_ref_c, out_c) catch |err| return @intFromEnum(fromError(err, Operation.diff));
@@ -175,7 +182,7 @@ pub export fn upac_diff_files_attributed_free(out_c: *CAttributedDiffArray) call
     diff.ffi.allocator().free(entries);
 }
 
-pub export fn upac_list_packages(repo_path_c: CSlice, branch_c: CSlice, db_path_c: CSlice, out_c: *CPackageMetaArray) callconv(.C) i32 {
+pub export fn upac_list_packages(repo_path_c: CSlice, branch_c: CSlice, db_path_c: CSlice, out_c: **anyopaque) callconv(.C) i32 {
     validateListPackagesRequest(repo_path_c, branch_c, db_path_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
 
     const cancellable = c_libs.g_cancellable_new();
@@ -212,31 +219,17 @@ pub export fn upac_list_packages(repo_path_c: CSlice, branch_c: CSlice, db_path_
 
     const packages = diff.listPackages(repo_path_c.toSlice(), branch_c.toSlice(), db_path_c.toSlice(), cancellable, diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.list));
 
-    const entries_c = diff.ffi.allocator().alloc(CPackageMeta, packages.len) catch {
+    const inner = diff.ffi.allocator().create(PackageListInner) catch {
         for (packages) |pkg| data.freePackageMeta(pkg, diff.ffi.allocator());
         diff.ffi.allocator().free(packages);
         return @intFromEnum(ErrorCode.out_of_memory);
     };
+    inner.* = .{
+        .packages = packages,
+        .allocator = diff.ffi.allocator(),
+    };
 
-    for (entries_c, 0..) |*entry_c, index| {
-        const pkg = packages[index];
-        entry_c.* = .{
-            .name = CSlice.fromSlice(pkg.name),
-            .version = CSlice.fromSlice(pkg.version),
-            .size = @intCast(pkg.size),
-            .architecture = CSlice.fromSlice(pkg.architecture),
-            .author = CSlice.fromSlice(pkg.author),
-            .description = CSlice.fromSlice(pkg.description),
-            .license = CSlice.fromSlice(pkg.license),
-            .url = CSlice.fromSlice(pkg.url),
-            .packager = CSlice.fromSlice(pkg.packager),
-            .installed_at = pkg.installed_at,
-            .checksum = CSlice.fromSlice(pkg.checksum),
-        };
-    }
-    diff.ffi.allocator().free(packages);
-
-    out_c.* = .{ .ptr = entries_c.ptr, .len = entries_c.len };
+    out_c.* = inner;
     return @intFromEnum(ErrorCode.ok);
 }
 
@@ -258,10 +251,66 @@ fn freeCPackageMeta(meta: *CPackageMeta, allocator: std.mem.Allocator) void {
     allocator.free(meta.checksum.toSlice());
 }
 
-pub export fn upac_packages_free(out_c: *CPackageMetaArray) callconv(.C) void {
-    const entries = out_c.toSlice();
-    for (entries) |*entry| freeCPackageMeta(entry, diff.ffi.allocator());
-    diff.ffi.allocator().free(entries);
+pub export fn upac_packages_free(handle: *anyopaque) callconv(.C) void {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    for (inner.packages) |package_meta| data.freePackageMeta(package_meta, inner.allocator);
+
+    inner.allocator.free(inner.packages);
+
+    inner.allocator.destroy(inner);
+}
+
+pub export fn upac_packages_count(handle: *anyopaque) callconv(.C) usize {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    return inner.packages.len;
+}
+
+pub export fn upac_package_get_name(handle: *anyopaque, index: usize) callconv(.C) CSlice {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
+    return CSlice.fromSlice(inner.packages[index].name);
+}
+
+pub export fn upac_package_get_version(handle: *anyopaque, index: usize) callconv(.C) CSlice {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
+    return CSlice.fromSlice(inner.packages[index].version);
+}
+
+pub export fn upac_package_get_size(handle: *anyopaque, index: usize) callconv(.C) u32 {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    if (index >= inner.packages.len) return 0;
+    return @intCast(inner.packages[index].size);
+}
+
+pub export fn upac_package_get_architecture(handle: *anyopaque, index: usize) callconv(.C) CSlice {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
+    return CSlice.fromSlice(inner.packages[index].architecture);
+}
+
+pub export fn upac_package_get_author(handle: *anyopaque, index: usize) callconv(.C) CSlice {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
+    return CSlice.fromSlice(inner.packages[index].author);
+}
+
+pub export fn upac_package_get_license(handle: *anyopaque, index: usize) callconv(.C) CSlice {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
+    return CSlice.fromSlice(inner.packages[index].license);
+}
+
+pub export fn upac_package_get_url(handle: *anyopaque, index: usize) callconv(.C) CSlice {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
+    return CSlice.fromSlice(inner.packages[index].url);
+}
+
+pub export fn upac_package_get_packager(handle: *anyopaque, index: usize) callconv(.C) CSlice {
+    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
+    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
+    return CSlice.fromSlice(inner.packages[index].packager);
 }
 
 pub export fn upac_list_commits(repo_path_c: CSlice, branch_c: CSlice, out_c: *CCommitArray) callconv(.C) i32 {
