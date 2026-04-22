@@ -38,14 +38,6 @@ pub const UninstallerError = error{
     MaxRetriesExceeded,
 };
 
-// ── Cancelled signal handler ─────────────────────────────────────────────────────────
-var cancel_requested = std.atomic.Value(bool).init(false);
-
-fn uninstallSignalHandler(sig: c_int) callconv(.C) void {
-    _ = sig;
-    cancel_requested.store(true, .release);
-}
-
 // ── UninstallerFSM data ─────────────────────────────────────────────────────────────────────
 // Set of input parameters: package name, paths to the repository and database, as well as the target branch for the commit
 pub const UninstallData = struct {
@@ -84,14 +76,19 @@ pub const UninstallerMachine = struct {
     package_checksum: ?[]const u8,
 
     stack: std.ArrayList(UninstallStateId),
+    cancellable: ?*c_libs.GCancellable = null,
     gerror: ?*c_libs.GError = null,
+    signal_loop: ?*c_libs.GMainLoop = null,
+    signal_thread: ?std.Thread = null,
     allocator: std.mem.Allocator,
 
     // Registers a transition to a new state, adding it to the stack for progress tracking and debugging
     pub fn enter(self: *UninstallerMachine, state_id: UninstallStateId) !void {
-        if (cancel_requested.load(.acquire)) {
-            stateFailed(self);
-            return UninstallerError.Cancelled;
+        if (self.cancellable) |cancellable| {
+            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
+                stateFailed(self);
+                return UninstallerError.Cancelled;
+            }
         }
 
         try self.stack.append(state_id);
@@ -106,6 +103,42 @@ pub const UninstallerMachine = struct {
     // Checks whether the attempt limit for the current uninstallation step has been exhausted
     pub fn exhausted(self: *UninstallerMachine) bool {
         return self.retries > self.data.max_retries;
+    }
+
+    pub fn retry(self: *UninstallerMachine, comptime state_fn: anytype) UninstallerError!void {
+        if (self.cancellable) |cancellable| {
+            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
+                stateFailed(self);
+                return UninstallerError.Cancelled;
+            }
+        }
+
+        if (self.exhausted()) {
+            stateFailed(self);
+            return UninstallerError.MaxRetriesExceeded;
+        }
+
+        if (self.gerror) |err| {
+            c_libs.g_error_free(err);
+            self.gerror = null;
+        }
+
+        self.retries += 1;
+
+        try self.resetTransaction();
+        return state_fn(self);
+    }
+
+    // Resets the transaction by aborting any ongoing transaction and preparing a new one. If the transaction cannot be reset, returns an error
+    pub fn resetTransaction(self: *UninstallerMachine) UninstallerError!void {
+        var gerror: ?*c_libs.GError = null;
+        defer if (gerror) |err| c_libs.g_error_free(err);
+
+        _ = c_libs.ostree_repo_abort_transaction(self.repo.?, null, null);
+        if (c_libs.ostree_repo_prepare_transaction(self.repo.?, null, null, &gerror) == 0) {
+            stateFailed(self);
+            return UninstallerError.RepoOpenFailed;
+        }
     }
 
     // Releases all resources: native Zig memory, the file hash map, and OSTree system C objects
@@ -123,30 +156,21 @@ pub const UninstallerMachine = struct {
         if (self.package_checksum) |checksum| self.allocator.free(checksum);
 
         if (self.gerror) |err| c_libs.g_error_free(err);
+        if (self.cancellable) |cancellable| c_libs.g_object_unref(cancellable);
+
+        if (self.signal_loop) |loop| {
+            c_libs.g_main_loop_quit(loop);
+        }
+        if (self.signal_thread) |tread| {
+            tread.join();
+            self.signal_thread = null;
+        }
+        if (self.signal_loop) |loop| {
+            c_libs.g_main_loop_unref(loop);
+            self.signal_loop = null;
+        }
+
         self.stack.deinit();
-    }
-
-    pub fn retry(self: *UninstallerMachine, comptime state_fn: anytype) UninstallerError!void {
-        if (self.exhausted()) {
-            stateFailed(self);
-            return UninstallerError.MaxRetriesExceeded;
-        }
-        self.retries += 1;
-        self.gerror = null;
-        try self.resetTransaction();
-        return state_fn(self);
-    }
-
-    // Resets the transaction by aborting any ongoing transaction and preparing a new one. If the transaction cannot be reset, returns an error
-    pub fn resetTransaction(self: *UninstallerMachine) UninstallerError!void {
-        var gerror: ?*c_libs.GError = null;
-        defer if (gerror) |err| c_libs.g_error_free(err);
-
-        _ = c_libs.ostree_repo_abort_transaction(self.repo.?, null, null);
-        if (c_libs.ostree_repo_prepare_transaction(self.repo.?, null, null, &gerror) == 0) {
-            stateFailed(self);
-            return UninstallerError.RepoOpenFailed;
-        }
     }
 
     // Reports an uninstallation progress event to the progress callback, if one is set
@@ -161,11 +185,11 @@ pub const UninstallerMachine = struct {
 
     // Entry point: initializes the uninstallation engine and launches the package removal process
     pub fn run(uninstall_data: UninstallData, allocator: std.mem.Allocator) !void {
-        cancel_requested.store(false, .release);
+        const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
+        const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
 
-        const sigaction = std.posix.Sigaction{ .handler = .{ .handler = uninstallSignalHandler }, .mask = std.posix.empty_sigset, .flags = 0 };
-        std.posix.sigaction(std.posix.SIG.INT, &sigaction, null) catch {};
-        std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null) catch {};
+        const signal_ctx = c_libs.g_main_context_new();
+        defer c_libs.g_main_context_unref(signal_ctx);
 
         var machine = UninstallerMachine{
             .data = uninstall_data,
@@ -179,10 +203,21 @@ pub const UninstallerMachine = struct {
             .package_checksum = null,
 
             .stack = std.ArrayList(UninstallStateId).init(allocator),
+            .cancellable = c_libs.g_cancellable_new() orelse return UninstallerError.OutOfMemory,
             .allocator = allocator,
         };
         defer machine.deinit();
-        errdefer stateFailed(&machine);
+
+        c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), machine.cancellable, null);
+        _ = c_libs.g_source_attach(sigint_src, signal_ctx);
+        c_libs.g_source_unref(sigint_src);
+
+        c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), machine.cancellable, null);
+        _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
+        c_libs.g_source_unref(sigterm_src);
+
+        machine.signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
+        machine.signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{machine.signal_loop.?}) catch null;
 
         try states.stateVerifying(&machine);
     }
@@ -233,4 +268,14 @@ pub fn removeFromMtree(repo: *c_libs.OstreeRepo, root_mtree: *c_libs.OstreeMutab
     defer allocator.free(file_name_c);
 
     if (c_libs.ostree_mutable_tree_remove(current_subtree, file_name_c.ptr, 0, &gerror) == 0) return UninstallerError.FileNotFound;
+}
+
+fn onCancelSignal(user_data: c_libs.gpointer) callconv(.C) c_libs.gboolean {
+    const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
+    c_libs.g_cancellable_cancel(cancellable);
+    return c_libs.G_SOURCE_REMOVE;
+}
+
+fn signalLoopThread(loop: *c_libs.GMainLoop) void {
+    c_libs.g_main_loop_run(loop);
 }

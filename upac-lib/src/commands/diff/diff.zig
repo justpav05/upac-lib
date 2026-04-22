@@ -23,11 +23,15 @@ pub usingnamespace @import("symbols.zig");
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 pub const DiffError = error{
+    PathInvalid,
     RepoOpenFailed,
     CommitNotFound,
     DiffFailed,
     StagingFailed,
     CleanupFailed,
+    AllocZPrintFailed,
+    FileNotFound,
+    Cancelled,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -40,4 +44,14 @@ pub fn resolveCommit(repo: *c_libs.OstreeRepo, commit_hash_c: [:0]const u8) !Dif
     if (c_libs.ostree_repo_resolve_rev(repo, commit_hash_c.ptr, 0, &resolved, &gerror) == 0) return DiffError.CommitNotFound;
 
     return resolved orelse DiffError.CommitNotFound;
+}
+
+pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.C) c_libs.gboolean {
+    const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
+    c_libs.g_cancellable_cancel(cancellable);
+    return c_libs.G_SOURCE_REMOVE;
+}
+
+pub fn signalLoopThread(loop: *c_libs.GMainLoop) void {
+    c_libs.g_main_loop_run(loop);
 }

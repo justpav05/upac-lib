@@ -59,8 +59,12 @@ pub fn state_fetching_commits(machine: &mut ListMachine) -> Result<()> {
                 PackageRow {
                     name: entry.name.as_str().to_owned(),
                     version: entry.version.as_str().to_owned(),
+                    size: entry.size as u32,
+                    architecture: entry.architecture.as_str().to_owned(),
                     author: entry.author.as_str().to_owned(),
                     license: entry.license.as_str().to_owned(),
+                    url: entry.url.as_str().to_owned(),
+                    packager: entry.packager.as_str().to_owned(),
                 }
             })
             .collect();
@@ -100,9 +104,13 @@ fn state_printing(machine: &mut ListMachine) -> Result<()> {
             for pkg in &machine.packages {
                 if machine.full {
                     println!("{}", pkg.name.as_str().bold());
-                    println!("  {} {}", "version:".dimmed(), pkg.version.as_str());
+                    println!("  {} {}", "version: ".dimmed(), pkg.version.as_str());
+                    println!("  {} {}", "size: ".dimmed(), pkg.size);
+                    println!("  {} {}", "arch: ".dimmed(), pkg.architecture.as_str());
                     println!("  {} {}", "author: ".dimmed(), pkg.author.as_str());
-                    println!("  {} {}", "license:".dimmed(), pkg.license.as_str());
+                    println!("  {} {}", "packager: ".dimmed(), pkg.packager.as_str());
+                    println!("  {} {}", "license: ".dimmed(), pkg.license.as_str());
+                    println!("  {} {}", "url: ".dimmed(), pkg.url.as_str());
                     println!();
                 } else {
                     println!(

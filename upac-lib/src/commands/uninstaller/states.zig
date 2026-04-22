@@ -64,14 +64,14 @@ fn stateOpenRepo(machine: *UninstallerMachine) UninstallerError!void {
 
     const repo = c_libs.ostree_repo_new(gfile);
 
-    if (c_libs.ostree_repo_open(repo, null, &machine.gerror) == 0) {
+    if (c_libs.ostree_repo_open(repo, machine.cancellable, &machine.gerror) == 0) {
         c_libs.g_object_unref(repo);
         return machine.retry(stateOpenRepo);
     }
 
     machine.repo = repo;
 
-    if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &machine.gerror) == 0) {
+    if (c_libs.ostree_repo_prepare_transaction(repo, null, machine.cancellable, &machine.gerror) == 0) {
         stateFailed(machine);
         return UninstallerError.RepoTransactionFailed;
     }
@@ -301,7 +301,7 @@ fn stateCommit(machine: *UninstallerMachine) UninstallerError!void {
 
     var out_g_file: ?*c_libs.GFile = null;
     defer if (out_g_file) |out_file| c_libs.g_object_unref(@ptrCast(out_file));
-    if (c_libs.ostree_repo_write_mtree(repo, mtree, &out_g_file, null, &machine.gerror) == 0) return machine.retry(stateCommit);
+    if (c_libs.ostree_repo_write_mtree(repo, mtree, &out_g_file, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
 
     var subject_buf = std.ArrayList(u8).init(machine.allocator);
     defer subject_buf.deinit();
@@ -317,11 +317,11 @@ fn stateCommit(machine: *UninstallerMachine) UninstallerError!void {
     defer machine.allocator.free(subject_c);
 
     var commit_checksum: ?[*:0]u8 = null;
-    if (c_libs.ostree_repo_write_commit(repo, if (machine.previous_commit_checksum) |checksum| checksum else null, subject_c.ptr, body_c.ptr, null, @as(?*c_libs.OstreeRepoFile, @ptrCast(out_g_file)), &commit_checksum, null, &machine.gerror) == 0) return machine.retry(stateCommit);
+    if (c_libs.ostree_repo_write_commit(repo, if (machine.previous_commit_checksum) |checksum| checksum else null, subject_c.ptr, body_c.ptr, null, @as(?*c_libs.OstreeRepoFile, @ptrCast(out_g_file)), &commit_checksum, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
 
     c_libs.ostree_repo_transaction_set_ref(repo, null, branch_c, commit_checksum);
 
-    if (c_libs.ostree_repo_commit_transaction(repo, null, null, &machine.gerror) == 0) return machine.retry(stateCommit);
+    if (c_libs.ostree_repo_commit_transaction(repo, null, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
 
     machine.commit_checksum = commit_checksum;
     machine.resetRetries();
@@ -345,7 +345,7 @@ fn stateCheckoutStaging(machine: *UninstallerMachine) UninstallerError!void {
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_NONE;
 
-    if (c_libs.ostree_repo_checkout_at(machine.repo.?, &options, std.c.AT.FDCWD, staging_path_c.ptr, machine.commit_checksum.?, null, &machine.gerror) == 0) {
+    if (c_libs.ostree_repo_checkout_at(machine.repo.?, &options, std.c.AT.FDCWD, staging_path_c.ptr, machine.commit_checksum.?, machine.cancellable, &machine.gerror) == 0) {
         machine.staging_path = null;
         stateFailed(machine);
         std.fs.deleteTreeAbsolute(staging_path_c) catch {

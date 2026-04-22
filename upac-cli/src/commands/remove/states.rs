@@ -17,7 +17,7 @@ pub fn state_validating(machine: &mut RemoveMachine) -> Result<()> {
 
     for name in &machine.package_names {
         if name.is_empty() {
-            anyhow::bail!("package name cannot be empty");
+            anyhow::bail!("Package name cannot be empty");
         }
         machine.progress_bar.as_ref().unwrap().println(format!(
             "{} removing {}",
@@ -42,14 +42,20 @@ fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
         machine.progress_bar.as_ref().unwrap() as *const ProgressBar as *mut c_void;
 
     let remove_request_c = CUninstallRequest {
+        struct_size: size_of::<CUninstallRequest>(),
+
         package_names: package_names_c.as_ptr(),
         package_names_len: package_names_c.len(),
         repo_path: CSlice::from_str(&machine.config.paths.repo_path),
         root_path: CSlice::from_str(&machine.config.paths.root_path),
         db_path: CSlice::from_str(&machine.config.paths.database_path),
+
         branch: CSlice::from_str(&machine.config.ostree.branch),
+        prefix_directory: CSlice::from_str(&machine.config.ostree.prefix_directory),
+
         on_progress: Some(on_remove_progress),
         progress_ctx: progress_bar_ptr,
+
         max_retries: machine.config.step_retries,
     };
 

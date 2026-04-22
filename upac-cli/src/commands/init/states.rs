@@ -7,7 +7,7 @@ use std::path::Path;
 
 use super::{Colorize, InitMachine, Result, State, UpacLib, UpacLibGuard};
 
-use crate::ffi::{CInitRequest, CSlice, CSystemPaths};
+use crate::ffi::{CInitRequest, CSlice, CSliceArray};
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_validating(machine: &mut InitMachine) -> Result<()> {
@@ -41,15 +41,17 @@ fn state_initializing(machine: &mut InitMachine) -> Result<()> {
 
     let progress_bar = spinner("Initializing system directories...");
 
-    let system_paths_c = CSystemPaths {
-        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
-        root_path: CSlice::from_str(&machine.config.paths.root_path),
-    };
-
     let branch_c = CSlice::from_str(&machine.config.ostree.branch);
 
     let init_request_c = CInitRequest {
-        system_paths: system_paths_c,
+        struct_size: size_of::<CInitRequest>(),
+
+        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
+        root_path: CSlice::from_str(&machine.config.paths.root_path),
+
+        prefix_directory: CSlice::from_str(&machine.config.ostree.prefix_directory),
+        addition_prefixes: CSliceArray::empty(),
+
         repo_mode: machine.repo_mode_c,
         branch: branch_c,
     };

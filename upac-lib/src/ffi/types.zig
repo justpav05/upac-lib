@@ -17,10 +17,13 @@ pub const Package = struct {
 pub const PackageMeta = struct {
     name: []const u8,
     version: []const u8,
+    size: usize,
+    architecture: []const u8,
     author: []const u8,
     description: []const u8,
     license: []const u8,
     url: []const u8,
+    packager: []const u8,
     installed_at: i64,
     checksum: []const u8,
 
@@ -28,10 +31,12 @@ pub const PackageMeta = struct {
     pub fn deinit(self: *PackageMeta, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.version);
+        allocator.free(self.architecture);
         allocator.free(self.author);
         allocator.free(self.description);
         allocator.free(self.license);
         allocator.free(self.url);
+        allocator.free(self.packager);
         allocator.free(self.checksum);
     }
 };

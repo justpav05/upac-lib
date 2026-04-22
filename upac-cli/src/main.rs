@@ -58,7 +58,7 @@ enum Command {
 // The main entry point, responsible for error output and the return code.
 fn main() {
     if let Err(err) = run() {
-        eprintln!("{} {err}", "error:".red().bold());
+        eprintln!("{} {err}", "Error:".red().bold());
         std::process::exit(1);
     }
 }
@@ -66,6 +66,12 @@ fn main() {
 // Core business logic: argument parsing, config loading, and command execution
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    ctrlc::set_handler(move || {
+        println!(
+            "\n{} Abort signal received, exiting...",
+            "!".yellow().bold()
+        );
+    })?;
 
     let default_config_path =
         check_default_config_path().ok_or(anyhow::anyhow!("no default config path found"))?;

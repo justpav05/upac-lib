@@ -5,9 +5,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const ostree_inc_path = b.path("../ostree/src/libostree");
-    const ostree_lib_path = b.path("../ostree/.libs");
-
     const strip = b.option(bool, "strip", "Strip debug symbols") orelse false;
     const stack_check = b.option(bool, "stack-check", "Check for stack overflows") orelse false;
 
@@ -21,26 +18,10 @@ pub fn build(b: *std.Build) void {
     // ── File FSM ──────────────────────────────────────────────────────────────
     const upac_file = b.addModule("upac-file", .{ .root_source_file = b.path("src/file/file.zig"), .target = target, .optimize = optimize });
 
-    upac_file.addIncludePath(ostree_inc_path);
-    upac_file.addLibraryPath(ostree_lib_path);
-
-    upac_file.linkSystemLibrary("ostree-1", .{
-        .preferred_link_mode = .static,
-        .search_strategy = .no_fallback,
-    });
-
-    upac_file.linkSystemLibrary("glib-2.0", .{
-        .preferred_link_mode = .dynamic,
-        .search_strategy = .no_fallback,
-    });
-    upac_file.linkSystemLibrary("gio-2.0", .{
-        .preferred_link_mode = .dynamic,
-        .search_strategy = .no_fallback,
-    });
-    upac_file.linkSystemLibrary("gobject-2.0", .{
-        .preferred_link_mode = .dynamic,
-        .search_strategy = .no_fallback,
-    });
+    upac_file.linkSystemLibrary("ostree-1", .{});
+    upac_file.linkSystemLibrary("glib-2.0", .{});
+    upac_file.linkSystemLibrary("gio-2.0", .{});
+    upac_file.linkSystemLibrary("gobject-2.0", .{});
 
     // ── Installer ─────────────────────────────────────────────────────────────
     const upac_installer = b.addModule("upac-installer", .{ .root_source_file = b.path("src/commands/installer/installer.zig"), .target = target, .optimize = optimize });
@@ -74,6 +55,11 @@ pub fn build(b: *std.Build) void {
     const shared_lib = b.addSharedLibrary(.{ .name = "upac", .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
 
     shared_lib.linkLibC();
+
+    shared_lib.linkSystemLibrary("ostree-1");
+    shared_lib.linkSystemLibrary("glib-2.0");
+    shared_lib.linkSystemLibrary("gio-2.0");
+    shared_lib.linkSystemLibrary("gobject-2.0");
 
     shared_lib.root_module.addImport("upac-ffi", upac_ffi);
     shared_lib.root_module.addImport("upac-data", upac_data);

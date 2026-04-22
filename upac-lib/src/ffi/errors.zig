@@ -113,6 +113,7 @@ pub fn fromError(err: anyerror, operation: Operation) ErrorCode {
             else => null,
         },
         .rollback => switch (err) {
+            error.PathNotFound => .invalid_path,
             error.RepoOpenFailed => .ostree_repo_open_failed,
             error.RepoTransactionFailed => .ostree_repo_transaction_failed,
             error.RollbackFailed => .ostree_rollback,
@@ -124,11 +125,15 @@ pub fn fromError(err: anyerror, operation: Operation) ErrorCode {
             else => null,
         },
         .diff => switch (err) {
+            error.PathInvalid => .invalid_path,
             error.RepoOpenFailed => .ostree_repo_open_failed,
             error.CommitNotFound => .ostree_commit_not_found,
             error.DiffFailed => .ostree_diff,
             error.StagingFailed => .ostree_staging_failed,
             error.CleanupFailed => .ostree_cleanup_failed,
+            error.FileNotFound => .file_not_found,
+            error.AllocZPrintFailed => .out_of_memory,
+            error.Cancelled => .cancelled,
             else => null,
         },
         else => null,

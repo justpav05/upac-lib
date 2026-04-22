@@ -42,21 +42,8 @@ pub export fn upac_install(install_request_c: CInstallRequest) callconv(.C) i32 
 
 fn onInstallProgress(event: InstallProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.C) void {
     _ = ctx;
-    const package_name = pkg.toSlice();
-    switch (event) {
-        .Verifying => std.debug.print("→ verifying {s}...\n", .{package_name}),
-        .CheckSpace => std.debug.print("→ checking space for {s}...\n", .{package_name}),
-        .OpeningRepo => std.debug.print("→ opening repo...\n", .{}),
-        .CheckingInstalled => std.debug.print("→ checking if {s} is installed...\n", .{package_name}),
-        .WritingDatabase => std.debug.print("→ writing database for {s}...\n", .{package_name}),
-        .ProcessingFiles => std.debug.print("→ processing files for {s}...\n", .{package_name}),
-        .Committing => std.debug.print("→ committing {s}...\n", .{package_name}),
-        .Checkout => std.debug.print("→ checking out {s}...\n", .{package_name}),
-
-        .Done => std.debug.print("✓ {s} installed\n", .{package_name}),
-        .Failed => std.debug.print("✗ {s} failed\n", .{package_name}),
-        else => {},
-    }
+    _ = event;
+    _ = pkg;
 }
 
 // An internal helper function that converts the C struct CPackageMeta to native PackageMeta, translating CSlices into regular slices ([]const u8)
@@ -64,10 +51,13 @@ fn toMeta(c_package_meta: CPackageMeta) PackageMeta {
     return .{
         .name = c_package_meta.name.toSlice(),
         .version = c_package_meta.version.toSlice(),
+        .size = @intCast(c_package_meta.size),
+        .architecture = c_package_meta.architecture.toSlice(),
         .author = c_package_meta.author.toSlice(),
         .description = c_package_meta.description.toSlice(),
         .license = c_package_meta.license.toSlice(),
         .url = c_package_meta.url.toSlice(),
+        .packager = c_package_meta.packager.toSlice(),
         .installed_at = c_package_meta.installed_at,
         .checksum = c_package_meta.checksum.toSlice(),
     };
@@ -78,7 +68,7 @@ fn collectInstallEntries(c_install_request: CInstallRequest, allocator: std.mem.
         return error.InvalidEntry;
     }
 
-    const pkgs_ptr = c_install_request.packages orelse return &[_]installer.InstallEntry{};
+    const pkgs_ptr = c_install_request.packages orelse return error.InvalidEntry;
 
     const packages_entrys_c = pkgs_ptr[0..c_install_request.packages_count];
 

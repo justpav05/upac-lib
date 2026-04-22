@@ -44,14 +44,6 @@ pub const InstallerError = error{
     MaxRetriesExceeded,
 };
 
-// ── Cancelled signal handler ─────────────────────────────────────────────────────────
-var cancel_requested = std.atomic.Value(bool).init(false);
-
-fn installSignalHandler(sig: c_int) callconv(.C) void {
-    _ = sig;
-    cancel_requested.store(true, .release);
-}
-
 pub const InstallEntry = struct {
     package: Package,
     temp_path: []const u8,
@@ -93,16 +85,20 @@ pub const InstallerMachine = struct {
     branch_c: ?[*:0]const u8 = null,
 
     stack: std.ArrayList(InstallStateId),
+    cancellable: ?*c_libs.GCancellable = null,
     gerror: ?*c_libs.GError = null,
+    signal_loop: ?*c_libs.GMainLoop = null,
+    signal_thread: ?std.Thread = null,
     allocator: std.mem.Allocator,
 
     // Registers a transition to a new state, saving it to the stack. This allows for the reconstruction of the sequence of actions during debugging
     pub fn enter(self: *InstallerMachine, state_id: InstallStateId) !void {
-        if (cancel_requested.load(.acquire)) {
-            stateFailed(self);
-            return InstallerError.Cancelled;
+        if (self.cancellable) |cancellable| {
+            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
+                stateFailed(self);
+                return InstallerError.Cancelled;
+            }
         }
-
         try self.stack.append(state_id);
         self.report(state_id);
     }
@@ -117,28 +113,26 @@ pub const InstallerMachine = struct {
         return self.retries > self.data.max_retries;
     }
 
-    // Correct memory deallocation function
-    pub fn deinit(self: *InstallerMachine) void {
-        if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
-        if (self.repo) |repo| c_libs.g_object_unref(repo);
-
-        if (self.staging_path) |ptr| self.allocator.free(ptr);
-        if (self.commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
-        if (self.previous_commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
-
-        if (self.branch_c) |ptr| self.allocator.free(std.mem.span(ptr));
-        if (self.gerror) |ptr| c_libs.g_error_free(@ptrCast(ptr));
-
-        self.stack.deinit();
-    }
-
     pub fn retry(self: *InstallerMachine, comptime state_fn: anytype) InstallerError!void {
+        if (self.cancellable) |cancellable| {
+            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
+                stateFailed(self);
+                return InstallerError.Cancelled;
+            }
+        }
+
         if (self.exhausted()) {
             stateFailed(self);
             return InstallerError.MaxRetriesExceeded;
         }
+
+        if (self.gerror) |err| {
+            c_libs.g_error_free(err);
+            self.gerror = null;
+        }
+
         self.retries += 1;
-        self.gerror = null;
+
         try self.resetTransaction();
         return state_fn(self);
     }
@@ -150,6 +144,34 @@ pub const InstallerMachine = struct {
 
         _ = c_libs.ostree_repo_abort_transaction(self.repo.?, null, null);
         if (c_libs.ostree_repo_prepare_transaction(self.repo.?, null, null, &gerror) == 0) return InstallerError.RepoOpenFailed;
+    }
+
+    // Correct memory deallocation function
+    pub fn deinit(self: *InstallerMachine) void {
+        if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
+        if (self.repo) |repo| c_libs.g_object_unref(repo);
+
+        if (self.staging_path) |ptr| self.allocator.free(ptr);
+        if (self.commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
+        if (self.previous_commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
+
+        if (self.branch_c) |ptr| self.allocator.free(std.mem.span(ptr));
+        if (self.gerror) |ptr| c_libs.g_error_free(@ptrCast(ptr));
+        if (self.cancellable) |cancellable| c_libs.g_object_unref(cancellable);
+
+        if (self.signal_loop) |loop| {
+            c_libs.g_main_loop_quit(loop);
+        }
+        if (self.signal_thread) |tread| {
+            tread.join();
+            self.signal_thread = null;
+        }
+        if (self.signal_loop) |loop| {
+            c_libs.g_main_loop_unref(loop);
+            self.signal_loop = null;
+        }
+
+        self.stack.deinit();
     }
 
     // Reports an installation progress event to the progress callback, if one is set
@@ -164,11 +186,11 @@ pub const InstallerMachine = struct {
 
     // Initializes the machine, creates the state stack, and launches the first stage—verification
     pub fn run(install_data: InstallData, allocator: std.mem.Allocator) InstallerError!void {
-        cancel_requested.store(false, .release);
+        const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
+        const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
 
-        const sigaction = std.posix.Sigaction{ .handler = .{ .handler = installSignalHandler }, .mask = std.posix.empty_sigset, .flags = 0 };
-        std.posix.sigaction(std.posix.SIG.INT, &sigaction, null) catch {};
-        std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null) catch {};
+        const signal_ctx = c_libs.g_main_context_new();
+        defer c_libs.g_main_context_unref(signal_ctx);
 
         var machine = InstallerMachine{
             .data = install_data,
@@ -179,10 +201,21 @@ pub const InstallerMachine = struct {
             .mtree = null,
 
             .stack = std.ArrayList(InstallStateId).init(allocator),
+            .cancellable = c_libs.g_cancellable_new() orelse return InstallerError.OutOfMemory,
             .allocator = allocator,
         };
         defer machine.deinit();
-        errdefer stateFailed(&machine);
+
+        c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), machine.cancellable, null);
+        _ = c_libs.g_source_attach(sigint_src, signal_ctx);
+        c_libs.g_source_unref(sigint_src);
+
+        c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), machine.cancellable, null);
+        _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
+        c_libs.g_source_unref(sigterm_src);
+
+        machine.signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
+        machine.signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{machine.signal_loop.?}) catch null;
 
         try states.stateVerifying(&machine);
     }
@@ -212,7 +245,7 @@ pub fn collectFileChecksums(machine: *InstallerMachine, dir_path: []const u8, pr
                 defer c_libs.g_object_unref(@ptrCast(gfile));
 
                 var raw_checksum_bin: ?[*:0]u8 = null;
-                if (c_libs.ostree_checksum_file(gfile, c_libs.OSTREE_OBJECT_TYPE_FILE, &raw_checksum_bin, null, &gerror) == 0) return InstallerError.CollectFileChecksumsFailed;
+                if (c_libs.ostree_checksum_file(gfile, c_libs.OSTREE_OBJECT_TYPE_FILE, &raw_checksum_bin, machine.cancellable, &gerror) == 0) return InstallerError.CollectFileChecksumsFailed;
                 defer c_libs.g_free(@ptrCast(raw_checksum_bin));
 
                 var hex_checksum_buf: [65]u8 = undefined;
@@ -249,4 +282,14 @@ pub fn dirSize(allocator: std.mem.Allocator, path: []const u8) !u64 {
         }
     }
     return total_size;
+}
+
+fn onCancelSignal(user_data: c_libs.gpointer) callconv(.C) c_libs.gboolean {
+    const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
+    c_libs.g_cancellable_cancel(cancellable);
+    return c_libs.G_SOURCE_REMOVE;
+}
+
+fn signalLoopThread(loop: *c_libs.GMainLoop) void {
+    c_libs.g_main_loop_run(loop);
 }

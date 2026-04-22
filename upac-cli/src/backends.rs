@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use indicatif::ProgressBar;
 
 use std::ffi::c_void;
+use std::mem::MaybeUninit;
 
 use libloading::{Library, Symbol};
 
@@ -26,10 +27,13 @@ pub enum BackendProgressEvent {
 pub struct PackageMeta {
     pub name: String,
     pub version: String,
+    pub size: u32,
+    pub architecture: String,
     pub author: String,
     pub description: String,
     pub license: String,
     pub url: String,
+    pub packager: String,
     pub installed_at: i64,
     pub checksum: String,
 }
@@ -40,12 +44,16 @@ impl PackageMeta {
         CPackageMeta {
             name: CSlice::from_str(&self.name),
             version: CSlice::from_str(&self.version),
+            size: self.size,
+            architecture: CSlice::from_str(&self.architecture),
             author: CSlice::from_str(&self.author),
             description: CSlice::from_str(&self.description),
             license: CSlice::from_str(&self.license),
             url: CSlice::from_str(&self.url),
+            packager: CSlice::from_str(&self.packager),
             installed_at: self.installed_at,
             checksum: CSlice::from_str(&self.checksum),
+            _padding: 0,
         }
     }
 }
@@ -80,9 +88,9 @@ impl BackendKind {
     // Parses a string flag (e.g., "arch", "rpm", "deb") into a BackendKind
     pub fn from_flag(string: &str) -> Result<Self> {
         match string {
-            "arch" | "alpm" => Ok(Self::Alpm),
-            "rpm" | "fedora" | "opensuse" => Ok(Self::Rpm),
-            "deb" | "debian" => Ok(Self::Deb),
+            "arch" => Ok(Self::Alpm),
+            "rpm" => Ok(Self::Rpm),
+            "deb" => Ok(Self::Deb),
             _ => bail!("unknown backend: '{string}'. Available: alpm, rpm, deb"),
         }
     }
@@ -101,11 +109,14 @@ impl BackendKind {
 // Represents the request struct for the backend's prepare function
 #[repr(C)]
 pub struct CPrepareRequest {
-    pkg_path: CSlice,
-    out_path: CSlice,
-    checksum: CSlice,
-    on_progress: Option<unsafe extern "C" fn(BackendProgressEvent, CSlice, *mut c_void)>,
-    progress_ctx: *mut c_void,
+    pub struct_size: usize,
+
+    pub pkg_path: CSlice,
+    pub temp_dir: CSlice,
+    pub checksum: CSlice,
+
+    pub on_progress: Option<unsafe extern "C" fn(BackendProgressEvent, CSlice, *mut c_void)>,
+    pub progress_ctx: *mut c_void,
 }
 
 // A wrapper for dynamically loading libupac.so and mapping its C functions to Rust types
@@ -113,8 +124,9 @@ pub struct Backend {
     _lib: Library,
 
     pub upac_backend_prepare:
-        unsafe extern "C" fn(*const CPrepareRequest, *mut CPackageMeta) -> i32,
+        unsafe extern "C" fn(*const CPrepareRequest, *mut CPackageMeta, *mut CSlice) -> i32,
     pub upac_backend_meta_free: unsafe extern "C" fn(*mut CPackageMeta),
+    pub upac_backend_cleanup: unsafe extern "C" fn(CSlice),
 }
 
 impl Backend {
@@ -137,6 +149,7 @@ impl Backend {
         Ok(Self {
             upac_backend_prepare: sym!("upac_backend_prepare"),
             upac_backend_meta_free: sym!("upac_backend_meta_free"),
+            upac_backend_cleanup: sym!("upac_backend_cleanup"),
 
             _lib: lib,
         })
@@ -146,46 +159,57 @@ impl Backend {
     pub fn meta_prepare(
         &self,
         pkg_path: &str,
-        out_path: &str,
+        temp_dir: &str,
         checksum: &str,
         on_progress: Option<unsafe extern "C" fn(BackendProgressEvent, CSlice, *mut c_void)>,
         progress_ctx: *mut c_void,
-    ) -> Result<PackageMeta> {
-        let prepare_request_c = CPrepareRequest {
+    ) -> Result<(PackageMeta, String)> {
+        let req = CPrepareRequest {
+            struct_size: std::mem::size_of::<CPrepareRequest>(),
             pkg_path: CSlice::from_str(pkg_path),
-            out_path: CSlice::from_str(out_path),
+            temp_dir: CSlice::from_str(temp_dir),
             checksum: CSlice::from_str(checksum),
             on_progress,
             progress_ctx,
         };
 
-        let mut meta = std::mem::MaybeUninit::<CPackageMeta>::uninit();
+        let mut package_meta_out = MaybeUninit::<CPackageMeta>::uninit();
+        let mut temp_path_out = MaybeUninit::<CSlice>::uninit();
 
-        let return_code =
-            unsafe { (self.upac_backend_prepare)(&prepare_request_c, meta.as_mut_ptr()) };
-
-        if return_code != 0 {
-            bail!("backend prepare failed with code {return_code}");
+        let code = unsafe {
+            (self.upac_backend_prepare)(
+                &req,
+                package_meta_out.as_mut_ptr(),
+                temp_path_out.as_mut_ptr(),
+            )
+        };
+        if code != 0 {
+            anyhow::bail!("Backend prepare failed with code {code}");
         }
 
-        let mut package_meta_c = unsafe { meta.assume_init() };
+        let mut package_meta_c = unsafe { package_meta_out.assume_init() };
+        let package_temp_path_c = unsafe { temp_path_out.assume_init() };
 
-        let package_meta_result = unsafe {
+        let package_meta = unsafe {
             PackageMeta {
                 name: package_meta_c.name.as_str().to_owned(),
                 version: package_meta_c.version.as_str().to_owned(),
+                size: package_meta_c.size as u32,
+                architecture: package_meta_c.architecture.as_str().to_owned(),
                 author: package_meta_c.author.as_str().to_owned(),
                 description: package_meta_c.description.as_str().to_owned(),
                 license: package_meta_c.license.as_str().to_owned(),
                 url: package_meta_c.url.as_str().to_owned(),
+                packager: package_meta_c.packager.as_str().to_owned(),
                 installed_at: package_meta_c.installed_at,
                 checksum: package_meta_c.checksum.as_str().to_owned(),
             }
         };
+        let package_temp_path = unsafe { package_temp_path_c.as_str().to_owned() };
 
         unsafe { (self.upac_backend_meta_free)(&mut package_meta_c) };
 
-        Ok(package_meta_result)
+        Ok((package_meta, package_temp_path))
     }
 }
 
@@ -202,15 +226,15 @@ pub unsafe extern "C" fn on_backend_progress(
 
     match event {
         BackendProgressEvent::Verifying => {
-            progress_bar.set_message(format!("verifying {}...", detail))
+            progress_bar.set_message(format!("Verifying {}...", detail))
         }
         BackendProgressEvent::Extracting => {
-            progress_bar.set_message(format!("extracting {}...", detail))
+            progress_bar.set_message(format!("Extracting {}...", detail))
         }
-        BackendProgressEvent::ReadingMeta => progress_bar.set_message("reading metadata..."),
+        BackendProgressEvent::ReadingMeta => progress_bar.set_message("Reading metadata..."),
         BackendProgressEvent::SpecialStep => progress_bar.set_message(detail.to_string()),
-        BackendProgressEvent::Ready => progress_bar.set_message("ready"),
-        BackendProgressEvent::Failed => progress_bar.set_message("failed"),
+        BackendProgressEvent::Ready => progress_bar.set_message("Ready"),
+        BackendProgressEvent::Failed => progress_bar.set_message("Failed"),
     }
 }
 

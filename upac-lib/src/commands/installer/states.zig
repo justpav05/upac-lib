@@ -105,14 +105,14 @@ fn stateOpenRepo(machine: *InstallerMachine) InstallerError!void {
 
     const repo = c_libs.ostree_repo_new(gfile);
 
-    if (c_libs.ostree_repo_open(repo, null, &machine.gerror) == 0) {
+    if (c_libs.ostree_repo_open(repo, machine.cancellable, &machine.gerror) == 0) {
         c_libs.g_object_unref(repo);
         return machine.retry(stateOpenRepo);
     }
 
     machine.repo = repo;
 
-    if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &machine.gerror) == 0) {
+    if (c_libs.ostree_repo_prepare_transaction(repo, null, machine.cancellable, &machine.gerror) == 0) {
         stateFailed(machine);
         return InstallerError.RepoTransactionFailed;
     }
@@ -232,7 +232,7 @@ fn stateProcessDbFiles(machine: *InstallerMachine) InstallerError!void {
     const temp_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{current_install_entry.temp_path});
     defer machine.allocator.free(temp_path_c);
 
-    if (c_libs.ostree_repo_write_dfd_to_mtree(machine.repo.?, std.c.AT.FDCWD, temp_path_c.ptr, machine.mtree.?, null, null, &machine.gerror) == 0) return machine.retry(stateProcessDbFiles);
+    if (c_libs.ostree_repo_write_dfd_to_mtree(machine.repo.?, std.c.AT.FDCWD, temp_path_c.ptr, machine.mtree.?, null, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateProcessDbFiles);
 
     machine.current_package_index += 1;
     if (machine.current_package_index < machine.data.packages.len) {
@@ -295,7 +295,7 @@ fn stateCommit(machine: *InstallerMachine) InstallerError!void {
     var mtree_root: ?*c_libs.GFile = null;
     defer if (mtree_root) |root| c_libs.g_object_unref(root);
 
-    if (c_libs.ostree_repo_write_mtree(repo, mtree, &mtree_root, null, &machine.gerror) == 0) return machine.retry(stateCommit);
+    if (c_libs.ostree_repo_write_mtree(repo, mtree, &mtree_root, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
 
     var subject_buf = std.ArrayList(u8).init(machine.allocator);
     defer subject_buf.deinit();
@@ -309,11 +309,11 @@ fn stateCommit(machine: *InstallerMachine) InstallerError!void {
     const subject_c = try machine.allocator.dupeZ(u8, subject_buf.items);
     defer machine.allocator.free(subject_c);
 
-    if (c_libs.ostree_repo_write_commit(repo, if (machine.previous_commit_checksum) |checksum| checksum else null, subject_c.ptr, body_c.ptr, null, @ptrCast(mtree_root), @ptrCast(&machine.commit_checksum), null, &machine.gerror) == 0) return machine.retry(stateCommit);
+    if (c_libs.ostree_repo_write_commit(repo, if (machine.previous_commit_checksum) |checksum| checksum else null, subject_c.ptr, body_c.ptr, null, @ptrCast(mtree_root), @ptrCast(&machine.commit_checksum), machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
 
     c_libs.ostree_repo_transaction_set_ref(repo, null, branch_c, machine.commit_checksum.?);
 
-    if (c_libs.ostree_repo_commit_transaction(repo, null, null, &machine.gerror) == 0) return machine.retry(stateCommit);
+    if (c_libs.ostree_repo_commit_transaction(repo, null, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
 
     machine.resetRetries();
     return stateCheckout(machine);
@@ -326,7 +326,7 @@ fn stateCheckout(machine: *InstallerMachine) InstallerError!void {
     const repo = machine.repo orelse return stateFailed(machine);
 
     const timestamp = std.time.milliTimestamp();
-    const staging_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}-staging-{d}", .{ machine.data.root_path, timestamp }) catch {
+    const staging_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/{s}-installing-{d}", .{ machine.data.root_path, machine.data.prefix_directory, timestamp }) catch {
         stateFailed(machine);
         return InstallerError.AllocZFailed;
     };
@@ -336,7 +336,7 @@ fn stateCheckout(machine: *InstallerMachine) InstallerError!void {
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, staging_path_c.ptr, machine.commit_checksum.?, null, &machine.gerror) == 0) {
+    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, staging_path_c.ptr, machine.commit_checksum.?, machine.cancellable, &machine.gerror) == 0) {
         std.fs.deleteTreeAbsolute(staging_path_c) catch {
             stateFailed(machine);
             return InstallerError.CheckoutFailed;
@@ -364,13 +364,13 @@ fn stateAtomicSwap(machine: *InstallerMachine) InstallerError!void {
         return InstallerError.CheckoutFailed;
     };
 
-    const staging_usr_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/usr", .{staging_path}) catch {
+    const staging_usr_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/{s}", .{ staging_path, machine.data.prefix_directory }) catch {
         stateFailed(machine);
         return InstallerError.AllocZFailed;
     };
     defer machine.allocator.free(staging_usr_path_c);
 
-    const root_usr_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/usr", .{machine.data.root_path}) catch {
+    const root_usr_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/{s}", .{ machine.data.root_path, machine.data.prefix_directory }) catch {
         stateFailed(machine);
         return InstallerError.AllocZFailed;
     };

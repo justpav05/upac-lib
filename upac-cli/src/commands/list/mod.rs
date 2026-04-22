@@ -14,8 +14,12 @@ mod states;
 struct PackageRow {
     name: String,
     version: String,
+    size: u32,
+    architecture: String,
     author: String,
     license: String,
+    url: String,
+    packager: String,
 }
 
 struct CommitRow {

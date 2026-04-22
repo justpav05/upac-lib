@@ -3,9 +3,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use sha2::{Digest, Sha256};
 
+use std::env;
 use std::fs;
 use std::io::Read;
-use std::process;
 use std::time::Duration;
 
 use super::{
@@ -32,7 +32,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             BackendKind::from_flag(flag)?
         } else {
             BackendKind::detect(file).ok_or_else(|| {
-                anyhow::anyhow!("cannot detect backend for '{file}'. Use --backend to specify one")
+                anyhow::anyhow!("Cannot detect backend for '{file}'. Use --backend to specify one")
             })?
         };
 
@@ -45,10 +45,10 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             kind
         ));
 
-        let tmp_string_path = format!("/tmp/upac_install_{}_{}", process::id(), index);
-        fs::remove_dir_all(&tmp_string_path).ok();
-        fs::create_dir_all(&tmp_string_path)?;
-        machine.tmp_dirs.push(tmp_string_path.clone());
+        let tmp_string_path = env::temp_dir()
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid temp dir path"))?
+            .to_owned();
 
         let abs_file = fs::canonicalize(file)
             .map_err(|err| anyhow::anyhow!("cannot resolve path '{file}': {err}"))?;
@@ -63,7 +63,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             machine.checksums[index].clone()
         };
 
-        let package_meta = machine
+        let (package_meta, actual_temp_path) = machine
             .backend_lib
             .as_ref()
             .unwrap()
@@ -81,7 +81,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 
         machine.prepared_packages.push(PreparedPackage {
             meta: package_meta,
-            temp_path: tmp_string_path,
+            temp_path: actual_temp_path,
             checksum,
         });
     }
@@ -91,11 +91,6 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 
 fn state_installing(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::Installing);
-    machine
-        .progress_bar
-        .as_ref()
-        .unwrap()
-        .set_message("Installing...");
 
     let entries_c: Vec<CPackageEntry> = machine
         .prepared_packages
@@ -111,15 +106,21 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         machine.progress_bar.as_ref().unwrap() as *const ProgressBar as *mut c_void;
 
     let install_request_c = CInstallRequest {
+        struct_size: size_of::<CInstallRequest>(),
+
         packages: entries_c.as_ptr(),
-        packages_len: entries_c.len(),
+        packages_count: entries_c.len(),
 
         repo_path: CSlice::from_str(&machine.config.paths.repo_path),
         root_path: CSlice::from_str(&machine.config.paths.root_path),
         db_path: CSlice::from_str(&machine.config.paths.database_path),
+
         branch: CSlice::from_str(&machine.config.ostree.branch),
+        prefix_directory: CSlice::from_str(&machine.config.ostree.prefix_directory),
+
         on_progress: Some(on_install_progress),
         progress_ctx: progress_bar_ptr,
+
         max_retries: machine.config.step_retries,
     };
 

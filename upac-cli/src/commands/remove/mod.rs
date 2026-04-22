@@ -18,6 +18,7 @@ mod states;
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
 #[derive(clap::Args)]
 pub struct RemoveArgs {
+    #[arg(required = true, num_args = 1..)]
     pub name: Vec<String>,
 }
 
@@ -28,19 +29,6 @@ enum State {
     Uninstalling,
     Done,
     Failed(String),
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstallProgressEvent {
-    Verifying = 0,
-    OpeningRepo = 1,
-    CheckingInstalled = 2,
-    RemovingFromDatabase = 3,
-    ProcessingFiles = 4,
-    Committing = 5,
-    Ready = 6,
-    Failed = 7,
 }
 
 // ── FSM machine ────────────────────────────────────────────────────────────────────────
@@ -90,34 +78,27 @@ pub fn run(config: Config, args: RemoveArgs) -> Result<()> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-pub unsafe extern "C" fn on_remove_progress(event_raw: u8, package_name: CSlice, ctx: *mut c_void) {
+pub unsafe extern "C" fn on_remove_progress(event: u8, package_name: CSlice, ctx: *mut c_void) {
     let progress_bar = &*(ctx as *const ProgressBar);
-    let event = unsafe { std::mem::transmute::<u8, InstallProgressEvent>(event_raw) };
 
     let name = unsafe { package_name.as_str() };
 
     match event {
-        InstallProgressEvent::Verifying => progress_bar.set_message(format!("verifying {name}...")),
-        InstallProgressEvent::OpeningRepo => {
-            progress_bar.set_message("opening repo...".to_string())
-        }
-        InstallProgressEvent::CheckingInstalled => {
-            progress_bar.set_message(format!("checking if {name} is installed..."))
-        }
-        InstallProgressEvent::RemovingFromDatabase => {
-            progress_bar.set_message(format!("removing database for {name}..."))
-        }
-        InstallProgressEvent::ProcessingFiles => {
-            progress_bar.set_message(format!("processing files for {name}..."))
-        }
-        InstallProgressEvent::Committing => {
-            progress_bar.set_message(format!("committing {name}..."))
-        }
-        InstallProgressEvent::Ready => {
-            progress_bar.println(format!("{} {name}done", "✓".green().bold()))
-        }
-        InstallProgressEvent::Failed => {
-            progress_bar.println(format!("{} {name}failed", "✗".red().bold()))
+        0 => progress_bar.set_message(format!("Verifying {name}...")),
+        1 => progress_bar.set_message("Opening repo...".to_string()),
+        2 => progress_bar.set_message(format!("Checking {name} installed...")),
+        3 => {}
+        4 => progress_bar.set_message(format!("Removing files for {name}...")),
+        5 => progress_bar.set_message(format!("Removing database for {name}...")),
+        6 => progress_bar.set_message(format!("Committing {name}...")),
+        7 => {}
+        8 => {}
+        9 => {}
+        10 => progress_bar.println(format!("{} Done", "✓".green().bold())),
+        11 => progress_bar.println(format!("{} Failed", "✗".red().bold())),
+        _ => {
+            eprintln!("Unknow event: {}", event);
+            return;
         }
     }
 }

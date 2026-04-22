@@ -38,10 +38,13 @@ fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
     machine.enter(State::RollingBack);
 
     let rollback_request_c = CRollbackRequest {
+        struct_size: std::mem::size_of::<CRollbackRequest>(),
+
         root_path: CSlice::from_str(&machine.config.paths.root_path),
         repo_path: CSlice::from_str(&machine.config.paths.repo_path),
 
         branch: CSlice::from_str(&machine.config.ostree.branch),
+        prefix_directory: CSlice::from_str(&machine.config.ostree.prefix_directory),
 
         commit_hash: CSlice::from_str(&machine.commit_hash),
     };

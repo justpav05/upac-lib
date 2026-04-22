@@ -15,11 +15,22 @@ pub fn stateVerifying(machine: *RollbackMachine) RollbackError!void {
 
     std.fs.accessAbsolute(machine.data.root_path, .{}) catch {
         stateFailed(machine);
-        return RollbackError.RollbackFailed;
+        return RollbackError.PathNotFound;
     };
     std.fs.accessAbsolute(machine.data.repo_path, .{}) catch {
         stateFailed(machine);
         return RollbackError.RepoOpenFailed;
+    };
+
+    const prefix_directory = std.fmt.allocPrint(machine.allocator, "{s}/{s}", .{ machine.data.root_path, machine.data.prefix }) catch {
+        stateFailed(machine);
+        return RollbackError.AllocZFailed;
+    };
+    defer machine.allocator.free(prefix_directory);
+
+    std.fs.accessAbsolute(prefix_directory, .{}) catch {
+        stateFailed(machine);
+        return RollbackError.PathNotFound;
     };
 
     const branch_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch}) catch {
@@ -46,7 +57,7 @@ fn stateOpenRepo(machine: *RollbackMachine) RollbackError!void {
 
     const repo = c_libs.ostree_repo_new(gfile);
 
-    if (c_libs.ostree_repo_open(repo, null, &machine.gerror) == 0) {
+    if (c_libs.ostree_repo_open(repo, machine.cancellable, &machine.gerror) == 0) {
         c_libs.g_object_unref(repo);
         return machine.retry(stateOpenRepo);
     }
@@ -87,17 +98,23 @@ fn stateCheckoutStaging(machine: *RollbackMachine) RollbackError!void {
     const repo = machine.repo orelse return RollbackError.RepoOpenFailed;
     const resolved_checksum = machine.resolved_checksum orelse return RollbackError.CommitNotFound;
 
-    const staging_path = resolveStagingPrefixDir(machine.data.root_path, machine.data.prefix, machine.allocator) catch {
+    const staging_path = resolveStagingDir(machine.data.root_path, machine.allocator) catch {
         stateFailed(machine);
         return RollbackError.AllocZFailed;
     };
     machine.staging_path = staging_path;
 
+    std.fs.makeDirAbsolute(staging_path) catch {
+        stateFailed(machine);
+        return RollbackError.StagingFailed;
+    };
+
     var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
-    options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_NONE;
+    options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_ADD_FILES;
+    options.no_copy_fallback = 0;
 
-    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, staging_path.ptr, resolved_checksum, null, &machine.gerror) == 0) {
+    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, staging_path.ptr, resolved_checksum, machine.cancellable, &machine.gerror) == 0) {
         std.fs.deleteTreeAbsolute(staging_path) catch {};
         machine.allocator.free(staging_path);
         machine.staging_path = null;
@@ -131,10 +148,6 @@ fn stateAtomicSwap(machine: *RollbackMachine) RollbackError!void {
     const result = std.os.linux.syscall5(.renameat2, @bitCast(@as(isize, std.os.linux.AT.FDCWD)), @intFromPtr(staging_usr.ptr), @bitCast(@as(isize, std.os.linux.AT.FDCWD)), @intFromPtr(root_usr.ptr), 2);
 
     if (std.os.linux.E.init(result) != .SUCCESS) {
-        std.fs.deleteTreeAbsolute(staging_path) catch {
-            stateFailed(machine);
-            return RollbackError.CleanupFailed;
-        };
         stateFailed(machine);
         return RollbackError.SwapFailed;
     }
@@ -166,13 +179,13 @@ fn stateUpdateRef(machine: *RollbackMachine) RollbackError!void {
     const branch_c = machine.branch_c orelse return RollbackError.AllocZFailed;
     const resolved_checksum = machine.resolved_checksum orelse return RollbackError.CommitNotFound;
 
-    if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &machine.gerror) == 0)
+    if (c_libs.ostree_repo_prepare_transaction(repo, null, machine.cancellable, &machine.gerror) == 0)
         return machine.retry(stateUpdateRef);
 
     c_libs.ostree_repo_transaction_set_ref(repo, null, branch_c.ptr, resolved_checksum);
 
-    if (c_libs.ostree_repo_commit_transaction(repo, null, null, &machine.gerror) == 0) {
-        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
+    if (c_libs.ostree_repo_commit_transaction(repo, null, machine.cancellable, &machine.gerror) == 0) {
+        _ = c_libs.ostree_repo_abort_transaction(repo, machine.cancellable, null);
         return machine.retry(stateUpdateRef);
     }
 

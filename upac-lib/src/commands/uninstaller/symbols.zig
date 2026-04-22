@@ -46,16 +46,6 @@ pub export fn upac_uninstall(uninstall_request_c: CUninstallRequest) callconv(.C
 
 fn onUninstallProgress(event: UninstallProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.C) void {
     _ = ctx;
-    const package_name = pkg.toSlice();
-    switch (event) {
-        .Verifying => std.debug.print("→ verifying {s}...\n", .{package_name}),
-        .OpeningRepo => std.debug.print("→ opening repo...\n", .{}),
-        .CheckingInstalled => std.debug.print("→ checking if {s} is installed...\n", .{package_name}),
-        .RemoveDbFiles => std.debug.print("→ removing database for {s}...\n", .{package_name}),
-        .ProcessingFiles => std.debug.print("→ processing files for {s}...\n", .{package_name}),
-        .Committing => std.debug.print("→ committing {s}...\n", .{package_name}),
-        .Ready => std.debug.print("✓ {s} uninstalled\n", .{package_name}),
-        .Failed => std.debug.print("✗ {s} failed\n", .{package_name}),
-        else => {},
-    }
+    _ = event;
+    _ = pkg;
 }

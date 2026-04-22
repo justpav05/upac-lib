@@ -3,7 +3,6 @@ use anyhow::{bail, Result};
 
 use libloading::{Library, Symbol};
 
-use std::ffi::c_void;
 use std::str;
 
 use crate::ffi::{
@@ -92,40 +91,67 @@ impl UpacLib {
         let msg = match code {
             1 => "unexpected error",
             2 => "out of memory",
-            3 => "invalid path",
-            4 => "file not found",
-            5 => "access denied",
+            3 => "file not found",
+            4 => "permission_denied",
+            5 => "invalid path",
+            6 => "no space left",
+            7 => "abi_mismatch",
 
+            9 => "thread error",
             10 => "lock would block — another process is running",
+            11 => "allocz_failed",
+            12 => "cancelled",
+            13 => "max_retries_exceeded",
+            14 => "read_failed",
+            15 => "write_failed",
 
             20 => "database: missing field",
             21 => "database: missing section",
             22 => "database: invalid entry",
             23 => "database: parse error",
+            24 => "database: write database failed",
+            25 => "db_malformed_meta",
+            26 => "db_malformed_files",
+            27 => "idx_malformed_entry",
 
             30 => "package already installed",
-            31 => "install failed",
-            32 => "install: package temp path not found",
-            33 => "install: repository path not found",
-            34 => "install: checksum calculation failed",
-            35 => "install: failed to write object to ostree repo",
-            36 => "install: failed to insert file into mutable tree",
-            37 => "install: file object already exists in repo",
+            31 => "install: package temp path not found",
+            32 => "install: checksum calculation failed",
+            33 => "install: checkout failed",
+            34 => "install: install cancelled",
+            35 => "install: max retries exceeded",
+            36 => "install_check_space_failed",
+            37 => "install_make_failed",
 
             40 => "package not found for uninstall",
             41 => "uninstall failed",
+            42 => "uninstall_file_map_corrupted",
+            43 => "uninstall_staging_not_cleaned",
 
             50 => "ostree: failed to open repository",
-            51 => "ostree: commit failed",
-            52 => "ostree: diff failed",
-            53 => "ostree: rollback failed",
-            54 => "ostree: no previous commit",
-            55 => "ostree: staging checkout failed",
-            56 => "ostree: atomic swap failed (renameat2)",
+            51 => "ostree: transaction failed",
+            52 => "ostree: commit failed",
+            53 => "ostree: diff failed",
+            54 => "ostree: rollback failed",
+            55 => "ostree: no previous commit",
+            56 => "ostree: staging checkout failed",
+            57 => "ostree: atomic swap failed (renameat2)",
+            58 => "ostree: commit not found",
+            59 => "ostree: cleanup failed",
+            65 => "ostree: repo write failed",
+            66 => "ostree: mtree insert failed",
 
             60 => "already initialized",
             61 => "failed to create directory",
             62 => "ostree: init failed",
+            63 => "ostree: init failed",
+            64 => "directory not empty",
+            67 => "init prefix not found",
+            68 => "init additional prefix not found",
+
+            70 => "file checksum failed",
+            71 => "file already exists",
+
             _ => "unknown error",
         };
         bail!("{context}: {msg} (code {code})");

@@ -23,6 +23,7 @@ pub const c_libs = file.c_libs;
 // Specific rollback errors: failure to open the repository, missing specified commit, or failure to compute the difference between versions
 pub const RollbackError = error{
     RepoOpenFailed,
+    PathNotFound,
     RepoTransactionFailed,
     CommitNotFound,
     RollbackFailed,
@@ -68,13 +69,18 @@ pub const RollbackMachine = struct {
     staging_path: ?[:0]const u8 = null,
 
     stack: std.ArrayList(RollbackStateId),
+    cancellable: ?*c_libs.GCancellable = null,
     gerror: ?*c_libs.GError = null,
+    signal_loop: ?*c_libs.GMainLoop = null,
+    signal_thread: ?std.Thread = null,
     allocator: std.mem.Allocator,
 
     pub fn enter(self: *RollbackMachine, state_id: RollbackStateId) !void {
-        if (cancel_requested.load(.acquire)) {
-            stateFailed(self);
-            return RollbackError.Cancelled;
+        if (self.cancellable) |cancellable| {
+            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
+                stateFailed(self);
+                return RollbackError.Cancelled;
+            }
         }
 
         try self.stack.append(state_id);
@@ -90,15 +96,25 @@ pub const RollbackMachine = struct {
     }
 
     pub fn retry(self: *RollbackMachine, comptime state_fn: anytype) RollbackError!void {
+        if (self.cancellable) |cancellable| {
+            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
+                stateFailed(self);
+                return RollbackError.Cancelled;
+            }
+        }
+
         if (self.exhausted()) {
             stateFailed(self);
             return RollbackError.MaxRetriesExceeded;
         }
-        self.retries += 1;
+
         if (self.gerror) |err| {
             c_libs.g_error_free(err);
             self.gerror = null;
         }
+
+        self.retries += 1;
+
         return state_fn(self);
     }
 
@@ -116,16 +132,29 @@ pub const RollbackMachine = struct {
         if (self.repo) |repo| c_libs.g_object_unref(repo);
 
         if (self.gerror) |err| c_libs.g_error_free(err);
+        if (self.cancellable) |cancellable| c_libs.g_object_unref(cancellable);
+
+        if (self.signal_loop) |loop| {
+            c_libs.g_main_loop_quit(loop);
+        }
+        if (self.signal_thread) |tread| {
+            tread.join();
+            self.signal_thread = null;
+        }
+        if (self.signal_loop) |loop| {
+            c_libs.g_main_loop_unref(loop);
+            self.signal_loop = null;
+        }
 
         self.stack.deinit();
     }
 
     pub fn run(data: RollbackData, allocator: std.mem.Allocator) !void {
-        cancel_requested.store(false, .release);
+        const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
+        const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
 
-        const sigaction = std.posix.Sigaction{ .handler = .{ .handler = installSignalHandler }, .mask = std.posix.empty_sigset, .flags = 0 };
-        std.posix.sigaction(std.posix.SIG.INT, &sigaction, null) catch {};
-        std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null) catch {};
+        const signal_ctx = c_libs.g_main_context_new();
+        defer c_libs.g_main_context_unref(signal_ctx);
 
         var machine = RollbackMachine{
             .data = data,
@@ -133,25 +162,37 @@ pub const RollbackMachine = struct {
             .retries = 0,
 
             .stack = std.ArrayList(RollbackStateId).init(allocator),
+            .cancellable = c_libs.g_cancellable_new() orelse return RollbackError.OutOfMemory,
             .allocator = allocator,
         };
         defer machine.deinit();
-        errdefer stateFailed(&machine);
+
+        c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), machine.cancellable, null);
+        _ = c_libs.g_source_attach(sigint_src, signal_ctx);
+        c_libs.g_source_unref(sigint_src);
+
+        c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), machine.cancellable, null);
+        _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
+        c_libs.g_source_unref(sigterm_src);
+
+        machine.signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
+        machine.signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{machine.signal_loop.?}) catch null;
 
         try states.stateVerifying(&machine);
     }
 };
 
+// ── Helpers functions ─────────────────────────────────────────────────────────────────────
 // Resolve a temporary directory adjacent to root_path (e.g. /usr → /usr-rollback-<timestamp>)
-pub fn resolveStagingDir(root_path: []const u8, prefix: []const u8, allocator: std.mem.Allocator) ![:0]const u8 {
+pub fn resolveStagingDir(root_path: []const u8, allocator: std.mem.Allocator) ![:0]const u8 {
     const root_path_c = try std.fmt.allocPrintZ(allocator, "{s}", .{root_path});
     defer allocator.free(root_path_c);
 
     const timestamp = std.time.milliTimestamp();
     const staging_path_c = if (root_path_c[root_path_c.len - 1] == '/')
-        try std.fmt.allocPrintZ(allocator, "{s}{s}-rollback-{d}", .{ root_path_c[0 .. root_path_c.len - 1], prefix, timestamp })
+        try std.fmt.allocPrintZ(allocator, "{s}-rollback-{d}", .{ root_path_c[0 .. root_path_c.len - 1], timestamp })
     else
-        try std.fmt.allocPrintZ(allocator, "{s}/{}-rollback-{d}", .{ root_path_c, prefix, timestamp });
+        try std.fmt.allocPrintZ(allocator, "{s}-rollback-{d}", .{ root_path_c, timestamp });
     errdefer allocator.free(staging_path_c);
 
     return staging_path_c;
@@ -163,7 +204,7 @@ pub fn resolveStagingRootDir(root_path: []const u8, prefix: []const u8, allocato
     defer allocator.free(root_path_c);
 
     const staging_root_path_c = if (root_path_c[root_path_c.len - 1] == '/')
-        try std.fmt.allocPrintZ(allocator, "{s}{s}", .{ root_path_c[0 .. root_path_c.len - 1], prefix })
+        try std.fmt.allocPrintZ(allocator, "{s}/{s}", .{ root_path_c[0 .. root_path_c.len - 1], prefix })
     else
         try std.fmt.allocPrintZ(allocator, "{s}/{s}", .{ root_path_c, prefix });
     errdefer allocator.free(staging_root_path_c);
@@ -225,4 +266,14 @@ fn updateBranchRef(repo: *c_libs.OstreeRepo, branch_c: [:0]const u8, resolved_ch
         _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
         return RollbackError.RollbackFailed;
     }
+}
+
+fn onCancelSignal(user_data: c_libs.gpointer) callconv(.C) c_libs.gboolean {
+    const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
+    c_libs.g_cancellable_cancel(cancellable);
+    return c_libs.G_SOURCE_REMOVE;
+}
+
+fn signalLoopThread(loop: *c_libs.GMainLoop) void {
+    c_libs.g_main_loop_run(loop);
 }

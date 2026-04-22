@@ -6,7 +6,6 @@ use colored::Colorize;
 use indicatif::ProgressBar;
 
 use std::ffi::c_void;
-use std::fs;
 
 use crate::backends::{BackendLibGuard, PackageMeta};
 use crate::config::Config;
@@ -27,24 +26,12 @@ struct PreparedPackage {
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
 #[derive(clap::Args)]
 pub struct InstallArgs {
+    #[arg(required = true, num_args = 1..)]
     pub files: Vec<String>,
     #[arg(long)]
     pub backend: Option<String>,
     #[arg(long, num_args = 0..)]
     pub checksums: Vec<String>,
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstallProgressEvent {
-    Verifying = 0,
-    OpeningRepo = 1,
-    CheckingInstalled = 2,
-    WritingDatabase = 3,
-    ProcessingFiles = 4,
-    Committing = 5,
-    Ready = 6,
-    Failed = 7,
 }
 
 // ── FSM states ───────────────────────────────────────────────────────────────────────
@@ -64,8 +51,6 @@ struct InstallMachine {
     checksums: Vec<String>,
 
     prepared_packages: Vec<PreparedPackage>,
-    tmp_dirs: Vec<String>,
-
     progress_bar: Option<ProgressBar>,
 
     upac_lib: Option<UpacLibGuard>,
@@ -86,7 +71,6 @@ impl InstallMachine {
             backend,
             checksums,
             prepared_packages: Vec::new(),
-            tmp_dirs: Vec::new(),
             progress_bar: None,
             upac_lib: None,
             backend_lib: None,
@@ -100,19 +84,11 @@ impl InstallMachine {
     }
 }
 
-impl Drop for InstallMachine {
-    fn drop(&mut self) {
-        for tmp_dir in &self.tmp_dirs {
-            let _ = fs::remove_dir_all(tmp_dir);
-        }
-    }
-}
-
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: InstallArgs) -> Result<()> {
     if !args.checksums.is_empty() && args.checksums.len() != args.files.len() {
         anyhow::bail!(
-            "number of checksums ({}) must match number of files ({})",
+            "Count of checksums ({}) must match count of files ({})",
             args.checksums.len(),
             args.files.len()
         );
@@ -136,40 +112,28 @@ pub fn run(config: Config, args: InstallArgs) -> Result<()> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-pub unsafe extern "C" fn on_install_progress(
-    event_raw: u8,
-    package_name_c: CSlice,
-    ctx: *mut c_void,
-) {
+pub unsafe extern "C" fn on_install_progress(event: u8, package_name_c: CSlice, ctx: *mut c_void) {
     let progress_bar = &*(ctx as *const ProgressBar);
-    let event: InstallProgressEvent = std::mem::transmute(event_raw);
 
     let package_name = unsafe { package_name_c.as_str() };
 
     match event {
-        InstallProgressEvent::Verifying => {
-            progress_bar.set_message(format!("verifying {package_name}..."))
-        }
-        InstallProgressEvent::OpeningRepo => {
-            progress_bar.set_message("opening repo...".to_string())
-        }
-        InstallProgressEvent::CheckingInstalled => {
-            progress_bar.set_message(format!("checking if {package_name} is installed..."))
-        }
-        InstallProgressEvent::WritingDatabase => {
-            progress_bar.set_message(format!("writing database for {package_name}..."))
-        }
-        InstallProgressEvent::ProcessingFiles => {
-            progress_bar.set_message(format!("processing files for {package_name}..."))
-        }
-        InstallProgressEvent::Committing => {
-            progress_bar.set_message(format!("committing {package_name}..."))
-        }
-        InstallProgressEvent::Ready => {
-            progress_bar.println(format!("{} {package_name}done", "✓".green().bold()))
-        }
-        InstallProgressEvent::Failed => {
-            progress_bar.println(format!("{} {package_name}failed", "✗".red().bold()))
+        0 => progress_bar.set_message(format!("Verifying {package_name}...")),
+        1 => progress_bar.set_message(format!("Checking free space for {package_name}...")),
+        2 => progress_bar.set_message("Opening repo...".to_string()),
+        3 => progress_bar.set_message(format!("Checking {package_name} was installed...")),
+        4 => progress_bar.set_message(format!("Writing database for {package_name}...")),
+        5 => progress_bar.set_message(format!("Writing files for {package_name}...")),
+        6 => progress_bar.set_message(format!("Committing {package_name}...")),
+        7 => progress_bar.set_message(format!("Checking out {package_name}...")),
+        8 => {}
+        9 => {}
+
+        10 => progress_bar.println(format!("{} Done", "✓".green().bold())),
+        11 => progress_bar.println(format!("{} Failed", "✗".red().bold())),
+        _ => {
+            eprintln!("Unknow event: {}", event);
+            return;
         }
     }
 }

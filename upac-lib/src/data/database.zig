@@ -45,10 +45,12 @@ pub fn freeFileMap(file_map: *FileMap, allocator: std.mem.Allocator) void {
 pub fn freePackageMeta(meta: PackageMeta, allocator: std.mem.Allocator) void {
     allocator.free(meta.name);
     allocator.free(meta.version);
+    allocator.free(meta.architecture);
     allocator.free(meta.author);
     allocator.free(meta.description);
     allocator.free(meta.license);
     allocator.free(meta.url);
+    allocator.free(meta.packager);
     allocator.free(meta.checksum);
 }
 
@@ -104,9 +106,12 @@ fn writeMeta(temp_path: []const u8, package_checksum: []const u8, package_meta: 
     package_meta_writer.print("name {s}\n", .{package_meta.name}) catch return DatabaseError.WriteError;
     package_meta_writer.print("version {s}\n", .{package_meta.version}) catch return DatabaseError.WriteError;
     package_meta_writer.print("author {s}\n", .{package_meta.author}) catch return DatabaseError.WriteError;
+    package_meta_writer.print("size {d}\n", .{package_meta.size}) catch return DatabaseError.WriteError;
+    package_meta_writer.print("architecture {s}\n", .{package_meta.architecture}) catch return DatabaseError.WriteError;
     package_meta_writer.print("description {s}\n", .{package_meta.description}) catch return DatabaseError.WriteError;
     package_meta_writer.print("license {s}\n", .{package_meta.license}) catch return DatabaseError.WriteError;
     package_meta_writer.print("url {s}\n", .{package_meta.url}) catch return DatabaseError.WriteError;
+    package_meta_writer.print("packager {s}\n", .{package_meta.packager}) catch return DatabaseError.WriteError;
     package_meta_writer.print("installed_at {d}\n", .{package_meta.installed_at}) catch return DatabaseError.WriteError;
     package_meta_writer.print("checksum {s}\n", .{package_meta.checksum}) catch return DatabaseError.WriteError;
 }
@@ -133,10 +138,13 @@ fn parseMeta(content: []const u8, allocator: std.mem.Allocator) !PackageMeta {
     var package_meta = PackageMeta{
         .name = &[_]u8{},
         .version = &[_]u8{},
+        .size = 0,
+        .architecture = &[_]u8{},
         .author = &[_]u8{},
         .description = &[_]u8{},
         .license = &[_]u8{},
         .url = &[_]u8{},
+        .packager = &[_]u8{},
         .installed_at = 0,
         .checksum = &[_]u8{},
     };
@@ -159,6 +167,12 @@ fn parseMeta(content: []const u8, allocator: std.mem.Allocator) !PackageMeta {
         } else if (std.mem.eql(u8, key, "version")) {
             if (package_meta.version.len > 0) return DatabaseError.MalformedMeta;
             package_meta.version = try allocator.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "size")) {
+            if (package_meta.size > 0) return DatabaseError.MalformedMeta;
+            package_meta.size = std.fmt.parseInt(usize, value, 10) catch return DatabaseError.MalformedMeta;
+        } else if (std.mem.eql(u8, key, "architecture")) {
+            if (package_meta.architecture.len > 0) return DatabaseError.MalformedMeta;
+            package_meta.architecture = try allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "author")) {
             if (package_meta.author.len > 0) return DatabaseError.MalformedMeta;
             package_meta.author = try allocator.dupe(u8, value);
@@ -171,6 +185,9 @@ fn parseMeta(content: []const u8, allocator: std.mem.Allocator) !PackageMeta {
         } else if (std.mem.eql(u8, key, "url")) {
             if (package_meta.url.len > 0) return DatabaseError.MalformedMeta;
             package_meta.url = try allocator.dupe(u8, value);
+        } else if (std.mem.eql(u8, key, "packager")) {
+            if (package_meta.packager.len > 0) return DatabaseError.MalformedMeta;
+            package_meta.packager = try allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "installed_at")) {
             if (installed_at_seen) return DatabaseError.MalformedMeta;
             installed_at_seen = true;

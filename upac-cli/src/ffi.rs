@@ -1,4 +1,6 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
+use std::ffi::c_void;
+use std::os::raw::c_int;
 use std::slice;
 use std::str;
 
@@ -27,6 +29,28 @@ impl CSlice {
     }
 }
 
+#[repr(C)]
+pub struct CSliceArray {
+    pub ptr: *const CSlice,
+    pub len: usize,
+}
+
+impl CSliceArray {
+    pub fn empty() -> Self {
+        Self {
+            ptr: std::ptr::null(),
+            len: 0,
+        }
+    }
+
+    pub fn from_slice(slice: &[CSlice]) -> Self {
+        Self {
+            ptr: slice.as_ptr(),
+            len: slice.len(),
+        }
+    }
+}
+
 // ── Metadata and Packages ──────────────────────────────────────────────────────
 // Describes a specific package for installation, including the temporary path and checksum
 #[repr(C)]
@@ -42,12 +66,16 @@ pub struct CPackageEntry {
 pub struct CPackageMeta {
     pub name: CSlice,
     pub version: CSlice,
+    pub architecture: CSlice,
     pub author: CSlice,
     pub description: CSlice,
     pub license: CSlice,
     pub url: CSlice,
-    pub installed_at: i64,
+    pub packager: CSlice,
     pub checksum: CSlice,
+    pub size: u32,
+    pub _padding: u32,
+    pub installed_at: i64,
 }
 
 // Represents a dynamic array of metadata allocated on the Zig side
@@ -61,14 +89,17 @@ pub struct CPackageMetaArray {
 // Data container for the installation operation: list of packages, paths, and repository settings
 #[repr(C)]
 pub struct CInstallRequest {
+    pub struct_size: usize,
+
     pub packages: *const CPackageEntry,
-    pub packages_len: usize,
+    pub packages_count: usize,
 
     pub repo_path: CSlice,
     pub root_path: CSlice,
     pub db_path: CSlice,
 
     pub branch: CSlice,
+    pub prefix_directory: CSlice,
 
     pub on_progress: Option<CInstallProgressFn>,
     pub progress_ctx: *mut std::ffi::c_void,
@@ -77,11 +108,13 @@ pub struct CInstallRequest {
 }
 
 pub type CInstallProgressFn =
-    unsafe extern "C" fn(event: u8, package_name: CSlice, ctx: *mut std::ffi::c_void);
+    unsafe extern "C" fn(event: u8, package_name: CSlice, ctx: *mut c_void);
 
 // Data container for the uninstallation operation: list of package names and repository settings
 #[repr(C)]
 pub struct CUninstallRequest {
+    pub struct_size: usize,
+
     pub package_names: *const CSlice,
     pub package_names_len: usize,
 
@@ -90,23 +123,27 @@ pub struct CUninstallRequest {
     pub db_path: CSlice,
 
     pub branch: CSlice,
+    pub prefix_directory: CSlice,
 
     pub on_progress: Option<CUninstallProgressFn>,
-    pub progress_ctx: *mut std::ffi::c_void,
+    pub progress_ctx: *mut c_void,
 
     pub max_retries: u8,
 }
 
 pub type CUninstallProgressFn =
-    unsafe extern "C" fn(event: u8, package_name: CSlice, ctx: *mut std::ffi::c_void);
+    unsafe extern "C" fn(event: u8, package_name: CSlice, ctx: *mut c_void);
 
 // Data container for the rollback operation: paths and repository settings
 #[repr(C)]
 pub struct CRollbackRequest {
+    pub struct_size: usize,
+
     pub root_path: CSlice,
     pub repo_path: CSlice,
 
     pub branch: CSlice,
+    pub prefix_directory: CSlice,
 
     pub commit_hash: CSlice,
 }
@@ -190,17 +227,17 @@ pub struct CCommitArray {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-// Data container for the system paths (repo and root)
-#[repr(C)]
-pub struct CSystemPaths {
-    pub repo_path: CSlice,
-    pub root_path: CSlice,
-}
-
 // Data container for the init request (system paths, repo mode, and branch)
 #[repr(C)]
 pub struct CInitRequest {
-    pub system_paths: CSystemPaths,
+    pub struct_size: usize,
+
+    pub repo_path: CSlice,
+    pub root_path: CSlice,
+
+    pub prefix_directory: CSlice,
+    pub addition_prefixes: CSliceArray,
+
     pub repo_mode: CRepoMode,
     pub branch: CSlice,
 }

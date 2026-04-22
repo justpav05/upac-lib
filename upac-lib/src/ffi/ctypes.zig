@@ -86,18 +86,26 @@ pub const CPackageEntry = extern struct {
 pub const CPackageMeta = extern struct {
     name: CSlice,
     version: CSlice,
+    architecture: CSlice,
     author: CSlice,
     description: CSlice,
     license: CSlice,
     url: CSlice,
-    installed_at: i64,
+    packager: CSlice,
     checksum: CSlice,
+    size: u32,
+    _padding: u32 = 0,
+    installed_at: i64,
 
     pub fn validate(self: CPackageMeta) !void {
         if (self.name.isEmpty()) return error.InvalidEntry;
         if (self.version.isEmpty()) return error.InvalidEntry;
+        if (self.architecture.isEmpty()) return error.InvalidEntry;
         if (self.author.isEmpty()) return error.InvalidEntry;
+        if (self.description.isEmpty()) return error.InvalidEntry;
         if (self.license.isEmpty()) return error.InvalidEntry;
+        if (self.url.isEmpty()) return error.InvalidEntry;
+        if (self.packager.isEmpty()) return error.InvalidEntry;
         if (self.checksum.isEmpty()) return error.InvalidEntry;
     }
 };
