@@ -22,7 +22,7 @@ RPM_PKG_FLAGS   ?= -bb --define "_topdir $(PKG_DIR)/rpm" \
                        --define "version $(VERSION)"
 DEB_PKG_FLAGS   ?= --root-owner-group
 
-.PHONY: all build prepare-dirs prepare-deps \
+.PHONY: all build prepare-dirs \
         build-lib build-backends build-cli build-removing \
         pkg-arch pkg-rpm pkg-deb \
         sync sync-build sync-pkg \
@@ -49,47 +49,10 @@ export PKG_CONFIG_ALLOW_CROSS = 1
 prepare-dirs:
 	@echo "--- Preparing directories ($(MODE) / cpu=$(CPU)) ---"
 	@mkdir -p $(OUT_BUILD_DIR)/bin $(OUT_BUILD_DIR)/lib
-	@mkdir -p $(ROOT_DIR)/ostree
-	@mkdir -p $(ROOT_DIR)/libarchive
 
-prepare-ostree:
-	@echo "--- Fetching and building static ostree in $(MODE) mode ---"
-	@if [ ! -d "$(OSTREE_DIR)/.git" ]; then \
-		git clone --depth 1 $(OSTREE_REPO) $(OSTREE_DIR); \
-	fi
-	@cd $(OSTREE_DIR) && \
-		env NOCONFIGURE=1 ./autogen.sh && \
-		./configure \
-			--enable-static \
-			--disable-shared \
-			--disable-rofiles-fuse \
-			--without-soup \
-			--without-curl \
-			--without-avahi \
-			--disable-man \
-			--disable-introspection \
-			CFLAGS="$(OSTREE_BUILD_CFLAGS)" && \
-		$(MAKE) -j$(shell nproc)
-
-prepare-libarchive:
-	@echo "--- Fetching and building static libarchive in $(MODE) mode ---"
-	@if [ ! -d "$(LIBARCHIVE_DIR)/.git" ]; then \
-		git clone --depth 1 $(LIBARCHIVE_REPO) $(LIBARCHIVE_DIR); \
-	fi
-	@cd $(LIBARCHIVE_DIR) && \
-		./build/autogen.sh && \
-		./configure \
-			--enable-static \
-			--disable-shared \
-			--without-xml2 \
-			--without-expat \
-			--without-openssl \
-			--with-zstd \
-			CFLAGS="$(OSTREE_BUILD_CFLAGS)" && \
-		$(MAKE) -j$(shell nproc)
 
 # ── Build ─────────────────────────────────────────────────────────────────────
-build: prepare-dirs prepare-ostree prepare-libarchive build-lib build-backends build-cli build-removing
+build: prepare-dirs build-lib build-backends build-cli
 
 build-lib:
 	@echo "--- Building upac-lib in $(MODE) mode ---"
@@ -112,7 +75,9 @@ build-cli:
 			--target $(CARGO_TARGET) \
 			--target-dir $(OUT_BUILD_DIR) \
 			$(CARGO_FLAGS)
-	@mv $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/
+	@if [ -f $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(MODE)/upac ]; then \
+		cp $(OUT_BUILD_DIR)/$(CARGO_TARGET)/$(MODE)/upac $(OUT_BUILD_DIR)/bin/; \
+	fi
 
 build-removing:
 	@echo "--- Cleaning external build artifacts ---"
@@ -159,7 +124,7 @@ pkg-arch: build
 
 	@echo "--- Building ARCH package v$(VERSION) ---"
 	@cd $(PKG_DIR)/arch && makepkg $(ARCH_PKG_FLAGS)
-	@mv $(PKG_DIR)/arch/*.pkg.tar.zst $(PKG_DIR)/
+	@cp $(PKG_DIR)/arch/*.pkg.tar.zst $(PKG_DIR)/
 
 	@echo "--- Package built: $(PKG_DIR)/arch/$(PKG_NAME).pkg.tar.zst ---"
 
@@ -249,7 +214,7 @@ sync-build:
 	@sed -i -E 's/\.version[[:space:]]*=[[:space:]]*"[^"]*"/\.version = "$(VERSION)"/' $(ROOT_DIR)/upac-*/build.zig.zon
 
 # ── Cleaning ───────────────────────────────────────────────────────────────────
-clean: clean-build clean-pkg
+clean: clean-build clean-pkg build-removing
 
 clean-build:
 	@echo "--- Cleaning ostree build artifacts ---"
