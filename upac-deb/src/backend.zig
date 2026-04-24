@@ -334,3 +334,20 @@ pub fn fromError(err: anyerror) BackendErrorCode {
         else => .unexpected,
     };
 }
+
+pub fn parseLicenseFromCopyright(content: ?[]const u8, allocator: std.mem.Allocator) BackendError![]const u8 {
+    const text = content orelse return allocator.dupe(u8, "Unknown") catch BackendError.AllocZFailed;
+
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        const trimmed_line = std.mem.trim(u8, line, " \t\r");
+        if (!std.mem.startsWith(u8, trimmed_line, "License:")) continue;
+
+        const value = std.mem.trim(u8, trimmed_line["License:".len..], " \t\r");
+        if (value.len == 0) continue;
+
+        return allocator.dupe(u8, value) catch BackendError.AllocZFailed;
+    }
+
+    return allocator.dupe(u8, "Unknown") catch BackendError.AllocZFailed;
+}

@@ -12,6 +12,8 @@ const c_libs = @cImport({
     @cInclude("archive_entry.h");
 });
 
+const parseLicenseFromCopyright = backend.parseLicenseFromCopyright;
+
 // ── States ─────────────────────────────────────────────────────────────────
 // Archive integrity check status: calculating SHA256 and comparing against expected value
 pub fn stateVerifying(machine: *Machine) BackendError!void {
@@ -278,7 +280,10 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
     }
 
     var control_content: ?[]u8 = null;
-    defer if (control_content) |c| machine.allocator.free(c);
+    defer if (control_content) |content| machine.allocator.free(content);
+
+    var copyright_content: ?[]u8 = null;
+    defer if (copyright_content) |content| machine.allocator.free(content);
 
     var entry: ?*c_libs.archive_entry = null;
     while (c_libs.archive_read_next_header(archive_reader, &entry) == c_libs.ARCHIVE_OK) {
@@ -308,7 +313,31 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
                     }
                 }
             }
-            break;
+        }
+
+        if (std.mem.startsWith(u8, entry_name, "data.tar")) {
+            const size = @as(usize, @intCast(c_libs.archive_entry_size(entry)));
+            const tar_buffer = try machine.allocator.alloc(u8, size);
+            defer machine.allocator.free(tar_buffer);
+            _ = c_libs.archive_read_data(archive_reader, tar_buffer.ptr, size);
+
+            const inner_archive_reader = c_libs.archive_read_new();
+            defer _ = c_libs.archive_read_free(inner_archive_reader);
+            _ = c_libs.archive_read_support_format_tar(inner_archive_reader);
+            _ = c_libs.archive_read_support_filter_all(inner_archive_reader);
+
+            if (c_libs.archive_read_open_memory(inner_archive_reader, tar_buffer.ptr, size) == c_libs.ARCHIVE_OK) {
+                var inner_entry: ?*c_libs.archive_entry = null;
+                while (c_libs.archive_read_next_header(inner_archive_reader, &inner_entry) == c_libs.ARCHIVE_OK) {
+                    const inner_name = std.mem.span(c_libs.archive_entry_pathname(inner_entry));
+                    if (std.mem.indexOf(u8, inner_name, "/usr/share/doc/") != null and std.mem.endsWith(u8, inner_name, "/copyright")) {
+                        const c_size = @as(usize, @intCast(c_libs.archive_entry_size(inner_entry)));
+                        copyright_content = try machine.allocator.alloc(u8, c_size);
+                        _ = c_libs.archive_read_data(inner_archive_reader, copyright_content.?.ptr, c_size);
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -363,7 +392,7 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
         .size = size,
         .architecture = architecture orelse try machine.allocator.dupe(u8, "No architecture"),
         .description = description orelse try machine.allocator.dupe(u8, "No description"),
-        .license = try machine.allocator.dupe(u8, "Unknown"),
+        .license = try parseLicenseFromCopyright(copyright_content, machine.allocator),
         .url = url orelse try machine.allocator.dupe(u8, "No url"),
         .packager = packager orelse try machine.allocator.dupe(u8, "Unknown"),
         .installed_at = std.time.timestamp(),
