@@ -22,7 +22,7 @@ pub fn state_fetching_mode(machine: &mut ListMachine) -> Result<()> {
 }
 
 fn state_get_commits_info(machine: &mut ListMachine) -> Result<()> {
-    machine.enter(State::GetPackages);
+    machine.enter(State::GetCommits);
 
     let repo_path_c = CSlice::from_str(&machine.config.paths.repo_path);
     let branch_c = CSlice::from_str(&machine.config.ostree.branch);
@@ -72,35 +72,90 @@ fn state_get_packages_list(machine: &mut ListMachine) -> Result<()> {
     };
     UpacLib::check(return_code, "list packages")?;
 
-    let free_fn = machine.upac_lib.as_ref().unwrap().packages_free;
-    let count_fn = machine.upac_lib.as_ref().unwrap().packages_count;
-    let get_name = machine.upac_lib.as_ref().unwrap().package_get_name;
-    let get_version = machine.upac_lib.as_ref().unwrap().package_get_version;
-    let get_size = machine.upac_lib.as_ref().unwrap().package_get_size;
-    let get_architecture = machine.upac_lib.as_ref().unwrap().package_get_architecture;
-    let get_author = machine.upac_lib.as_ref().unwrap().package_get_author;
-    let get_license = machine.upac_lib.as_ref().unwrap().package_get_license;
-    let get_url = machine.upac_lib.as_ref().unwrap().package_get_url;
-    let get_packager = machine.upac_lib.as_ref().unwrap().package_get_packager;
-
-    let guard = HandleGuard::new(handle, free_fn);
-
-    let count = unsafe { count_fn(guard.handle) };
+    let lib = machine.upac_lib.as_ref().unwrap();
+    let guard = HandleGuard::new(handle, lib.packages_free);
+    let count = unsafe { (lib.packages_count)(guard.handle) };
 
     machine.packages = (0..count)
-        .map(|i| unsafe {
-            PackageRow {
-                name: get_name(guard.handle, i).as_str().to_owned(),
-                version: get_version(guard.handle, i).as_str().to_owned(),
-                size: get_size(guard.handle, i),
-                architecture: get_architecture(guard.handle, i).as_str().to_owned(),
-                author: get_author(guard.handle, i).as_str().to_owned(),
-                license: get_license(guard.handle, i).as_str().to_owned(),
-                url: get_url(guard.handle, i).as_str().to_owned(),
-                packager: get_packager(guard.handle, i).as_str().to_owned(),
+        .map(|i| -> Result<PackageRow> {
+            let mut name = CSlice {
+                ptr: null_mut(),
+                len: 0,
+            };
+            let mut version = CSlice {
+                ptr: null_mut(),
+                len: 0,
+            };
+            let mut architecture = CSlice {
+                ptr: null_mut(),
+                len: 0,
+            };
+            let mut author = CSlice {
+                ptr: null_mut(),
+                len: 0,
+            };
+            let mut license = CSlice {
+                ptr: null_mut(),
+                len: 0,
+            };
+            let mut url = CSlice {
+                ptr: null_mut(),
+                len: 0,
+            };
+            let mut packager = CSlice {
+                ptr: null_mut(),
+                len: 0,
+            };
+            let mut size: u32 = 0;
+
+            unsafe {
+                UpacLib::check(
+                    (lib.package_get_slice_field)(guard.handle, i, 0, &mut name),
+                    "get name",
+                )?;
+                UpacLib::check(
+                    (lib.package_get_slice_field)(guard.handle, i, 1, &mut version),
+                    "get version",
+                )?;
+                UpacLib::check(
+                    (lib.package_get_slice_field)(guard.handle, i, 2, &mut architecture),
+                    "get architecture",
+                )?;
+                UpacLib::check(
+                    (lib.package_get_slice_field)(guard.handle, i, 3, &mut author),
+                    "get author",
+                )?;
+                UpacLib::check(
+                    (lib.package_get_slice_field)(guard.handle, i, 5, &mut license),
+                    "get license",
+                )?;
+                UpacLib::check(
+                    (lib.package_get_slice_field)(guard.handle, i, 6, &mut url),
+                    "get url",
+                )?;
+                UpacLib::check(
+                    (lib.package_get_slice_field)(guard.handle, i, 7, &mut packager),
+                    "get packager",
+                )?;
+                UpacLib::check(
+                    (lib.package_get_int_field)(guard.handle, i, 9, &mut size),
+                    "get size",
+                )?;
             }
+
+            Ok(PackageRow {
+                name: unsafe { name.as_str() }.to_owned(),
+                version: unsafe { version.as_str() }.to_owned(),
+                architecture: unsafe { architecture.as_str() }.to_owned(),
+                author: unsafe { author.as_str() }.to_owned(),
+                license: unsafe { license.as_str() }.to_owned(),
+                url: unsafe { url.as_str() }.to_owned(),
+                packager: unsafe { packager.as_str() }.to_owned(),
+                size,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
+
     state_printing_packeges(machine)
 }
 

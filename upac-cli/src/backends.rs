@@ -12,18 +12,6 @@ use libloading::{Library, Symbol};
 
 use crate::ffi::{CSlice, PackageMetaHandle};
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-#[repr(u8)]
-pub enum BackendProgressEvent {
-    Verifying = 0,
-    Extracting = 1,
-    ReadingMeta = 2,
-    SpecialStep = 3,
-
-    Ready = 4,
-    Failed = 5,
-}
-
 // ── Backend Definition ────────────────────────────────────────
 // Represents the type of backend (ALPM, RPM, DEB) for a package
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -91,7 +79,7 @@ pub struct CPrepareRequest {
     pub temp_dir: CSlice,
     pub checksum: CSlice,
 
-    pub on_progress: Option<unsafe extern "C" fn(BackendProgressEvent, CSlice, *mut c_void)>,
+    pub on_progress: Option<unsafe extern "C" fn(u8, CSlice, *mut c_void)>,
     pub progress_ctx: *mut c_void,
 }
 
@@ -146,7 +134,7 @@ impl Backend {
         pkg_path: &str,
         temp_dir: &str,
         checksum: &str,
-        on_progress: Option<unsafe extern "C" fn(BackendProgressEvent, CSlice, *mut c_void)>,
+        on_progress: Option<unsafe extern "C" fn(u8, CSlice, *mut c_void)>,
         progress_ctx: *mut c_void,
     ) -> Result<(PackageMetaHandle, CSlice)> {
         let prepare_request_c = CPrepareRequest {
@@ -183,11 +171,7 @@ impl Backend {
     }
 }
 
-pub unsafe extern "C" fn on_backend_progress(
-    event: BackendProgressEvent,
-    detail_c: CSlice,
-    ctx: *mut c_void,
-) {
+pub unsafe extern "C" fn on_backend_progress(event: u8, detail_c: CSlice, ctx: *mut c_void) {
     if ctx.is_null() {
         return;
     }
@@ -195,16 +179,13 @@ pub unsafe extern "C" fn on_backend_progress(
     let detail = detail_c.as_str();
 
     match event {
-        BackendProgressEvent::Verifying => {
-            progress_bar.set_message(format!("Verifying {}...", detail))
-        }
-        BackendProgressEvent::Extracting => {
-            progress_bar.set_message(format!("Extracting {}...", detail))
-        }
-        BackendProgressEvent::ReadingMeta => progress_bar.set_message("Reading metadata..."),
-        BackendProgressEvent::SpecialStep => progress_bar.set_message(detail.to_string()),
-        BackendProgressEvent::Ready => progress_bar.set_message("Ready"),
-        BackendProgressEvent::Failed => progress_bar.set_message("Failed"),
+        0 => progress_bar.set_message(format!("Verifying {}...", detail)),
+        1 => progress_bar.set_message(format!("Extracting {}...", detail)),
+        2 => progress_bar.set_message("Reading metadata..."),
+        3 => progress_bar.set_message(detail.to_string()),
+        4 => progress_bar.set_message(format!("Ready",)),
+        5 => progress_bar.set_message(format!("Failed",)),
+        _ => progress_bar.set_message(format!("Unknow error code {}", event)),
     }
 }
 

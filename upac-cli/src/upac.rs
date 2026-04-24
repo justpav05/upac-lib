@@ -36,14 +36,8 @@ pub struct UpacLib {
     pub packages_free: unsafe extern "C" fn(*mut c_void),
     pub packages_count: unsafe extern "C" fn(*mut c_void) -> usize,
 
-    pub package_get_name: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
-    pub package_get_version: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
-    pub package_get_size: unsafe extern "C" fn(*mut c_void, usize) -> u32,
-    pub package_get_architecture: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
-    pub package_get_author: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
-    pub package_get_license: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
-    pub package_get_url: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
-    pub package_get_packager: unsafe extern "C" fn(*mut c_void, usize) -> CSlice,
+    pub package_get_slice_field: unsafe extern "C" fn(*mut c_void, usize, u8, *mut CSlice) -> i32,
+    pub package_get_int_field: unsafe extern "C" fn(*mut c_void, usize, u8, *mut u32) -> i32,
 
     pub list_commits: unsafe extern "C" fn(CSlice, CSlice, *mut CCommitArray) -> i32,
     pub commits_free: unsafe extern "C" fn(*mut CCommitArray),
@@ -84,14 +78,8 @@ impl UpacLib {
             packages_free: sym!(b"upac_packages_free"),
             packages_count: sym!(b"upac_packages_count"),
 
-            package_get_name: sym!(b"upac_package_get_name"),
-            package_get_version: sym!(b"upac_package_get_version"),
-            package_get_size: sym!(b"upac_package_get_size"),
-            package_get_architecture: sym!(b"upac_package_get_architecture"),
-            package_get_author: sym!(b"upac_package_get_author"),
-            package_get_license: sym!(b"upac_package_get_license"),
-            package_get_url: sym!(b"upac_package_get_url"),
-            package_get_packager: sym!(b"upac_package_get_packager"),
+            package_get_slice_field: sym!(b"upac_package_get_slice_field"),
+            package_get_int_field: sym!(b"upac_package_get_int_field"),
 
             list_commits: sym!(b"upac_list_commits"),
             commits_free: sym!(b"upac_commits_free"),

@@ -21,8 +21,6 @@ pub struct DiffArgs {
     pub to: Option<String>,
     #[arg(long)]
     pub files: bool,
-    #[arg(long)]
-    pub package: Option<String>,
 }
 
 // ── FSM States ───────────────────────────────────────────────────────────────────────
@@ -75,7 +73,6 @@ struct DiffMachine {
     file_rows: Vec<FileDiffRow>,
 
     files_mode: bool,
-    package_filter: Option<String>,
 
     progress_bar: Option<ProgressBar>,
 
@@ -85,13 +82,7 @@ struct DiffMachine {
 }
 
 impl DiffMachine {
-    fn new(
-        config: Config,
-        from: Option<String>,
-        to: Option<String>,
-        files_mode: bool,
-        package_filter: Option<String>,
-    ) -> Self {
+    fn new(config: Config, from: Option<String>, to: Option<String>, files_mode: bool) -> Self {
         Self {
             from,
             to,
@@ -100,7 +91,6 @@ impl DiffMachine {
             package_rows: Vec::new(),
             file_rows: Vec::new(),
             files_mode,
-            package_filter,
             progress_bar: None,
             upac_lib: None,
             config,
@@ -115,7 +105,7 @@ impl DiffMachine {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: DiffArgs) -> Result<()> {
-    let mut diff_machine = DiffMachine::new(config, args.from, args.to, args.files, args.package);
+    let mut diff_machine = DiffMachine::new(config, args.from, args.to, args.files);
 
     state_validating(&mut diff_machine).map_err(|err| {
         let last_state = diff_machine.stack.last().cloned();
