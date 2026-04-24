@@ -9,10 +9,6 @@ pub const data = @import("upac-data");
 pub const ffi = @import("upac-ffi");
 
 // ── Re-exports ───────────────────────────────────────────────────────────────
-const files = @import("files.zig");
-pub const diffFiles = files.diffFiles;
-pub const diffFilesAttributed = files.diffFilesAttributed;
-
 const packages = @import("packages.zig");
 pub const diffPackages = packages.diffPackages;
 pub const listPackages = packages.listPackages;
@@ -35,7 +31,7 @@ pub const DiffError = error{
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-pub fn resolveCommit(repo: *c_libs.OstreeRepo, commit_hash_c: [:0]const u8) !DiffError![*:0]u8 {
+pub fn resolveCommit(repo: *c_libs.OstreeRepo, commit_hash_c: [:0]const u8) DiffError![*:0]u8 {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
@@ -44,6 +40,26 @@ pub fn resolveCommit(repo: *c_libs.OstreeRepo, commit_hash_c: [:0]const u8) !Dif
     if (c_libs.ostree_repo_resolve_rev(repo, commit_hash_c.ptr, 0, &resolved, &gerror) == 0) return DiffError.CommitNotFound;
 
     return resolved orelse DiffError.CommitNotFound;
+}
+
+pub fn openRepo(repo_path_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, gerror: *?*c_libs.GError) DiffError!*c_libs.OstreeRepo {
+    const gfile = c_libs.g_file_new_for_path(repo_path_c);
+    defer c_libs.g_object_unref(gfile);
+
+    const repo = c_libs.ostree_repo_new(gfile);
+    if (c_libs.ostree_repo_open(repo, cancellable, gerror) == 0) {
+        c_libs.g_object_unref(repo);
+        return DiffError.RepoOpenFailed;
+    }
+    return try unwrap(repo, DiffError.RepoOpenFailed);
+}
+
+pub inline fn unwrap(value: anytype, comptime err: DiffError) DiffError!@typeInfo(@TypeOf(value)).Optional.child {
+    return value orelse err;
+}
+
+pub inline fn check(value: anytype, comptime err: DiffError) DiffError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+    return value catch err;
 }
 
 pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.C) c_libs.gboolean {

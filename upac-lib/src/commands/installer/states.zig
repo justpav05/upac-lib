@@ -6,52 +6,28 @@ const data = @import("upac-data");
 const file = @import("upac-file");
 const c_libs = file.c_libs;
 
-const installer_mod = @import("installer.zig");
-const InstallerMachine = installer_mod.InstallerMachine;
-const InstallerError = installer_mod.InstallerError;
+const installer = @import("installer.zig");
+const InstallerMachine = installer.InstallerMachine;
+const InstallerError = installer.InstallerError;
 
-const dirSize = installer_mod.dirSize;
-const collectFileChecksums = installer_mod.collectFileChecksums;
+const utils = @import("utils.zig");
+const dirSize = utils.dirSize;
+const collectFileChecksums = utils.collectFileChecksums;
 
 // ── InstallerFSM states ─────────────────────────────────────────────────────────────────
 // It verifies the physical existence of the temporary package folder and the repository path. If the paths do not exist, the installation is immediately aborted
 pub fn stateVerifying(machine: *InstallerMachine) InstallerError!void {
     machine.enter(.verifying) catch return InstallerError.OutOfMemory;
 
-    for (machine.data.packages) |entry| {
-        std.fs.accessAbsolute(entry.temp_path, .{}) catch {
-            stateFailed(machine);
-            return InstallerError.PathNotFound;
-        };
-    }
+    for (machine.data.packages) |entry| try machine.check(std.fs.accessAbsolute(entry.temp_path, .{}), InstallerError.PathNotFound);
 
-    std.fs.accessAbsolute(machine.data.root_path, .{}) catch {
-        stateFailed(machine);
-        return InstallerError.PathNotFound;
-    };
+    try machine.check(std.fs.accessAbsoluteZ(machine.data.root_path, .{}), InstallerError.PathNotFound);
+    try machine.check(std.fs.accessAbsoluteZ(machine.data.repo_path, .{}), InstallerError.PathNotFound);
 
-    std.fs.accessAbsolute(machine.data.repo_path, .{}) catch {
-        stateFailed(machine);
-        return InstallerError.PathNotFound;
-    };
-
-    const prefix_directory = std.fmt.allocPrint(machine.allocator, "{s}/{s}", .{ machine.data.root_path, machine.data.prefix_directory }) catch {
-        stateFailed(machine);
-        return InstallerError.AllocZFailed;
-    };
+    const prefix_directory = try machine.check(std.fs.path.join(machine.allocator, &.{ std.mem.span(machine.data.root_path), std.mem.span(machine.data.prefix_path) }), InstallerError.AllocZFailed);
     defer machine.allocator.free(prefix_directory);
 
-    std.fs.accessAbsolute(prefix_directory, .{}) catch {
-        stateFailed(machine);
-        return InstallerError.PathNotFound;
-    };
-
-    const branch_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.branch}) catch {
-        stateFailed(machine);
-        return InstallerError.AllocZFailed;
-    };
-
-    machine.branch_c = branch_c;
+    try machine.check(std.fs.accessAbsolute(prefix_directory, .{}), InstallerError.PathNotFound);
 
     machine.resetRetries();
     return stateCheckSpace(machine);
@@ -68,14 +44,8 @@ fn stateCheckSpace(machine: *InstallerMachine) InstallerError!void {
         };
     }
 
-    const root_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.root_path}) catch {
-        stateFailed(machine);
-        return InstallerError.AllocZFailed;
-    };
-    defer machine.allocator.free(root_path_c);
-
     var root_path_stat: c_libs.struct_statvfs = undefined;
-    if (c_libs.statvfs(root_path_c.ptr, &root_path_stat) != 0) {
+    if (c_libs.statvfs(machine.data.root_path, &root_path_stat) != 0) {
         stateFailed(machine);
         return InstallerError.CheckSpaceFailed;
     }
@@ -94,13 +64,7 @@ fn stateCheckSpace(machine: *InstallerMachine) InstallerError!void {
 fn stateOpenRepo(machine: *InstallerMachine) InstallerError!void {
     machine.enter(.open_repo) catch return InstallerError.OutOfMemory;
 
-    const repo_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.repo_path}) catch {
-        stateFailed(machine);
-        return InstallerError.AllocZFailed;
-    };
-    defer machine.allocator.free(repo_path_c);
-
-    const gfile = c_libs.g_file_new_for_path(repo_path_c.ptr);
+    const gfile = c_libs.g_file_new_for_path(machine.data.repo_path);
     defer c_libs.g_object_unref(@ptrCast(gfile));
 
     const repo = c_libs.ostree_repo_new(gfile);
@@ -109,21 +73,12 @@ fn stateOpenRepo(machine: *InstallerMachine) InstallerError!void {
         c_libs.g_object_unref(repo);
         return machine.retry(stateOpenRepo);
     }
-
     machine.repo = repo;
 
-    if (c_libs.ostree_repo_prepare_transaction(repo, null, machine.cancellable, &machine.gerror) == 0) {
-        stateFailed(machine);
-        return InstallerError.RepoTransactionFailed;
-    }
-
-    const branch_c = machine.branch_c orelse {
-        stateFailed(machine);
-        return InstallerError.AllocZFailed;
-    };
+    try machine.gcheck(c_libs.ostree_repo_prepare_transaction(repo, null, machine.cancellable, &machine.gerror), error.RepoTransactionFailed);
 
     var previos_mtree: ?*c_libs.OstreeMutableTree = null;
-    if (c_libs.ostree_repo_resolve_rev(repo, branch_c, 0, &machine.previous_commit_checksum, null) != 0) {
+    if (c_libs.ostree_repo_resolve_rev(repo, machine.data.branch, 0, &machine.previous_commit_checksum, null) != 0) {
         previos_mtree = c_libs.ostree_mutable_tree_new_from_commit(repo, machine.previous_commit_checksum, &machine.gerror);
         if (previos_mtree == null) {
             if (machine.gerror != null) {
@@ -146,6 +101,8 @@ fn stateOpenRepo(machine: *InstallerMachine) InstallerError!void {
 fn stateCheckInstalled(machine: *InstallerMachine) InstallerError!void {
     machine.enter(.check_installed) catch return InstallerError.OutOfMemory;
 
+    const repo = try machine.unwrap(machine.repo, error.RepoOpenFailed);
+
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
@@ -157,7 +114,7 @@ fn stateCheckInstalled(machine: *InstallerMachine) InstallerError!void {
     var commit_variant: ?*c_libs.GVariant = null;
     defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
 
-    if (c_libs.ostree_repo_load_variant(machine.repo.?, c_libs.OSTREE_OBJECT_TYPE_COMMIT, previous_commit_checksum, &commit_variant, &gerror) == 0) {
+    if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, previous_commit_checksum, &commit_variant, &gerror) == 0) {
         machine.resetRetries();
         return stateWriteDatabase(machine);
     }
@@ -197,26 +154,20 @@ fn stateWriteDatabase(machine: *InstallerMachine) InstallerError!void {
 
     const current_install_entry = machine.data.packages[machine.current_package_index];
 
-    const relative_database_path = if (std.mem.startsWith(u8, machine.data.database_path, machine.data.root_path))
-        machine.data.database_path[machine.data.root_path.len..]
+    const relative_database_path = if (std.mem.startsWith(u8, std.mem.span(machine.data.database_path), std.mem.span(machine.data.root_path)))
+        std.mem.span(machine.data.database_path)[std.mem.span(machine.data.root_path).len..]
     else
-        machine.data.database_path;
+        std.mem.span(machine.data.database_path);
 
-    const staged_database_dir_path = std.fmt.allocPrint(machine.allocator, "{s}{s}", .{ current_install_entry.temp_path, relative_database_path }) catch return InstallerError.AllocZFailed;
+    const staged_database_dir_path = std.fs.path.join(machine.allocator, &.{ current_install_entry.temp_path, relative_database_path }) catch return InstallerError.AllocZFailed;
     defer machine.allocator.free(staged_database_dir_path);
 
-    std.fs.cwd().makePath(staged_database_dir_path) catch {
-        stateFailed(machine);
-        return InstallerError.MakeFailed;
-    };
+    try machine.check(std.fs.cwd().makePath(staged_database_dir_path), InstallerError.AllocZFailed);
 
     var file_map = data.FileMap.init(machine.allocator);
     defer data.freeFileMap(&file_map, machine.allocator);
 
-    collectFileChecksums(machine, current_install_entry.temp_path, current_install_entry.temp_path, &file_map) catch {
-        stateFailed(machine);
-        return InstallerError.CollectFileChecksumsFailed;
-    };
+    try machine.check(collectFileChecksums(machine, current_install_entry.temp_path, current_install_entry.temp_path, &file_map), InstallerError.CollectFileChecksumsFailed);
 
     data.writePackage(staged_database_dir_path, current_install_entry.checksum, current_install_entry.package.meta, file_map, machine.allocator) catch return machine.retry(stateWriteDatabase);
 
@@ -229,7 +180,7 @@ fn stateProcessDbFiles(machine: *InstallerMachine) InstallerError!void {
 
     const current_install_entry = machine.data.packages[machine.current_package_index];
 
-    const temp_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{current_install_entry.temp_path});
+    const temp_path_c = try machine.check(machine.allocator.dupeZ(u8, current_install_entry.temp_path), InstallerError.AllocZFailed);
     defer machine.allocator.free(temp_path_c);
 
     if (c_libs.ostree_repo_write_dfd_to_mtree(machine.repo.?, std.c.AT.FDCWD, temp_path_c.ptr, machine.mtree.?, null, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateProcessDbFiles);
@@ -248,22 +199,8 @@ fn stateProcessDbFiles(machine: *InstallerMachine) InstallerError!void {
 fn stateCommit(machine: *InstallerMachine) InstallerError!void {
     machine.enter(.commit) catch return InstallerError.OutOfMemory;
 
-    const repo = machine.repo orelse {
-        stateFailed(machine);
-        return InstallerError.RepoOpenFailed;
-    };
-    const mtree = machine.mtree orelse {
-        stateFailed(machine);
-        return InstallerError.PackageNotFound;
-    };
-
-    const branch_c = machine.branch_c orelse {
-        stateFailed(machine);
-        return InstallerError.PackageNotFound;
-    };
-
-    const root_path_c = try std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.data.root_path});
-    defer machine.allocator.free(root_path_c);
+    const repo = try machine.unwrap(machine.repo, InstallerError.RepoOpenFailed);
+    const mtree = try machine.unwrap(machine.mtree, InstallerError.PackageNotFound);
 
     var body_buf = std.ArrayList(u8).init(machine.allocator);
     defer body_buf.deinit();
@@ -311,7 +248,9 @@ fn stateCommit(machine: *InstallerMachine) InstallerError!void {
 
     if (c_libs.ostree_repo_write_commit(repo, if (machine.previous_commit_checksum) |checksum| checksum else null, subject_c.ptr, body_c.ptr, null, @ptrCast(mtree_root), @ptrCast(&machine.commit_checksum), machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
 
-    c_libs.ostree_repo_transaction_set_ref(repo, null, branch_c, machine.commit_checksum.?);
+    const commit_checksum = try machine.unwrap(machine.commit_checksum, InstallerError.AllocZFailed);
+
+    c_libs.ostree_repo_transaction_set_ref(repo, null, machine.data.branch, commit_checksum);
 
     if (c_libs.ostree_repo_commit_transaction(repo, null, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
 
@@ -323,33 +262,28 @@ fn stateCommit(machine: *InstallerMachine) InstallerError!void {
 fn stateCheckout(machine: *InstallerMachine) InstallerError!void {
     machine.enter(.checkout) catch return InstallerError.OutOfMemory;
 
-    const repo = machine.repo orelse return stateFailed(machine);
+    const repo = try machine.unwrap(machine.repo, InstallerError.RepoOpenFailed);
+    const commit_checksum = try machine.unwrap(machine.commit_checksum, InstallerError.CheckoutFailed);
 
+    var buf: [256]u8 = undefined;
     const timestamp = std.time.milliTimestamp();
-    const staging_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/{s}-installing-{d}", .{ machine.data.root_path, machine.data.prefix_directory, timestamp }) catch {
-        stateFailed(machine);
-        return InstallerError.AllocZFailed;
-    };
-    machine.staging_path = staging_path_c;
+
+    const temp_folder_name = try machine.check(std.fmt.bufPrintZ(&buf, "{s}-remove-{d}", .{ std.mem.span(machine.data.prefix_path), timestamp }), error.AllocZFailed);
+
+    const staging_path_c = try machine.check(std.fs.path.joinZ(machine.allocator, &.{ std.mem.span(machine.data.root_path), temp_folder_name }), InstallerError.AllocZFailed);
+    machine.staging_path_c = staging_path_c;
 
     var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, staging_path_c.ptr, machine.commit_checksum.?, machine.cancellable, &machine.gerror) == 0) {
-        std.fs.deleteTreeAbsolute(staging_path_c) catch {
-            stateFailed(machine);
-            return InstallerError.CheckoutFailed;
-        };
-        machine.allocator.free(staging_path_c);
-        machine.staging_path = null;
+    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, staging_path_c, commit_checksum, machine.cancellable, &machine.gerror) == 0) {
+        try machine.check(std.fs.deleteTreeAbsolute(staging_path_c), InstallerError.CheckoutFailed);
 
-        if (machine.exhausted()) {
-            stateFailed(machine);
-            return InstallerError.CheckoutFailed;
-        }
-        machine.retries += 1;
-        return stateCheckout(machine);
+        machine.allocator.free(staging_path_c);
+        machine.staging_path_c = null;
+
+        return machine.retry(stateCheckout);
     }
 
     machine.resetRetries();
@@ -359,30 +293,19 @@ fn stateCheckout(machine: *InstallerMachine) InstallerError!void {
 fn stateAtomicSwap(machine: *InstallerMachine) InstallerError!void {
     machine.enter(.atomic_swap) catch return InstallerError.OutOfMemory;
 
-    const staging_path = machine.staging_path orelse {
-        stateFailed(machine);
-        return InstallerError.CheckoutFailed;
-    };
+    const staging_path = try machine.unwrap(machine.staging_path_c, InstallerError.CheckoutFailed);
 
-    const staging_usr_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/{s}", .{ staging_path, machine.data.prefix_directory }) catch {
-        stateFailed(machine);
-        return InstallerError.AllocZFailed;
-    };
-    defer machine.allocator.free(staging_usr_path_c);
+    const root_prefix_path_c = try machine.check(std.fs.path.joinZ(machine.allocator, &.{ std.mem.span(machine.data.root_path), std.mem.span(machine.data.prefix_path) }), InstallerError.AllocZFailed);
+    defer machine.allocator.free(root_prefix_path_c);
 
-    const root_usr_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}/{s}", .{ machine.data.root_path, machine.data.prefix_directory }) catch {
-        stateFailed(machine);
-        return InstallerError.AllocZFailed;
-    };
-    defer machine.allocator.free(root_usr_path_c);
+    const staging_prefix_path_c = try machine.check(std.fs.path.joinZ(machine.allocator, &.{ staging_path, std.mem.span(machine.data.prefix_path) }), InstallerError.AllocZFailed);
+    defer machine.allocator.free(staging_prefix_path_c);
 
-    const result = std.os.linux.syscall5(.renameat2, @bitCast(@as(isize, std.os.linux.AT.FDCWD)), @intFromPtr(staging_usr_path_c.ptr), @bitCast(@as(isize, std.os.linux.AT.FDCWD)), @intFromPtr(root_usr_path_c.ptr), 2);
+    const result = std.os.linux.syscall5(.renameat2, @bitCast(@as(isize, std.os.linux.AT.FDCWD)), @intFromPtr(staging_prefix_path_c.ptr), @bitCast(@as(isize, std.os.linux.AT.FDCWD)), @intFromPtr(root_prefix_path_c.ptr), 2);
 
     if (std.os.linux.E.init(result) != .SUCCESS) {
-        std.fs.deleteTreeAbsolute(staging_path) catch {
-            stateFailed(machine);
-            return InstallerError.CheckoutFailed;
-        };
+        try machine.check(std.fs.deleteTreeAbsolute(staging_path), InstallerError.CheckoutFailed);
+
         stateFailed(machine);
         return InstallerError.CheckoutFailed;
     }
@@ -394,14 +317,11 @@ fn stateAtomicSwap(machine: *InstallerMachine) InstallerError!void {
 fn stateCleanupStaging(machine: *InstallerMachine) InstallerError!void {
     machine.enter(.cleanup) catch return InstallerError.OutOfMemory;
 
-    if (machine.staging_path) |staging_path| {
-        std.fs.deleteTreeAbsolute(staging_path) catch {
-            stateFailed(machine);
-            return InstallerError.CheckoutFailed;
-        };
-        machine.allocator.free(staging_path);
-        machine.staging_path = null;
-    }
+    const staging_path = try machine.unwrap(machine.staging_path_c, InstallerError.CheckoutFailed);
+
+    try machine.check(std.fs.deleteTreeAbsolute(staging_path), InstallerError.CheckoutFailed);
+    machine.allocator.free(staging_path);
+    machine.staging_path_c = null;
 
     return stateDone(machine);
 }
@@ -413,23 +333,16 @@ fn stateDone(machine: *InstallerMachine) InstallerError!void {
 
 // An automaton error state, signaling that a system rollback is required
 pub fn stateFailed(machine: *InstallerMachine) void {
-    const branch_c = machine.branch_c orelse {
-        _ = machine.enter(.failed) catch {};
-        return;
-    };
-
-    if (machine.staging_path) |staging| {
+    if (machine.staging_path_c) |staging| {
         std.fs.deleteTreeAbsolute(staging) catch {};
         machine.allocator.free(staging);
-        machine.staging_path = null;
+        machine.staging_path_c = null;
     }
 
     if (machine.repo) |repo| {
         _ = c_libs.ostree_repo_abort_transaction(repo, null, &machine.gerror);
 
-        if (machine.commit_checksum != null) {
-            _ = c_libs.ostree_repo_set_ref_immediate(repo, null, branch_c, null, null, null);
-        }
+        if (machine.commit_checksum != null) _ = c_libs.ostree_repo_set_ref_immediate(repo, null, machine.data.branch, null, null, null);
     }
 
     _ = machine.enter(.failed) catch {};

@@ -1,6 +1,4 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const data = @import("upac-data");
-
 const CSlice = ffi.CSlice;
 
 const InstallStateId = ffi.InstallStateId;
@@ -10,14 +8,21 @@ const Package = ffi.Package;
 const PackageMeta = ffi.PackageMeta;
 
 const file = @import("upac-file");
-const c_libs = file.c_libs;
 
 const states = @import("states.zig");
 const stateFailed = states.stateFailed;
 
+const utils = @import("utils.zig");
+const onCancelSignal = utils.onCancelSignal;
+const signalLoopThread = utils.signalLoopThread;
+
 // ── Public imports ─────────────────────────────────────────────────────────────────────
 pub const std = @import("std");
+
+pub const c_libs = file.c_libs;
+
 pub const ffi = @import("upac-ffi");
+pub const data = @import("upac-data");
 
 // ── Imports symbols ─────────────────────────────────────────────────────────────────────
 pub usingnamespace @import("symbols.zig");
@@ -54,13 +59,12 @@ pub const InstallEntry = struct {
 // A container structure holding all installation parameters: package metadata, paths to the repository and database, as well as retry limits
 pub const InstallData = struct {
     packages: []const InstallEntry,
+    branch: [*:0]u8,
 
-    repo_path: []const u8,
-    root_path: []const u8,
-    database_path: []const u8,
-
-    branch: []const u8,
-    prefix_directory: []const u8,
+    repo_path: [*:0]u8,
+    root_path: [*:0]u8,
+    database_path: [*:0]u8,
+    prefix_path: [*:0]u8,
 
     on_progress: ?InstallProgressFn = null,
     progress_ctx: ?*anyopaque = null,
@@ -72,23 +76,25 @@ pub const InstallData = struct {
 // The main structure of a finite-state machine, with information persistence between states
 pub const InstallerMachine = struct {
     data: InstallData,
+
     current_package_index: usize = 0,
     retries: u8,
 
     repo: ?*c_libs.OstreeRepo,
     mtree: ?*c_libs.OstreeMutableTree,
 
-    staging_path: ?[:0]const u8 = null,
     commit_checksum: ?[*:0]u8 = null,
     previous_commit_checksum: ?[*:0]u8 = null,
 
-    branch_c: ?[*:0]const u8 = null,
+    staging_path_c: ?[:0]const u8 = null,
 
-    stack: std.ArrayList(InstallStateId),
     cancellable: ?*c_libs.GCancellable = null,
     gerror: ?*c_libs.GError = null,
+
     signal_loop: ?*c_libs.GMainLoop = null,
     signal_thread: ?std.Thread = null,
+
+    stack: std.ArrayList(InstallStateId),
     allocator: std.mem.Allocator,
 
     // Registers a transition to a new state, saving it to the stack. This allows for the reconstruction of the sequence of actions during debugging
@@ -146,16 +152,37 @@ pub const InstallerMachine = struct {
         if (c_libs.ostree_repo_prepare_transaction(self.repo.?, null, null, &gerror) == 0) return InstallerError.RepoOpenFailed;
     }
 
+    pub inline fn unwrap(self: *InstallerMachine, value: anytype, comptime err: InstallerError) InstallerError!@typeInfo(@TypeOf(value)).Optional.child {
+        return value orelse {
+            stateFailed(self);
+            return err;
+        };
+    }
+
+    pub inline fn check(self: *InstallerMachine, value: anytype, comptime err: InstallerError) InstallerError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+        return value catch {
+            stateFailed(self);
+            return err;
+        };
+    }
+
+    pub inline fn gcheck(self: *InstallerMachine, result: c_int, comptime err: InstallerError) InstallerError!void {
+        if (result == 0) {
+            stateFailed(self);
+            return err;
+        }
+    }
+
     // Correct memory deallocation function
     pub fn deinit(self: *InstallerMachine) void {
         if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
         if (self.repo) |repo| c_libs.g_object_unref(repo);
 
-        if (self.staging_path) |ptr| self.allocator.free(ptr);
         if (self.commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
         if (self.previous_commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
 
-        if (self.branch_c) |ptr| self.allocator.free(std.mem.span(ptr));
+        if (self.staging_path_c) |ptr| self.allocator.free(ptr);
+
         if (self.gerror) |ptr| c_libs.g_error_free(@ptrCast(ptr));
         if (self.cancellable) |cancellable| c_libs.g_object_unref(cancellable);
 
@@ -194,14 +221,16 @@ pub const InstallerMachine = struct {
 
         var machine = InstallerMachine{
             .data = install_data,
+
             .current_package_index = 0,
             .retries = 0,
 
             .repo = null,
             .mtree = null,
 
-            .stack = std.ArrayList(InstallStateId).init(allocator),
             .cancellable = c_libs.g_cancellable_new() orelse return InstallerError.OutOfMemory,
+
+            .stack = std.ArrayList(InstallStateId).init(allocator),
             .allocator = allocator,
         };
         defer machine.deinit();
@@ -220,76 +249,3 @@ pub const InstallerMachine = struct {
         try states.stateVerifying(&machine);
     }
 };
-
-// ── Helpers functions ───────────────────────────────────────────────────
-// A recursive assistant. It traverses the directory structure, calculates checksums for all files, and populates the FileMap. It is precisely this data that is subsequently written to the `.files` file within the database
-pub fn collectFileChecksums(machine: *InstallerMachine, dir_path: []const u8, prefix: []const u8, file_map: *data.FileMap) !void {
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
-
-    var dir = try std.fs.openDirAbsolute(dir_path, .{ .iterate = true });
-    defer dir.close();
-
-    var dir_iter = dir.iterate();
-    while (try dir_iter.next()) |entry| {
-        const entry_path = try std.fs.path.join(machine.allocator, &.{ dir_path, entry.name });
-        defer machine.allocator.free(entry_path);
-
-        switch (entry.kind) {
-            .directory => try collectFileChecksums(machine, entry_path, prefix, file_map),
-            .file => {
-                const entry_path_c = try machine.allocator.dupeZ(u8, entry_path);
-                defer machine.allocator.free(entry_path_c);
-
-                const gfile = c_libs.g_file_new_for_path(entry_path_c.ptr);
-                defer c_libs.g_object_unref(@ptrCast(gfile));
-
-                var raw_checksum_bin: ?[*:0]u8 = null;
-                if (c_libs.ostree_checksum_file(gfile, c_libs.OSTREE_OBJECT_TYPE_FILE, &raw_checksum_bin, machine.cancellable, &gerror) == 0) return InstallerError.CollectFileChecksumsFailed;
-                defer c_libs.g_free(@ptrCast(raw_checksum_bin));
-
-                var hex_checksum_buf: [65]u8 = undefined;
-                c_libs.ostree_checksum_inplace_from_bytes(raw_checksum_bin.?, &hex_checksum_buf);
-
-                const relative = entry_path[prefix.len..];
-                try file_map.put(
-                    try machine.allocator.dupe(u8, relative),
-                    try machine.allocator.dupe(u8, hex_checksum_buf[0..64]),
-                );
-            },
-            else => {},
-        }
-    }
-}
-
-pub fn dirSize(allocator: std.mem.Allocator, path: []const u8) !u64 {
-    var total_size: u64 = 0;
-    var dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
-    defer dir.close();
-
-    var dir_iter = dir.iterate();
-    while (try dir_iter.next()) |entry| {
-        const entry_path = try std.fs.path.join(allocator, &.{ path, entry.name });
-        defer allocator.free(entry_path);
-
-        switch (entry.kind) {
-            .file => {
-                const s = try std.fs.cwd().statFile(entry_path);
-                total_size += s.size;
-            },
-            .directory => total_size += try dirSize(allocator, entry_path),
-            else => {},
-        }
-    }
-    return total_size;
-}
-
-fn onCancelSignal(user_data: c_libs.gpointer) callconv(.C) c_libs.gboolean {
-    const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
-    c_libs.g_cancellable_cancel(cancellable);
-    return c_libs.G_SOURCE_REMOVE;
-}
-
-fn signalLoopThread(loop: *c_libs.GMainLoop) void {
-    c_libs.g_main_loop_run(loop);
-}

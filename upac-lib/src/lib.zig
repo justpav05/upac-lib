@@ -12,6 +12,7 @@ const data = @import("upac-data");
 pub usingnamespace @import("upac-installer");
 pub usingnamespace @import("upac-uninstaller");
 pub usingnamespace @import("upac-rollback");
+pub usingnamespace @import("upac-list");
 pub usingnamespace @import("upac-diff");
 pub usingnamespace @import("upac-init");
 

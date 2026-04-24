@@ -14,7 +14,10 @@ const fromError = uninstaller.ffi.fromError;
 pub export fn upac_uninstall(uninstall_request_c: CUninstallRequest) callconv(.C) i32 {
     uninstall_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.uninstall));
 
-    const packages_names_c_null = uninstall_request_c.package_names orelse return @intFromEnum(fromError(error.InvalidEntry, Operation.install));
+    var arena_allocator = std.heap.ArenaAllocator.init(uninstaller.ffi.allocator());
+    defer arena_allocator.deinit();
+
+    const packages_names_c_null = uninstall_request_c.package_names orelse return @intFromEnum(fromError(error.InvalidEntry, Operation.uninstall));
 
     const packages_names_c = packages_names_c_null[0..uninstall_request_c.package_names_len];
 
@@ -28,14 +31,17 @@ pub export fn upac_uninstall(uninstall_request_c: CUninstallRequest) callconv(.C
 
     const uninstall_data = uninstaller.UninstallData{
         .package_names = package_names,
-        .repo_path = uninstall_request_c.repo_path.toSlice(),
-        .root_path = uninstall_request_c.root_path.toSlice(),
-        .db_path = uninstall_request_c.db_path.toSlice(),
-        .branch = uninstall_request_c.branch.toSlice(),
-        .prefix_directory = uninstall_request_c.prefix_directory.toSlice(),
-        .max_retries = uninstall_request_c.max_retries,
+        .branch = arena_allocator.allocator().dupeZ(u8, uninstall_request_c.branch.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+
+        .repo_path = arena_allocator.allocator().dupeZ(u8, uninstall_request_c.repo_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+        .root_path = arena_allocator.allocator().dupeZ(u8, uninstall_request_c.root_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+        .database_path = arena_allocator.allocator().dupeZ(u8, uninstall_request_c.db_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+        .prefix_path = arena_allocator.allocator().dupeZ(u8, uninstall_request_c.prefix_directory.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+
         .on_progress = uninstall_request_c.on_progress,
         .progress_ctx = uninstall_request_c.progress_ctx,
+
+        .max_retries = uninstall_request_c.max_retries,
     };
 
     uninstaller.UninstallerMachine.run(uninstall_data, uninstaller.ffi.allocator()) catch |err|

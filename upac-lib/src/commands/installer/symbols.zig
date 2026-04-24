@@ -16,22 +16,25 @@ const fromError = installer.ffi.fromError;
 pub export fn upac_install(install_request_c: CInstallRequest) callconv(.C) i32 {
     install_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.install));
 
+    var arena_allocator = std.heap.ArenaAllocator.init(installer.ffi.allocator());
+    defer arena_allocator.deinit();
+
     const install_entries = collectInstallEntries(install_request_c, installer.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.install));
     defer installer.ffi.allocator().free(install_entries);
 
     const install_data = installer.InstallData{
-        .max_retries = install_request_c.max_retries,
         .packages = install_entries,
+        .branch = arena_allocator.allocator().dupeZ(u8, install_request_c.branch.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
 
-        .repo_path = install_request_c.repo_path.toSlice(),
-        .root_path = install_request_c.root_path.toSlice(),
-        .database_path = install_request_c.db_path.toSlice(),
-
-        .branch = install_request_c.branch.toSlice(),
-        .prefix_directory = install_request_c.prefix_directory.toSlice(),
+        .repo_path = arena_allocator.allocator().dupeZ(u8, install_request_c.repo_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+        .root_path = arena_allocator.allocator().dupeZ(u8, install_request_c.root_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+        .database_path = arena_allocator.allocator().dupeZ(u8, install_request_c.db_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+        .prefix_path = arena_allocator.allocator().dupeZ(u8, install_request_c.prefix_directory.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
 
         .on_progress = install_request_c.on_progress,
         .progress_ctx = install_request_c.progress_ctx,
+
+        .max_retries = install_request_c.max_retries,
     };
 
     installer.InstallerMachine.run(install_data, installer.ffi.allocator()) catch |err|

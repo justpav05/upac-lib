@@ -46,6 +46,12 @@ pub fn build(b: *std.Build) void {
     upac_diff.addImport("upac-file", upac_file);
     upac_diff.addImport("upac-data", upac_data);
 
+    // ── List ────────────────────────────────────────────────────────────────
+    const upac_list = b.addModule("upac-list", .{ .root_source_file = b.path("src/commands/list/list.zig"), .target = target, .optimize = optimize });
+    upac_list.addImport("upac-ffi", upac_ffi);
+    upac_list.addImport("upac-file", upac_file);
+    upac_list.addImport("upac-data", upac_data);
+
     // ── Init ──────────────────────────────────────────────────────────────────
     const upac_init = b.addModule("upac-init", .{ .root_source_file = b.path("src/commands/init/init.zig"), .target = target, .optimize = optimize });
     upac_init.addImport("upac-ffi", upac_ffi);
@@ -70,11 +76,12 @@ pub fn build(b: *std.Build) void {
     shared_lib.root_module.addImport("upac-rollback", upac_rollback);
 
     shared_lib.root_module.addImport("upac-diff", upac_diff);
+    shared_lib.root_module.addImport("upac-list", upac_list);
     shared_lib.root_module.addImport("upac-init", upac_init);
 
     shared_lib.root_module.strip = strip;
     shared_lib.root_module.stack_check = stack_check;
-    shared_lib.bundle_compiler_rt = true;
+    shared_lib.bundle_compiler_rt = false;
     shared_lib.link_gc_sections = false;
 
     b.installArtifact(shared_lib);

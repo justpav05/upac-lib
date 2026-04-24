@@ -24,8 +24,22 @@ pub const DatabaseError = error{
     PackageNotFound,
     MalformedMeta,
     MalformedFiles,
+    AllocZFailed,
     WriteError,
 };
+
+const FieldEntry = struct {
+    key: []const u8,
+    field: *[]const u8,
+};
+
+inline fn check(value: anytype, comptime err: DatabaseError) DatabaseError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+    return value catch err;
+}
+
+inline fn unwrap(value: anytype, comptime err: DatabaseError) DatabaseError!@typeInfo(@TypeOf(value)).Optional.child {
+    return value orelse err;
+}
 
 // ── FileMap ───────────────────────────────────────────────────────────────────
 pub const FileMap = std.StringHashMap([]const u8);
@@ -56,22 +70,20 @@ pub fn freePackageMeta(meta: PackageMeta, allocator: std.mem.Allocator) void {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 // A high-level function that sequentially writes the package's metadata and file list to the database
-pub fn writePackage(database_path: []const u8, package_checksum: []const u8, package_meta: PackageMeta, files: FileMap, allocator: std.mem.Allocator) !void {
+pub fn writePackage(database_path: []const u8, package_checksum: []const u8, package_meta: PackageMeta, files: FileMap, allocator: std.mem.Allocator) DatabaseError!void {
     try writeMeta(database_path, package_checksum, package_meta, allocator);
     try writeFiles(database_path, package_checksum, files, allocator);
 }
 
 // Constructs the path to the .meta file, reads its contents into memory, and passes them to the parser to obtain the PackageMeta structure
-pub fn readMeta(database_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) !PackageMeta {
+pub fn readMeta(database_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) DatabaseError!PackageMeta {
     const package_meta_path = try metaPath(database_path, package_checksum, allocator);
     defer allocator.free(package_meta_path);
 
     const package_meta_content = blk: {
-        const meta_file = std.fs.openFileAbsolute(package_meta_path, .{}) catch
-            return DatabaseError.PackageNotFound;
+        const meta_file = try check(std.fs.openFileAbsolute(package_meta_path, .{}), DatabaseError.PackageNotFound);
         defer meta_file.close();
-        break :blk meta_file.readToEndAlloc(allocator, 1024 * 1024) catch
-            return DatabaseError.PackageNotFound;
+        break :blk try check(meta_file.readToEndAlloc(allocator, 1024 * 1024), DatabaseError.PackageNotFound);
     };
     defer allocator.free(package_meta_content);
 
@@ -79,14 +91,14 @@ pub fn readMeta(database_path: []const u8, package_checksum: []const u8, allocat
 }
 
 // Constructs the path to the .files file, reads its contents into memory, and passes them to the parser to obtain the FileMap structure
-pub fn readFiles(database_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) !FileMap {
+pub fn readFiles(database_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) DatabaseError!FileMap {
     const package_files_path = try filesPath(database_path, package_checksum, allocator);
     defer allocator.free(package_files_path);
 
-    const package_files_file = std.fs.openFileAbsolute(package_files_path, .{}) catch return DatabaseError.PackageNotFound;
+    const package_files_file = try check(std.fs.openFileAbsolute(package_files_path, .{}), DatabaseError.PackageNotFound);
     defer package_files_file.close();
 
-    const package_files_content = try package_files_file.readToEndAlloc(allocator, 16 * 1024 * 1024);
+    const package_files_content = try check(package_files_file.readToEndAlloc(allocator, 16 * 1024 * 1024), DatabaseError.PackageNotFound);
     defer allocator.free(package_files_content);
 
     return parseFiles(package_files_content, allocator);
@@ -94,47 +106,39 @@ pub fn readFiles(database_path: []const u8, package_checksum: []const u8, alloca
 
 // ── Write meta file ────────────────────────────────────────────────────────────────────
 // Formats the package data (name, version, author, etc.) into a text format and writes it to a file at the absolute path
-fn writeMeta(temp_path: []const u8, package_checksum: []const u8, package_meta: PackageMeta, allocator: std.mem.Allocator) !void {
-    const package_meta_path = try metaPath(temp_path, package_checksum, allocator);
+fn writeMeta(temp_path: []const u8, package_checksum: []const u8, package_meta: PackageMeta, allocator: std.mem.Allocator) DatabaseError!void {
+    const package_meta_path = try check(metaPath(temp_path, package_checksum, allocator), DatabaseError.WriteError);
     defer allocator.free(package_meta_path);
 
-    const package_meta_file = std.fs.createFileAbsolute(package_meta_path, .{}) catch return DatabaseError.WriteError;
+    const package_meta_file = try check(std.fs.createFileAbsolute(package_meta_path, .{}), DatabaseError.WriteError);
     defer package_meta_file.close();
 
-    const package_meta_writer = package_meta_file.writer();
+    const w = package_meta_file.writer();
 
-    package_meta_writer.print("name {s}\n", .{package_meta.name}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("version {s}\n", .{package_meta.version}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("author {s}\n", .{package_meta.author}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("size {d}\n", .{package_meta.size}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("architecture {s}\n", .{package_meta.architecture}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("description {s}\n", .{package_meta.description}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("license {s}\n", .{package_meta.license}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("url {s}\n", .{package_meta.url}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("packager {s}\n", .{package_meta.packager}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("installed_at {d}\n", .{package_meta.installed_at}) catch return DatabaseError.WriteError;
-    package_meta_writer.print("checksum {s}\n", .{package_meta.checksum}) catch return DatabaseError.WriteError;
+    inline for (std.meta.fields(PackageMeta)) |field| {
+        const val = @field(package_meta, field.name);
+        const fmt = comptime if (field.type == []const u8) "s" else "d";
+        try check(w.print("{s} {" ++ fmt ++ "}\n", .{ field.name, val }), DatabaseError.WriteError);
+    }
 }
 
 // ── Write file about package files ────────────────────────────────────────────────────────────────────
 // Writes "file path — checksum" pairs from a hash map to the corresponding database file
-fn writeFiles(temp_path: []const u8, package_checksum: []const u8, file_map: FileMap, allocator: std.mem.Allocator) !void {
-    const package_files_path = try filesPath(temp_path, package_checksum, allocator);
+fn writeFiles(temp_path: []const u8, package_checksum: []const u8, file_map: FileMap, allocator: std.mem.Allocator) DatabaseError!void {
+    const package_files_path = try check(filesPath(temp_path, package_checksum, allocator), DatabaseError.WriteError);
     defer allocator.free(package_files_path);
 
-    const package_files_file = std.fs.createFileAbsolute(package_files_path, .{}) catch return DatabaseError.WriteError;
+    const package_files_file = try check(std.fs.createFileAbsolute(package_files_path, .{}), DatabaseError.WriteError);
     defer package_files_file.close();
 
     const package_file_writer = package_files_file.writer();
     var package_files_iter = file_map.iterator();
-    while (package_files_iter.next()) |package_entry| {
-        package_file_writer.print("{s} {s}\n", .{ package_entry.key_ptr.*, package_entry.value_ptr.* }) catch return DatabaseError.WriteError;
-    }
+    while (package_files_iter.next()) |package_entry| try check(package_file_writer.print("{s} {s}\n", .{ package_entry.key_ptr.*, package_entry.value_ptr.* }), DatabaseError.WriteError);
 }
 
 // ── Parsing meta file ───────────────────────────────────────────────────────────────────
 // Parses the contents of a meta-file line by line, separating keys and values by whitespace and populating the PackageMeta structure
-fn parseMeta(content: []const u8, allocator: std.mem.Allocator) !PackageMeta {
+fn parseMeta(content: []const u8, allocator: std.mem.Allocator) DatabaseError!PackageMeta {
     var package_meta = PackageMeta{
         .name = &[_]u8{},
         .version = &[_]u8{},
@@ -154,57 +158,46 @@ fn parseMeta(content: []const u8, allocator: std.mem.Allocator) !PackageMeta {
         const trimmed_content_line = std.mem.trim(u8, content_line, " \t\r");
         if (trimmed_content_line.len == 0) continue;
 
-        const separator_index = std.mem.indexOfScalar(u8, trimmed_content_line, ' ') orelse return DatabaseError.MalformedMeta;
+        const separator_index = try unwrap(std.mem.indexOfScalar(u8, trimmed_content_line, ' '), DatabaseError.MalformedFiles);
 
         const key = trimmed_content_line[0..separator_index];
         const value = std.mem.trim(u8, trimmed_content_line[separator_index + 1 ..], " \t");
 
         var installed_at_seen = false;
 
-        if (std.mem.eql(u8, key, "name")) {
-            if (package_meta.name.len > 0) return DatabaseError.MalformedMeta;
-            package_meta.name = try allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "version")) {
-            if (package_meta.version.len > 0) return DatabaseError.MalformedMeta;
-            package_meta.version = try allocator.dupe(u8, value);
+        const fields = [_]FieldEntry{
+            .{ .key = "name", .field = &package_meta.name },
+            .{ .key = "version", .field = &package_meta.version },
+            .{ .key = "architecture", .field = &package_meta.architecture },
+            .{ .key = "author", .field = &package_meta.author },
+            .{ .key = "description", .field = &package_meta.description },
+            .{ .key = "license", .field = &package_meta.license },
+            .{ .key = "url", .field = &package_meta.url },
+            .{ .key = "packager", .field = &package_meta.packager },
+            .{ .key = "checksum", .field = &package_meta.checksum },
+        };
+
+        for (fields) |entry| {
+            if (!std.mem.eql(u8, key, entry.key)) continue;
+            if (entry.field.len > 0) return DatabaseError.MalformedMeta;
+            entry.field.* = try check(allocator.dupe(u8, value), DatabaseError.MalformedMeta);
+            break;
         } else if (std.mem.eql(u8, key, "size")) {
             if (package_meta.size > 0) return DatabaseError.MalformedMeta;
             package_meta.size = std.fmt.parseInt(usize, value, 10) catch return DatabaseError.MalformedMeta;
-        } else if (std.mem.eql(u8, key, "architecture")) {
-            if (package_meta.architecture.len > 0) return DatabaseError.MalformedMeta;
-            package_meta.architecture = try allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "author")) {
-            if (package_meta.author.len > 0) return DatabaseError.MalformedMeta;
-            package_meta.author = try allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "description")) {
-            if (package_meta.description.len > 0) return DatabaseError.MalformedMeta;
-            package_meta.description = try allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "license")) {
-            if (package_meta.license.len > 0) return DatabaseError.MalformedMeta;
-            package_meta.license = try allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "url")) {
-            if (package_meta.url.len > 0) return DatabaseError.MalformedMeta;
-            package_meta.url = try allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "packager")) {
-            if (package_meta.packager.len > 0) return DatabaseError.MalformedMeta;
-            package_meta.packager = try allocator.dupe(u8, value);
         } else if (std.mem.eql(u8, key, "installed_at")) {
             if (installed_at_seen) return DatabaseError.MalformedMeta;
             installed_at_seen = true;
             package_meta.installed_at = std.fmt.parseInt(i64, value, 10) catch 0;
-        } else if (std.mem.eql(u8, key, "checksum")) {
-            if (package_meta.checksum.len > 0) return DatabaseError.MalformedMeta;
-            package_meta.checksum = try allocator.dupe(u8, value);
         }
     }
 
-    if (package_meta.name.len == 0) return DatabaseError.MalformedMeta;
     return package_meta;
 }
 
 // ── Parsing file about package files ────────────────────────────────────────────────────────────────────
 // Parses the contents of a file list, extracting file paths and their hashes to populate the FileMap
-fn parseFiles(content: []const u8, allocator: std.mem.Allocator) !FileMap {
+fn parseFiles(content: []const u8, allocator: std.mem.Allocator) DatabaseError!FileMap {
     var file_map = FileMap.init(allocator);
     errdefer freeFileMap(&file_map, allocator);
 
@@ -213,15 +206,17 @@ fn parseFiles(content: []const u8, allocator: std.mem.Allocator) !FileMap {
         const trimmed_content_line = std.mem.trim(u8, content_line, " \t\r");
         if (trimmed_content_line.len == 0) continue;
 
-        const separator_index = std.mem.indexOfScalar(u8, trimmed_content_line, ' ') orelse return DatabaseError.MalformedFiles;
+        const separator_index = try unwrap(std.mem.indexOfScalar(u8, trimmed_content_line, ' '), DatabaseError.MalformedFiles);
 
         const file_path = std.mem.trim(u8, trimmed_content_line[0..separator_index], " \t");
         const file_checksum = std.mem.trim(u8, trimmed_content_line[separator_index + 1 ..], " \t");
 
-        if (file_path.len == 0 or file_checksum.len == 0)
-            return DatabaseError.MalformedFiles;
+        if (file_path.len == 0 or file_checksum.len == 0) return DatabaseError.MalformedFiles;
 
-        try file_map.put(try allocator.dupe(u8, file_path), try allocator.dupe(u8, file_checksum));
+        const file_path_dupe = try check(allocator.dupe(u8, file_path), DatabaseError.AllocZFailed);
+        const file_checksum_dupe = try check(allocator.dupe(u8, file_checksum), DatabaseError.AllocZFailed);
+
+        try check(file_map.put(file_path_dupe, file_checksum_dupe), DatabaseError.AllocZFailed);
     }
 
     return file_map;
@@ -229,11 +224,14 @@ fn parseFiles(content: []const u8, allocator: std.mem.Allocator) !FileMap {
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 // A helper function for generating file path strings for .meta files based on a package checksum
-fn metaPath(temp_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "{s}/{s}.meta", .{ temp_path, package_checksum });
+fn metaPath(temp_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) DatabaseError![]const u8 {
+    var package_buf: [267]u8 = undefined;
+    const filename = try check(std.fmt.bufPrint(&package_buf, "{s}.meta", .{package_checksum}), DatabaseError.AllocZFailed);
+    return try check(std.fs.path.join(allocator, &.{ temp_path, filename }), DatabaseError.AllocZFailed);
 }
 
-// A helper function for generating file path strings for .files files based on a package checksum
-fn filesPath(temp_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "{s}/{s}.files", .{ temp_path, package_checksum });
+fn filesPath(temp_path: []const u8, package_checksum: []const u8, allocator: std.mem.Allocator) DatabaseError![]const u8 {
+    var package_buf: [267]u8 = undefined;
+    const filename = try check(std.fmt.bufPrint(&package_buf, "{s}.files", .{package_checksum}), DatabaseError.AllocZFailed);
+    return try check(std.fs.path.join(allocator, &.{ temp_path, filename }), DatabaseError.AllocZFailed);
 }

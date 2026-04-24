@@ -51,7 +51,7 @@ pub const ErrorCode = enum(i32) {
     ostree_repo_open_failed = 50,
     ostree_repo_transaction_failed = 51,
     ostree_commit = 52,
-    ostree_diff = 53,
+    ostree_diff_failed = 53,
     ostree_rollback = 54,
     ostree_no_parent = 55,
     ostree_staging_failed = 56,
@@ -79,7 +79,7 @@ pub const ErrorCode = enum(i32) {
 pub fn fromError(err: anyerror, operation: Operation) ErrorCode {
     const specific: ?ErrorCode = switch (operation) {
         .init => switch (err) {
-            error.RootNotFound => .file_not_found,
+            error.RootNotFound => .invalid_path,
             error.AlreadyInitialized => .already_initialized,
             error.CreateDirFailed => .create_dir_failed,
             error.NotADirectory => .not_a_directory,
@@ -128,7 +128,7 @@ pub fn fromError(err: anyerror, operation: Operation) ErrorCode {
             error.PathInvalid => .invalid_path,
             error.RepoOpenFailed => .ostree_repo_open_failed,
             error.CommitNotFound => .ostree_commit_not_found,
-            error.DiffFailed => .ostree_diff,
+            error.DiffFailed => .ostree_diff_failed,
             error.StagingFailed => .ostree_staging_failed,
             error.CleanupFailed => .ostree_cleanup_failed,
             error.FileNotFound => .file_not_found,

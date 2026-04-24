@@ -4,11 +4,7 @@ const std = diff.std;
 const c_libs = diff.c_libs;
 const data = diff.data;
 
-const PackageMeta = diff.ffi.PackageMeta;
-
 const CSlice = diff.ffi.CSlice;
-const CPackageMeta = diff.ffi.CPackageMeta;
-const CPackageMetaArray = diff.ffi.CPackageMetaArray;
 
 const CPackageDiffArray = diff.ffi.CPackageDiffArray;
 const CPackageDiffEntry = diff.ffi.CPackageDiffEntry;
@@ -16,57 +12,45 @@ const CPackageDiffEntry = diff.ffi.CPackageDiffEntry;
 const CAttributedDiffArray = diff.ffi.CAttributedDiffArray;
 const CAttributedDiffEntry = diff.ffi.CAttributedDiffEntry;
 
-const CCommitArray = diff.ffi.CCommitArray;
-const CCommitEntry = diff.ffi.CCommitEntry;
-
 const ErrorCode = diff.ffi.ErrorCode;
 const Operation = diff.ffi.Operation;
 
+const files = @import("files.zig");
+
+const diffFilesAttributed = files.diffFilesAttributed;
+
+const packages = @import("packages.zig");
+
+const diffPackages = packages.diffPackages;
+
 const fromError = diff.ffi.fromError;
+
 const onCancelSignal = diff.onCancelSignal;
 const signalLoopThread = diff.signalLoopThread;
 
-const PackageListInner = struct {
-    packages: []PackageMeta,
-    allocator: std.mem.Allocator,
+const SignalHandle = struct {
+    cancellable: *c_libs.GCancellable,
+    signal_ctx: *c_libs.GMainContext,
+    signal_loop: *c_libs.GMainLoop,
+    thread: std.Thread,
 };
 
-pub export fn upac_diff_packages(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, out_c: *CPackageDiffArray) callconv(.C) i32 {
-    validateDiffPackagesRequest(repo_path_c, from_ref_c, to_ref_c, out_c) catch |err| return @intFromEnum(fromError(err, Operation.diff));
+pub export fn upac_diff_packages(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, out_c: *CPackageDiffArray) callconv(.C) i32 {
+    validateDiffPackagesRequest(repo_path, from_ref, to_ref, out_c) catch |err| return @intFromEnum(fromError(err, Operation.diff));
 
-    const cancellable = c_libs.g_cancellable_new();
-    defer c_libs.g_object_unref(cancellable);
+    var arena_allocator = std.heap.ArenaAllocator.init(diff.ffi.allocator());
+    defer arena_allocator.deinit();
 
-    const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
-    const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
+    const signals = setupCancellable() catch return @intFromEnum(fromError(error.DiffFailed, Operation.list));
+    defer teardownCancellable(signals);
 
-    const signal_ctx = c_libs.g_main_context_new();
-    defer c_libs.g_main_context_unref(signal_ctx);
+    const repo_path_c = arena_allocator.allocator().dupeZ(u8, repo_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
 
-    c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), cancellable, null);
-    _ = c_libs.g_source_attach(sigint_src, signal_ctx);
-    c_libs.g_source_unref(sigint_src);
+    const from_ref_c = arena_allocator.allocator().dupeZ(u8, from_ref.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
 
-    c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), cancellable, null);
-    _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
-    c_libs.g_source_unref(sigterm_src);
+    const to_ref_c = arena_allocator.allocator().dupeZ(u8, to_ref.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
 
-    var signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
-    var signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{signal_loop.?}) catch null;
-
-    signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
-    signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{signal_loop.?}) catch null;
-    defer {
-        if (signal_loop) |loop| {
-            c_libs.g_main_loop_quit(loop);
-        }
-        if (signal_thread) |thread| thread.join();
-        if (signal_loop) |loop| {
-            c_libs.g_main_loop_unref(loop);
-        }
-    }
-
-    const pkg_entries = diff.diffPackages(repo_path_c.toSlice(), from_ref_c.toSlice(), to_ref_c.toSlice(), cancellable, diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.diff));
+    const pkg_entries = diffPackages(repo_path_c, from_ref_c, to_ref_c, signals.cancellable, diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.diff));
 
     const entries_c = diff.ffi.allocator().alloc(CPackageDiffEntry, pkg_entries.len) catch {
         for (pkg_entries) |entry| diff.ffi.allocator().free(entry.name);
@@ -108,43 +92,25 @@ pub export fn upac_diff_packages_free(c_out: *CPackageDiffArray) callconv(.C) vo
     diff.ffi.allocator().free(entries);
 }
 
-pub export fn upac_diff_files_attributed(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, root_path_c: CSlice, db_path_c: CSlice, out_c: *CAttributedDiffArray) callconv(.C) i32 {
-    validateListCommitsRequest(repo_path_c, from_ref_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.diff));
-    validateListCommitsRequest(repo_path_c, to_ref_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.diff));
+pub export fn upac_diff_files_attributed(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, root_path: CSlice, db_path: CSlice, out_c: *CAttributedDiffArray) callconv(.C) i32 {
+    validateListCommitsRequest(repo_path, from_ref) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.diff));
+    validateListCommitsRequest(repo_path, to_ref) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.diff));
 
-    const cancellable = c_libs.g_cancellable_new();
-    defer c_libs.g_object_unref(cancellable);
+    var arena_allocator = std.heap.ArenaAllocator.init(diff.ffi.allocator());
+    defer arena_allocator.deinit();
 
-    const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
-    const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
+    const signals = setupCancellable() catch return @intFromEnum(fromError(error.DiffFailed, Operation.list));
+    defer teardownCancellable(signals);
 
-    const signal_ctx = c_libs.g_main_context_new();
-    defer c_libs.g_main_context_unref(signal_ctx);
+    const repo_path_c = arena_allocator.allocator().dupeZ(u8, repo_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
 
-    c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), cancellable, null);
-    _ = c_libs.g_source_attach(sigint_src, signal_ctx);
-    c_libs.g_source_unref(sigint_src);
+    const from_ref_c = arena_allocator.allocator().dupeZ(u8, from_ref.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
 
-    c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), cancellable, null);
-    _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
-    c_libs.g_source_unref(sigterm_src);
+    const to_ref_c = arena_allocator.allocator().dupeZ(u8, to_ref.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
 
-    var signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
-    var signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{signal_loop.?}) catch null;
+    const root_path_c = arena_allocator.allocator().dupeZ(u8, root_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
 
-    signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
-    signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{signal_loop.?}) catch null;
-    defer {
-        if (signal_loop) |loop| {
-            c_libs.g_main_loop_quit(loop);
-        }
-        if (signal_thread) |thread| thread.join();
-        if (signal_loop) |loop| {
-            c_libs.g_main_loop_unref(loop);
-        }
-    }
-
-    const entries = diff.diffFilesAttributed(repo_path_c.toSlice(), from_ref_c.toSlice(), to_ref_c.toSlice(), root_path_c.toSlice(), db_path_c.toSlice(), cancellable, diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.diff));
+    const entries = diffFilesAttributed(repo_path_c, from_ref_c, to_ref_c, root_path_c, db_path.toSlice(), signals.cancellable, diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.diff));
 
     const entries_c = diff.ffi.allocator().alloc(CAttributedDiffEntry, entries.len) catch {
         for (entries) |entry| {
@@ -182,195 +148,6 @@ pub export fn upac_diff_files_attributed_free(out_c: *CAttributedDiffArray) call
     diff.ffi.allocator().free(entries);
 }
 
-pub export fn upac_list_packages(repo_path_c: CSlice, branch_c: CSlice, db_path_c: CSlice, out_c: **anyopaque) callconv(.C) i32 {
-    validateListPackagesRequest(repo_path_c, branch_c, db_path_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
-
-    const cancellable = c_libs.g_cancellable_new();
-    defer c_libs.g_object_unref(cancellable);
-
-    const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
-    const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
-
-    const signal_ctx = c_libs.g_main_context_new();
-    defer c_libs.g_main_context_unref(signal_ctx);
-
-    c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), cancellable, null);
-    _ = c_libs.g_source_attach(sigint_src, signal_ctx);
-    c_libs.g_source_unref(sigint_src);
-
-    c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), cancellable, null);
-    _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
-    c_libs.g_source_unref(sigterm_src);
-
-    var signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
-    var signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{signal_loop.?}) catch null;
-
-    signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
-    signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{signal_loop.?}) catch null;
-    defer {
-        if (signal_loop) |loop| {
-            c_libs.g_main_loop_quit(loop);
-        }
-        if (signal_thread) |thread| thread.join();
-        if (signal_loop) |loop| {
-            c_libs.g_main_loop_unref(loop);
-        }
-    }
-
-    const packages = diff.listPackages(repo_path_c.toSlice(), branch_c.toSlice(), db_path_c.toSlice(), cancellable, diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.list));
-
-    const inner = diff.ffi.allocator().create(PackageListInner) catch {
-        for (packages) |pkg| data.freePackageMeta(pkg, diff.ffi.allocator());
-        diff.ffi.allocator().free(packages);
-        return @intFromEnum(ErrorCode.out_of_memory);
-    };
-    inner.* = .{
-        .packages = packages,
-        .allocator = diff.ffi.allocator(),
-    };
-
-    out_c.* = inner;
-    return @intFromEnum(ErrorCode.ok);
-}
-
-fn validateListPackagesRequest(repo_path: CSlice, branch: CSlice, db_path: CSlice) !void {
-    if (repo_path.isEmpty()) return error.InvalidEntry;
-    if (branch.isEmpty()) return error.InvalidEntry;
-    if (db_path.isEmpty()) return error.InvalidEntry;
-}
-
-fn freeCPackageMeta(meta: *CPackageMeta, allocator: std.mem.Allocator) void {
-    allocator.free(meta.name.toSlice());
-    allocator.free(meta.version.toSlice());
-    allocator.free(meta.architecture.toSlice());
-    allocator.free(meta.author.toSlice());
-    allocator.free(meta.description.toSlice());
-    allocator.free(meta.license.toSlice());
-    allocator.free(meta.url.toSlice());
-    allocator.free(meta.packager.toSlice());
-    allocator.free(meta.checksum.toSlice());
-}
-
-pub export fn upac_packages_free(handle: *anyopaque) callconv(.C) void {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    for (inner.packages) |package_meta| data.freePackageMeta(package_meta, inner.allocator);
-
-    inner.allocator.free(inner.packages);
-
-    inner.allocator.destroy(inner);
-}
-
-pub export fn upac_packages_count(handle: *anyopaque) callconv(.C) usize {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    return inner.packages.len;
-}
-
-pub export fn upac_package_get_name(handle: *anyopaque, index: usize) callconv(.C) CSlice {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
-    return CSlice.fromSlice(inner.packages[index].name);
-}
-
-pub export fn upac_package_get_version(handle: *anyopaque, index: usize) callconv(.C) CSlice {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
-    return CSlice.fromSlice(inner.packages[index].version);
-}
-
-pub export fn upac_package_get_size(handle: *anyopaque, index: usize) callconv(.C) u32 {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= inner.packages.len) return 0;
-    return @intCast(inner.packages[index].size);
-}
-
-pub export fn upac_package_get_architecture(handle: *anyopaque, index: usize) callconv(.C) CSlice {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
-    return CSlice.fromSlice(inner.packages[index].architecture);
-}
-
-pub export fn upac_package_get_author(handle: *anyopaque, index: usize) callconv(.C) CSlice {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
-    return CSlice.fromSlice(inner.packages[index].author);
-}
-
-pub export fn upac_package_get_license(handle: *anyopaque, index: usize) callconv(.C) CSlice {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
-    return CSlice.fromSlice(inner.packages[index].license);
-}
-
-pub export fn upac_package_get_url(handle: *anyopaque, index: usize) callconv(.C) CSlice {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
-    return CSlice.fromSlice(inner.packages[index].url);
-}
-
-pub export fn upac_package_get_packager(handle: *anyopaque, index: usize) callconv(.C) CSlice {
-    const inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= inner.packages.len) return .{ .ptr = null, .len = 0 };
-    return CSlice.fromSlice(inner.packages[index].packager);
-}
-
-pub export fn upac_list_commits(repo_path_c: CSlice, branch_c: CSlice, out_c: *CCommitArray) callconv(.C) i32 {
-    validateListCommitsRequest(repo_path_c, branch_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
-
-    const cancellable = c_libs.g_cancellable_new();
-    defer c_libs.g_object_unref(cancellable);
-
-    const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
-    const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
-
-    const signal_ctx = c_libs.g_main_context_new();
-    defer c_libs.g_main_context_unref(signal_ctx);
-
-    c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), cancellable, null);
-    _ = c_libs.g_source_attach(sigint_src, signal_ctx);
-    c_libs.g_source_unref(sigint_src);
-
-    c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), cancellable, null);
-    _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
-    c_libs.g_source_unref(sigterm_src);
-
-    var signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
-    var signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{signal_loop.?}) catch null;
-
-    signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
-    signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{signal_loop.?}) catch null;
-    defer {
-        if (signal_loop) |loop| {
-            c_libs.g_main_loop_quit(loop);
-        }
-        if (signal_thread) |thread| thread.join();
-        if (signal_loop) |loop| {
-            c_libs.g_main_loop_unref(loop);
-        }
-    }
-
-    const commit_entries = diff.listCommits(repo_path_c.toSlice(), branch_c.toSlice(), cancellable, diff.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.list));
-
-    const entries_c = diff.ffi.allocator().alloc(CCommitEntry, commit_entries.len) catch {
-        for (commit_entries) |entry| {
-            diff.ffi.allocator().free(entry.checksum);
-            diff.ffi.allocator().free(entry.subject);
-        }
-        diff.ffi.allocator().free(commit_entries);
-        return @intFromEnum(ErrorCode.out_of_memory);
-    };
-
-    for (commit_entries, 0..) |entry, index| {
-        entries_c[index] = .{
-            .checksum = CSlice.fromSlice(entry.checksum),
-            .subject = CSlice.fromSlice(entry.subject),
-        };
-    }
-    diff.ffi.allocator().free(commit_entries);
-
-    out_c.* = .{ .ptr = entries_c.ptr, .len = entries_c.len };
-    return @intFromEnum(ErrorCode.ok);
-}
-
 fn validateDiffFilesAttributedRequest(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, root_path: CSlice, db_path: CSlice) !void {
     if (root_path.isEmpty()) return error.InvalidEntry;
     if (repo_path.isEmpty()) return error.InvalidEntry;
@@ -383,12 +160,30 @@ fn validateDiffFilesAttributedRequest(repo_path: CSlice, from_ref: CSlice, to_re
     if (std.mem.eql(u8, from_ref.toSlice(), to_ref.toSlice())) return error.InvalidEntry;
 }
 
-pub export fn upac_commits_free(out_c: *CCommitArray) callconv(.C) void {
-    const allocator = diff.ffi.allocator();
-    const entries = out_c.toSlice();
-    for (entries) |entry| {
-        allocator.free(entry.checksum.toSlice());
-        allocator.free(entry.subject.toSlice());
-    }
-    allocator.free(entries);
+fn setupCancellable() !SignalHandle {
+    const cancellable = c_libs.g_cancellable_new();
+    const signal_ctx = c_libs.g_main_context_new() orelse return error.DiffFailed;
+
+    const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
+    const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
+
+    c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), cancellable, null);
+    c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), cancellable, null);
+    _ = c_libs.g_source_attach(sigint_src, signal_ctx);
+    _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
+    c_libs.g_source_unref(sigint_src);
+    c_libs.g_source_unref(sigterm_src);
+
+    const signal_loop = c_libs.g_main_loop_new(signal_ctx, 0) orelse return error.DiffFailed;
+    const thread = try std.Thread.spawn(.{}, signalLoopThread, .{signal_loop});
+
+    return .{ .cancellable = cancellable, .signal_ctx = signal_ctx, .signal_loop = signal_loop, .thread = thread };
+}
+
+fn teardownCancellable(h: SignalHandle) void {
+    c_libs.g_main_loop_quit(h.signal_loop);
+    h.thread.join();
+    c_libs.g_main_loop_unref(h.signal_loop);
+    c_libs.g_main_context_unref(h.signal_ctx);
+    c_libs.g_object_unref(h.cancellable);
 }

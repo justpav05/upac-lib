@@ -12,50 +12,48 @@ const DiffError = diff.DiffError;
 
 const packages = @import("packages.zig");
 
+const openRepo = diff.openRepo;
+
+const check = diff.check;
+const unwrap = diff.unwrap;
+
 // Checks out two refs and compares their file trees using ostree_diff_dirs
-pub fn diffFiles(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, root_path: []const u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]DiffEntry {
+pub fn diffFiles(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, root_path_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]DiffEntry {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
-    const repo_path_c = std.fmt.allocPrintZ(allocator, "{s}", .{repo_path}) catch return diff.DiffError.AllocZPrintFailed;
-    defer allocator.free(repo_path_c);
-
-    const from_ref_c = std.fmt.allocPrintZ(allocator, "{s}", .{from_ref}) catch return diff.DiffError.AllocZPrintFailed;
-    defer allocator.free(from_ref_c);
-
-    const to_ref_c = std.fmt.allocPrintZ(allocator, "{s}", .{to_ref}) catch return diff.DiffError.AllocZPrintFailed;
-    defer allocator.free(to_ref_c);
-
-    const gfile = c_libs.g_file_new_for_path(repo_path_c.ptr);
-    defer c_libs.g_object_unref(gfile);
-
-    const repo = c_libs.ostree_repo_new(gfile);
-    defer c_libs.g_object_unref(repo);
-
-    if (c_libs.ostree_repo_open(repo, cancellable, &gerror) == 0) return diff.DiffError.RepoOpenFailed;
-
+    var from_checkout_buf: [256]u8 = undefined;
+    var to_checkout_buf: [256]u8 = undefined;
     const timestamp = std.time.milliTimestamp();
 
-    const from_checkout_path = std.fmt.allocPrintZ(allocator, "{s}/upac_diff_from_{d}", .{ root_path, timestamp }) catch return diff.DiffError.AllocZPrintFailed;
-    defer allocator.free(from_checkout_path);
-    defer std.fs.deleteTreeAbsolute(from_checkout_path) catch {};
+    const gfile = c_libs.g_file_new_for_path(repo_path_c);
+    defer c_libs.g_object_unref(gfile);
 
-    const to_checkout_path = std.fmt.allocPrintZ(allocator, "{s}/upac_diff_to_{d}", .{ root_path, timestamp + 1 }) catch return diff.DiffError.AllocZPrintFailed;
-    defer allocator.free(to_checkout_path);
-    defer std.fs.deleteTreeAbsolute(to_checkout_path) catch {};
+    const repo = try openRepo(repo_path_c, cancellable, &gerror);
+    defer c_libs.g_object_unref(repo);
 
-    try checkoutRef(repo.?, from_ref_c, from_checkout_path, cancellable);
+    const from_checkout_temp_dir_name = try check(std.fmt.bufPrint(&from_checkout_buf, "diff-from-{d}", .{timestamp}), DiffError.AllocZPrintFailed);
 
-    if (cancellable) |cancel| {
-        if (c_libs.g_cancellable_is_cancelled(cancel) != 0) return error.Cancelled;
-    }
+    const from_checkout_path_c = try check(std.fs.path.joinZ(allocator, &.{ std.mem.span(root_path_c), from_checkout_temp_dir_name }), DiffError.AllocZPrintFailed);
+    defer allocator.free(from_checkout_path_c);
+    defer std.fs.deleteTreeAbsolute(from_checkout_path_c) catch {};
 
-    try checkoutRef(repo.?, to_ref_c, to_checkout_path, cancellable);
+    try checkoutRef(repo, from_ref_c, from_checkout_path_c, cancellable);
 
-    const from_gfile = c_libs.g_file_new_for_path(from_checkout_path.ptr);
+    const from_gfile = c_libs.g_file_new_for_path(from_checkout_path_c);
     defer c_libs.g_object_unref(from_gfile);
 
-    const to_gfile = c_libs.g_file_new_for_path(to_checkout_path.ptr);
+    if (cancellable) |cancel| if (c_libs.g_cancellable_is_cancelled(cancel) != 0) return error.Cancelled;
+
+    const to_checkout_temp_dir_name = try check(std.fmt.bufPrint(&to_checkout_buf, "diff-to-{d}", .{timestamp}), DiffError.AllocZPrintFailed);
+
+    const to_checkout_path_c = try check(std.fs.path.joinZ(allocator, &.{ std.mem.span(root_path_c), to_checkout_temp_dir_name }), DiffError.AllocZPrintFailed);
+    defer allocator.free(to_checkout_path_c);
+    defer std.fs.deleteTreeAbsolute(to_checkout_path_c) catch {};
+
+    try checkoutRef(repo, to_ref_c, to_checkout_path_c, cancellable);
+
+    const to_gfile = c_libs.g_file_new_for_path(to_checkout_path_c);
     defer c_libs.g_object_unref(to_gfile);
 
     const modified_entries = c_libs.g_ptr_array_new();
@@ -67,7 +65,14 @@ pub fn diffFiles(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8
     const added_entries = c_libs.g_ptr_array_new();
     defer c_libs.g_ptr_array_unref(added_entries);
 
-    if (c_libs.ostree_diff_dirs(c_libs.OSTREE_DIFF_FLAGS_NONE, from_gfile, to_gfile, modified_entries, removed_entries, added_entries, cancellable, &gerror) == 0) return diff.DiffError.DiffFailed;
+    if (c_libs.ostree_diff_dirs(c_libs.OSTREE_DIFF_FLAGS_NONE, from_gfile, to_gfile, modified_entries, removed_entries, added_entries, cancellable, &gerror) == 0) {
+        if (gerror) |err| {
+            if (err.domain == c_libs.g_io_error_quark() and err.code == c_libs.G_IO_ERROR_CANCELLED) {
+                return error.Cancelled;
+            }
+        }
+        return error.DiffFailed;
+    }
 
     var diff_entries = std.ArrayList(DiffEntry).init(allocator);
     errdefer {
@@ -75,51 +80,19 @@ pub fn diffFiles(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8
         diff_entries.deinit();
     }
 
-    const to_prefix = @as([]const u8, to_checkout_path);
-    const from_prefix = @as([]const u8, from_checkout_path);
+    const to_prefix = @as([]const u8, to_checkout_path_c);
+    const from_prefix = @as([]const u8, from_checkout_path_c);
 
-    var index: usize = 0;
-    while (index < added_entries.*.len) : (index += 1) {
-        const gfile_ptr: *c_libs.GFile = @ptrCast(@alignCast(added_entries.*.pdata[index]));
-        const raw_path = c_libs.g_file_get_path(gfile_ptr);
-        defer c_libs.g_free(@ptrCast(raw_path));
-        if (raw_path == null) continue;
+    try collectEntries(added_entries, to_prefix, .added, false, &diff_entries, allocator);
+    try collectEntries(removed_entries, from_prefix, .removed, false, &diff_entries, allocator);
+    try collectEntries(modified_entries, to_prefix, .modified, true, &diff_entries, allocator);
 
-        const file_path = std.mem.span(raw_path.?);
-        const rel_path = if (std.mem.startsWith(u8, file_path, to_prefix)) file_path[to_prefix.len..] else file_path;
-        diff_entries.append(.{ .path = allocator.dupe(u8, rel_path) catch return DiffError.AllocZPrintFailed, .kind = .added }) catch return DiffError.AllocZPrintFailed;
-    }
-
-    index = 0;
-    while (index < removed_entries.*.len) : (index += 1) {
-        const gfile_ptr: *c_libs.GFile = @ptrCast(@alignCast(removed_entries.*.pdata[index]));
-        const raw_path = c_libs.g_file_get_path(gfile_ptr);
-        defer c_libs.g_free(@ptrCast(raw_path));
-        if (raw_path == null) continue;
-
-        const file_path = std.mem.span(raw_path.?);
-        const rel_path = if (std.mem.startsWith(u8, file_path, from_prefix)) file_path[from_prefix.len..] else file_path;
-        diff_entries.append(.{ .path = allocator.dupe(u8, rel_path) catch return DiffError.AllocZPrintFailed, .kind = .removed }) catch return DiffError.AllocZPrintFailed;
-    }
-
-    index = 0;
-    while (index < modified_entries.*.len) : (index += 1) {
-        const diff_item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(modified_entries.*.pdata[index]));
-        const raw_path = c_libs.g_file_get_path(diff_item.target);
-        defer c_libs.g_free(@ptrCast(raw_path));
-        if (raw_path == null) continue;
-
-        const file_path = std.mem.span(raw_path.?);
-        const rel_path = if (std.mem.startsWith(u8, file_path, to_prefix)) file_path[to_prefix.len..] else file_path;
-        diff_entries.append(.{ .path = allocator.dupe(u8, rel_path) catch return DiffError.AllocZPrintFailed, .kind = .modified }) catch return DiffError.AllocZPrintFailed;
-    }
-
-    return diff_entries.toOwnedSlice() catch return DiffError.AllocZPrintFailed;
+    return try check(diff_entries.toOwnedSlice(), DiffError.AllocZPrintFailed);
 }
 
 // Enriches a file diff with package attribution by mapping each changed path to its owning package
-pub fn diffFilesAttributed(repo_path: []const u8, from_ref: []const u8, to_ref: []const u8, root_path: []const u8, db_path: []const u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]AttributedDiffEntry {
-    const raw_diff = diffFiles(repo_path, from_ref, to_ref, root_path, cancellable, allocator) catch return diff.DiffError.DiffFailed;
+pub fn diffFilesAttributed(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, root_path: [*:0]u8, db_path: []const u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]AttributedDiffEntry {
+    const raw_diff = diffFiles(repo_path_c, from_ref_c, to_ref_c, root_path, cancellable, allocator) catch return error.DiffFailed;
     defer {
         for (raw_diff) |entry| allocator.free(entry.path);
         allocator.free(raw_diff);
@@ -128,8 +101,9 @@ pub fn diffFilesAttributed(repo_path: []const u8, from_ref: []const u8, to_ref: 
     var file_pkg = std.StringHashMap([]const u8).init(allocator);
     defer packages.freeStringMap(&file_pkg, allocator);
 
-    buildFilePkgMap(repo_path, to_ref, db_path, &file_pkg, cancellable, allocator) catch return diff.DiffError.DiffFailed;
-    buildFilePkgMap(repo_path, from_ref, db_path, &file_pkg, cancellable, allocator) catch return diff.DiffError.DiffFailed;
+    try check(buildFilePkgMap(repo_path_c, to_ref_c, db_path, &file_pkg, cancellable, allocator), DiffError.DiffFailed);
+
+    try check(buildFilePkgMap(repo_path_c, from_ref_c, db_path, &file_pkg, cancellable, allocator), DiffError.DiffFailed);
 
     var result = std.ArrayList(AttributedDiffEntry).init(allocator);
     errdefer {
@@ -143,29 +117,29 @@ pub fn diffFilesAttributed(repo_path: []const u8, from_ref: []const u8, to_ref: 
     for (raw_diff) |entry| {
         const pkg = file_pkg.get(entry.path) orelse "";
         result.append(.{
-            .path = allocator.dupe(u8, entry.path) catch return diff.DiffError.AllocZPrintFailed,
+            .path = allocator.dupe(u8, entry.path) catch return error.AllocZPrintFailed,
             .kind = entry.kind,
-            .package_name = allocator.dupe(u8, pkg) catch return diff.DiffError.AllocZPrintFailed,
-        }) catch return diff.DiffError.AllocZPrintFailed;
+            .package_name = allocator.dupe(u8, pkg) catch return error.AllocZPrintFailed,
+        }) catch return error.AllocZPrintFailed;
     }
 
     return result.toOwnedSlice() catch return DiffError.AllocZPrintFailed;
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
-fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [:0]const u8, destination_path: [:0]const u8, cancellable: ?*c_libs.GCancellable) DiffError!void {
+fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [*:0]u8, destination_path: [*:0]u8, cancellable: ?*c_libs.GCancellable) DiffError!void {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
     var resolved_checksum: ?[*:0]u8 = null;
     defer if (resolved_checksum) |cs| c_libs.g_free(@ptrCast(cs));
 
-    if (c_libs.ostree_repo_resolve_rev(repo, ref_c.ptr, 0, &resolved_checksum, &gerror) == 0) return diff.DiffError.DiffFailed;
+    if (c_libs.ostree_repo_resolve_rev(repo, ref_c, 0, &resolved_checksum, &gerror) == 0) return error.DiffFailed;
 
-    std.fs.makeDirAbsolute(destination_path) catch |err| switch (err) {
+    std.fs.makeDirAbsolute(std.mem.span(destination_path)) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         error.FileNotFound => {
-            const path_slice: []const u8 = destination_path;
+            const path_slice: []const u8 = std.mem.span(destination_path);
             const rel = if (path_slice.len > 0 and path_slice[0] == '/') path_slice[1..] else path_slice;
             var root = std.fs.openDirAbsolute("/", .{}) catch return error.FileNotFound;
             defer root.close();
@@ -178,25 +152,17 @@ fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [:0]const u8, destination_path: 
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
-    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, destination_path.ptr, resolved_checksum, cancellable, &gerror) == 0) return DiffError.DiffFailed;
+    if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, destination_path, resolved_checksum, cancellable, &gerror) == 0) return DiffError.DiffFailed;
 }
 
-fn buildFilePkgMap(repo_path: []const u8, ref: []const u8, db_path: []const u8, out: *std.StringHashMap([]const u8), cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError!void {
+fn buildFilePkgMap(repo_path_c: [*:0]u8, ref_c: [*:0]u8, db_path: []const u8, out: *std.StringHashMap([]const u8), cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError!void {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
-    const repo_path_c = std.fmt.allocPrintZ(allocator, "{s}", .{repo_path}) catch return DiffError.AllocZPrintFailed;
-    defer allocator.free(repo_path_c);
-
-    const gfile = c_libs.g_file_new_for_path(repo_path_c.ptr);
-    defer c_libs.g_object_unref(gfile);
-
-    const repo = c_libs.ostree_repo_new(gfile);
+    const repo = try openRepo(repo_path_c, cancellable, &gerror);
     defer c_libs.g_object_unref(repo);
 
-    if (c_libs.ostree_repo_open(repo, cancellable, &gerror) == 0) return;
-
-    const body = (try packages.getRefBody(repo.?, ref, cancellable, allocator)) orelse return;
+    const body = (try packages.getRefBody(repo, ref_c, cancellable, allocator)) orelse return;
     defer allocator.free(body);
 
     var pkg_map = try packages.parsePackageBody(body, allocator);
@@ -214,10 +180,31 @@ fn buildFilePkgMap(repo_path: []const u8, ref: []const u8, db_path: []const u8, 
         while (file_map_iter.next()) |file_entry| {
             if (!out.contains(file_entry.key_ptr.*)) {
                 out.put(
-                    allocator.dupe(u8, file_entry.key_ptr.*) catch return diff.DiffError.AllocZPrintFailed,
-                    allocator.dupe(u8, pkg_name) catch return diff.DiffError.AllocZPrintFailed,
-                ) catch return diff.DiffError.AllocZPrintFailed;
+                    allocator.dupe(u8, file_entry.key_ptr.*) catch return error.AllocZPrintFailed,
+                    allocator.dupe(u8, pkg_name) catch return error.AllocZPrintFailed,
+                ) catch return error.AllocZPrintFailed;
             }
         }
+    }
+}
+
+fn collectEntries(entries_ptr_array: *c_libs.GPtrArray, prefix: []const u8, kind: diff.ffi.DiffKind, use_target: bool, result: *std.ArrayList(diff.ffi.DiffEntry), allocator: std.mem.Allocator) DiffError!void {
+    var index: usize = 0;
+    while (index < entries_ptr_array.*.len) : (index += 1) {
+        const raw_path = if (use_target) blk: {
+            const item: *c_libs.OstreeDiffItem = @ptrCast(@alignCast(entries_ptr_array.*.pdata[index]));
+            break :blk c_libs.g_file_get_path(item.target);
+        } else blk: {
+            const gfile_ptr: *c_libs.GFile = @ptrCast(@alignCast(entries_ptr_array.*.pdata[index]));
+            break :blk c_libs.g_file_get_path(gfile_ptr);
+        };
+        defer c_libs.g_free(@ptrCast(raw_path));
+        if (raw_path == null) continue;
+
+        const file_path = std.mem.span(raw_path);
+        const rel_path = if (std.mem.startsWith(u8, file_path, prefix)) file_path[prefix.len..] else file_path;
+        const rel_path_dupe = try check(allocator.dupe(u8, rel_path), DiffError.AllocZPrintFailed);
+
+        try check(result.append(.{ .path = rel_path_dupe, .kind = kind }), DiffError.AllocZPrintFailed);
     }
 }
