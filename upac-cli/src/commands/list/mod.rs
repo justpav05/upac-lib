@@ -9,6 +9,7 @@ use std::sync::Arc;
 use self::states::state_fetching_mode;
 
 use crate::config::Config;
+use crate::types::BackendKind;
 use crate::upac::UpacLib;
 
 mod states;
@@ -96,7 +97,7 @@ impl ListMachine {
             commits: Vec::new(),
 
             config,
-            upac_lib: Arc::new(UpacLib::load()?),
+            upac_lib: Arc::new(UpacLib::load(&BackendKind::UpacLib)?),
             stack: Vec::new(),
         })
     }

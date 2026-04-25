@@ -13,8 +13,9 @@ use super::{
     c_void, on_install_progress, Colorize, InstallMachine, PreparedPackage, Result, State, UpacLib,
 };
 
-use crate::backends::{Backend, BackendKind};
+use crate::backends::Backend;
 use crate::ffi::{CInstallRequest, CPackageEntry, CSlice};
+use crate::types::BackendKind;
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
@@ -70,13 +71,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
         };
 
         let (meta_handle, temp_path_c) = backend
-            .meta_prepare(
-                &abs_file_str,
-                &tmp_string_path,
-                &checksum,
-                Some(Backend::on_backend_progress),
-                progress_bar_ptr,
-            )
+            .meta_prepare(&abs_file_str, &tmp_string_path, &checksum, progress_bar_ptr)
             .map_err(|err| {
                 machine.progress_bar.finish_and_clear();
                 err

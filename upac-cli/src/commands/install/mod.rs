@@ -10,9 +10,10 @@ use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::Arc;
 
-use crate::backends::{Backend, BackendKind};
+use crate::backends::Backend;
 use crate::config::Config;
 use crate::ffi::{CPackageEntry, CSlice, PackageMetaHandle};
+use crate::types::BackendKind;
 use crate::upac::UpacLib;
 
 use self::states::state_preparing_package;
@@ -103,7 +104,7 @@ impl InstallMachine {
             checksums,
             prepared_packages: Vec::new(),
             progress_bar: ProgressBar::new_spinner(),
-            upac_lib: Arc::new(UpacLib::load()?),
+            upac_lib: Arc::new(UpacLib::load(&BackendKind::UpacLib)?),
             loaded_backends: HashMap::new(),
             config,
             stack: Vec::new(),

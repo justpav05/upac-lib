@@ -2,7 +2,7 @@
 use anyhow::Result;
 use indicatif::ProgressBar;
 
-use strum::{Display, EnumProperty, EnumString, FromRepr};
+use strum::FromRepr;
 
 use std::ffi::c_void;
 use std::mem::MaybeUninit;
@@ -10,7 +10,8 @@ use std::ptr::null_mut;
 
 use libloading::Library;
 
-use crate::ffi::{CSlice, PackageMetaHandle};
+use crate::ffi::{CPrepareRequest, CSlice, PackageMetaHandle};
+use crate::types::BackendKind;
 
 // ── Backend Definition ────────────────────────────────────────
 #[derive(FromRepr)]
@@ -37,58 +38,7 @@ impl BackendEvent {
     }
 }
 
-// Represents the type of backend (ALPM, RPM, DEB) for a package
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Display, EnumString, EnumProperty)]
-pub enum BackendKind {
-    #[strum(serialize = "arch", to_string = "alpm", props(so = "libupac-alpm.so"))]
-    Alpm,
-    #[strum(serialize = "rpm", props(so = "libupac-rpm.so"))]
-    Rpm,
-    #[strum(serialize = "deb", props(so = "libupac-deb.so"))]
-    Deb,
-}
-
-impl BackendKind {
-    pub fn detect(file_path: &str) -> Option<Self> {
-        let known_extensions = [
-            (".pkg.tar.zst", Self::Alpm),
-            (".pkg.tar.xz", Self::Alpm),
-            (".pkg.tar.gz", Self::Alpm),
-            (".rpm", Self::Rpm),
-            (".deb", Self::Deb),
-        ];
-
-        known_extensions
-            .iter()
-            .find(|(extension, _)| file_path.ends_with(extension))
-            .map(|(_, backend_kind)| backend_kind.clone())
-    }
-
-    pub fn from_flag(flag_string: &str) -> Result<Self> {
-        flag_string.parse().map_err(|_| {
-            anyhow::anyhow!("unknown backend: '{flag_string}'. Available: arch, rpm, deb")
-        })
-    }
-
-    pub fn so_name(&self) -> &'static str {
-        self.get_str("so").expect("so property not defined")
-    }
-}
-
 // ── Wrapper for the backend .so ───────────────────────────────────────────────────
-// Represents the request struct for the backend's prepare function
-#[repr(C)]
-pub struct CPrepareRequest {
-    pub struct_size: usize,
-
-    pub pkg_path: CSlice,
-    pub temp_dir: CSlice,
-    pub checksum: CSlice,
-
-    pub on_progress: Option<unsafe extern "C" fn(u8, CSlice, *mut c_void)>,
-    pub progress_ctx: *mut c_void,
-}
-
 // A wrapper for dynamically loading libupac.so and mapping its C functions to Rust types
 pub struct Backend {
     _lib: Library,
@@ -140,18 +90,15 @@ impl Backend {
         pkg_path: &str,
         temp_dir: &str,
         checksum: &str,
-        on_progress: Option<unsafe extern "C" fn(u8, CSlice, *mut c_void)>,
         progress_ctx: *mut c_void,
     ) -> Result<(PackageMetaHandle, CSlice)> {
-        let prepare_request_c = CPrepareRequest {
-            struct_size: size_of::<CPrepareRequest>(),
-
-            pkg_path: CSlice::from_str(pkg_path),
-            temp_dir: CSlice::from_str(temp_dir),
-            checksum: CSlice::from_str(checksum),
-            on_progress,
+        let prepare_request_c = CPrepareRequest::new(
+            pkg_path,
+            temp_dir,
+            checksum,
+            Some(Backend::on_backend_progress),
             progress_ctx,
-        };
+        );
 
         let mut package_meta_handle_ptr: PackageMetaHandle = null_mut();
         let mut package_temp_path_ptr = MaybeUninit::<CSlice>::uninit();

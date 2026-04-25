@@ -10,6 +10,7 @@ use crate::config::Config;
 
 use self::states::state_validating;
 use crate::ffi::CSlice;
+use crate::types::BackendKind;
 use crate::upac::UpacLib;
 
 mod states;
@@ -45,7 +46,7 @@ impl RemoveMachine {
         Ok(Self {
             package_names,
             progress_bar: ProgressBar::new_spinner(),
-            upac_lib: Arc::new(UpacLib::load()?),
+            upac_lib: Arc::new(UpacLib::load(&BackendKind::UpacLib)?),
             config,
             stack: Vec::new(),
         })
@@ -89,7 +90,7 @@ pub unsafe extern "C" fn on_remove_progress(event: u8, package_name: CSlice, ctx
         4 => progress_bar.set_message(format!("Removing files for {name}...")),
         5 => progress_bar.set_message(format!("Removing database for {name}...")),
         6 => progress_bar.set_message(format!("Committing {name}...")),
-        7 => {}
+        7 => progress_bar.set_message(format!("Cheking out {name}...")),
         8 => {}
         9 => {}
         10 => progress_bar.println(format!("{} Done", "✓".green().bold())),

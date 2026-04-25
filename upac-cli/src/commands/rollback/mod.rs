@@ -6,6 +6,7 @@ use indicatif::ProgressBar;
 use std::sync::Arc;
 
 use crate::config::Config;
+use crate::types::BackendKind;
 use crate::upac::UpacLib;
 
 use self::states::state_validating;
@@ -42,7 +43,7 @@ impl RollbackMachine {
         Ok(Self {
             commit_hash,
             progress_bar: ProgressBar::new_spinner(),
-            upac_lib: Arc::new(UpacLib::load()?),
+            upac_lib: Arc::new(UpacLib::load(&BackendKind::UpacLib)?),
             config,
             stack: Vec::new(),
         })

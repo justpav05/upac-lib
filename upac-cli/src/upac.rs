@@ -1,7 +1,7 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::{bail, Result};
 
-use libloading::{Library, Symbol};
+use libloading::Library;
 
 use std::ffi::c_void;
 use std::str;
@@ -10,6 +10,7 @@ use crate::ffi::{
     CAttributedDiffArray, CCommitArray, CInitRequest, CInstallRequest, CPackageDiffArray,
     CRollbackRequest, CSlice, CUninstallRequest,
 };
+use crate::types::BackendKind;
 
 // ── Wrapper around libupac.so ────────────────────────────────────────────────────
 // A wrapper for dynamically loading libupac.so and mapping its C functions to Rust types
@@ -49,46 +50,53 @@ pub struct UpacLib {
 
 impl UpacLib {
     // Loads the library from a file and initializes pointers to symbols
-    pub fn load() -> Result<Self> {
-        let lib = unsafe { Library::new("libupac.so") }
-            .map_err(|err| anyhow::anyhow!("failed to load libupac.so: {err}"))?;
+    unsafe fn load_symbol<T: Copy>(library: &Library, symbol_name: &str) -> Result<T> {
+        library
+            .get(symbol_name.as_bytes())
+            .map(|symbol| *symbol)
+            .map_err(|error| anyhow::anyhow!("Symbol {symbol_name} not found: {error}"))
+    }
 
-        macro_rules! sym {
-            ($name:literal) => {
-                unsafe {
-                    let symbol: Symbol<_> = lib.get($name).map_err(|err| {
-                        anyhow::anyhow!("symbol {} not found: {err}", stringify!($name))
-                    })?;
-                    *symbol
-                }
-            };
-        }
+    // Loads the library from a file and initializes pointers to symbols
+    pub fn load(backend_kind: &BackendKind) -> Result<Self> {
+        let loaded_library = unsafe { Library::new(backend_kind.so_name()) }.map_err(|error| {
+            anyhow::anyhow!("Failed to load {}: {error}", backend_kind.so_name())
+        })?;
 
         Ok(Self {
-            install: sym!(b"upac_install"),
-            uninstall: sym!(b"upac_uninstall"),
-            rollback: sym!(b"upac_rollback"),
+            install: unsafe { Self::load_symbol(&loaded_library, "upac_install")? },
+            uninstall: unsafe { Self::load_symbol(&loaded_library, "upac_uninstall")? },
+            rollback: unsafe { Self::load_symbol(&loaded_library, "upac_rollback")? },
 
-            diff_packages: sym!(b"upac_diff_packages"),
-            diff_packages_free: sym!(b"upac_diff_packages_free"),
-            diff_files_attributed: sym!(b"upac_diff_files_attributed"),
-            diff_files_attributed_free: sym!(b"upac_diff_files_attributed_free"),
+            diff_packages: unsafe { Self::load_symbol(&loaded_library, "upac_diff_packages")? },
+            diff_packages_free: unsafe {
+                Self::load_symbol(&loaded_library, "upac_diff_packages_free")?
+            },
+            diff_files_attributed: unsafe {
+                Self::load_symbol(&loaded_library, "upac_diff_files_attributed")?
+            },
+            diff_files_attributed_free: unsafe {
+                Self::load_symbol(&loaded_library, "upac_diff_files_attributed_free")?
+            },
 
-            list_packages: sym!(b"upac_list_packages"),
-            packages_free: sym!(b"upac_packages_free"),
-            packages_count: sym!(b"upac_packages_count"),
+            list_packages: unsafe { Self::load_symbol(&loaded_library, "upac_list_packages")? },
+            packages_free: unsafe { Self::load_symbol(&loaded_library, "upac_packages_free")? },
+            packages_count: unsafe { Self::load_symbol(&loaded_library, "upac_packages_count")? },
 
-            package_get_slice_field: sym!(b"upac_package_get_slice_field"),
-            package_get_int_field: sym!(b"upac_package_get_int_field"),
+            package_get_slice_field: unsafe {
+                Self::load_symbol(&loaded_library, "upac_package_get_slice_field")?
+            },
+            package_get_int_field: unsafe {
+                Self::load_symbol(&loaded_library, "upac_package_get_int_field")?
+            },
 
-            list_commits: sym!(b"upac_list_commits"),
-            commits_free: sym!(b"upac_commits_free"),
+            list_commits: unsafe { Self::load_symbol(&loaded_library, "upac_list_commits")? },
+            commits_free: unsafe { Self::load_symbol(&loaded_library, "upac_commits_free")? },
 
-            init: sym!(b"upac_init"),
+            init: unsafe { Self::load_symbol(&loaded_library, "upac_init")? },
+            deinit: unsafe { Self::load_symbol(&loaded_library, "upac_deinit")? },
 
-            deinit: sym!(b"upac_deinit"),
-
-            _lib: lib,
+            _lib: loaded_library,
         })
     }
 
@@ -97,7 +105,7 @@ impl UpacLib {
         if code == 0 {
             return Ok(());
         }
-        let msg = match code {
+        let message = match code {
             1 => "unexpected error",
             2 => "out of memory",
             3 => "file not found",
@@ -163,6 +171,6 @@ impl UpacLib {
 
             _ => "unknown error",
         };
-        bail!("{context}: {msg} (code {code})");
+        bail!("{context}: {message} (code {code})");
     }
 }

@@ -19,8 +19,10 @@ use config::Config;
 
 mod backends;
 mod config;
-pub mod ffi;
 mod upac;
+
+pub mod ffi;
+pub mod types;
 
 mod commands {
     pub mod install;

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use self::states::state_validating;
 
 use crate::config::Config;
+use crate::types::BackendKind;
 use crate::upac::UpacLib;
 
 mod states;
@@ -97,7 +98,7 @@ impl DiffMachine {
             file_rows: Vec::new(),
             files_mode,
             progress_bar: ProgressBar::new_spinner(),
-            upac_lib: Arc::new(UpacLib::load()?),
+            upac_lib: Arc::new(UpacLib::load(&BackendKind::UpacLib)?),
             config,
             stack: Vec::new(),
         })

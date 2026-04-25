@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::ffi::CRepoMode;
+use crate::types::BackendKind;
 use crate::upac::UpacLib;
 
 use self::states::state_validating;
@@ -50,7 +51,7 @@ impl InitMachine {
 
             config,
             progress_bar: ProgressBar::new_spinner(),
-            upac_lib: Arc::new(UpacLib::load()?),
+            upac_lib: Arc::new(UpacLib::load(&BackendKind::UpacLib)?),
             stack: Vec::new(),
         })
     }
