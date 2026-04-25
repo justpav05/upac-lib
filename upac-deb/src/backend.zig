@@ -22,8 +22,9 @@ pub const PackageMeta = struct {
 
 // Parameters for the package preparation request: paths to the archive and output folder, and the checksum
 pub const PrepareRequest = struct {
-    pkg_path: []const u8,
-    temp_dir: []const u8,
+    pkg_path: [*:0]u8,
+    temp_dir: [*:0]u8,
+
     checksum: []const u8,
 
     on_progress: ?BackendProgressFn = null,
@@ -72,6 +73,7 @@ pub const BackendMachine = struct {
     meta: ?PackageMeta,
 
     temp_path: ?[:0]const u8 = null,
+    file: ?std.fs.File = null,
 
     stack: std.ArrayList(StateId),
     allocator: std.mem.Allocator,
@@ -90,6 +92,7 @@ pub const BackendMachine = struct {
     // Releasing resources (stack memory) occupied by the state machine
     pub fn deinit(self: *BackendMachine) void {
         if (self.temp_path) |path| self.allocator.free(path);
+        if (self.file) |file| file.close();
 
         self.stack.deinit();
     }
@@ -97,12 +100,26 @@ pub const BackendMachine = struct {
     // Reports an installation progress event to the progress callback, if one is set
     pub fn report(self: *BackendMachine, event: StateId) void {
         const cb = self.request.on_progress orelse return;
-        cb(event, CSlice.fromSlice(self.request.pkg_path), self.request.progress_ctx);
+        cb(event, CSlice.fromSlice(std.mem.span(self.request.pkg_path)), self.request.progress_ctx);
     }
 
     pub fn reportDetail(self: *BackendMachine, message: []const u8) void {
         const cb = self.request.on_progress orelse return;
         cb(.special_step, CSlice.fromSlice(message), self.request.progress_ctx);
+    }
+
+    pub inline fn unwrap(self: *BackendMachine, value: anytype, comptime err: BackendError) BackendError!@typeInfo(@TypeOf(value)).Optional.child {
+        return value orelse {
+            stateFailed(self);
+            return err;
+        };
+    }
+
+    pub inline fn check(self: *BackendMachine, value: anytype, comptime err: BackendError) BackendError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+        return value catch {
+            stateFailed(self);
+            return err;
+        };
     }
 
     // The entry and launch point of the machine, responsible for returning the correct result
@@ -179,10 +196,10 @@ const CPackageMeta = extern struct {
 // C-compatible request parameter structure for use in FFI
 const CPrepareRequest = extern struct {
     struct_size: usize = @sizeOf(CPrepareRequest),
+    checksum: CSlice,
 
     pkg_path: CSlice,
     temp_dir: CSlice,
-    checksum: CSlice,
 
     on_progress: ?CBackendProgressFn = null,
     progress_ctx: ?*anyopaque = null,
@@ -221,9 +238,13 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: *?*anyopaque, out_temp_path: *CSlice) callconv(.C) i32 {
     request_c.validate() catch |err| return @intFromEnum(fromError(err));
 
+    var arena_allocator = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena_allocator.deinit();
+
     const zig_request = PrepareRequest{
-        .pkg_path = request_c.pkg_path.toSlice(),
-        .temp_dir = request_c.temp_dir.toSlice(),
+        .pkg_path = arena_allocator.allocator().dupeZ(u8, request_c.pkg_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed)),
+        .temp_dir = arena_allocator.allocator().dupeZ(u8, request_c.temp_dir.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed)),
+
         .checksum = request_c.checksum.toSlice(),
 
         .on_progress = request_c.on_progress,

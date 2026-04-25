@@ -22,8 +22,9 @@ pub const PackageMeta = struct {
 
 // Parameters for the package preparation request: paths to the archive and output folder, and the checksum
 pub const PrepareRequest = struct {
-    pkg_path: []const u8,
-    temp_dir: []const u8,
+    package_path_c: [*:0]u8,
+    temp_dir_path_c: [*:0]u8,
+
     checksum: []const u8,
 
     on_progress: ?BackendProgressFn = null,
@@ -72,6 +73,8 @@ pub const BackendMachine = struct {
     meta: ?PackageMeta,
 
     temp_path: ?[:0]const u8 = null,
+    file: ?std.fs.File = null,
+    pkginfo_content: ?[]u8 = null,
 
     stack: std.ArrayList(StateId),
     allocator: std.mem.Allocator,
@@ -89,7 +92,9 @@ pub const BackendMachine = struct {
 
     // Releasing resources (stack memory) occupied by the state machine
     pub fn deinit(self: *BackendMachine) void {
+        if (self.pkginfo_content) |content| self.allocator.free(content);
         if (self.temp_path) |path| self.allocator.free(path);
+        if (self.file) |file| file.close();
 
         self.stack.deinit();
     }
@@ -97,12 +102,26 @@ pub const BackendMachine = struct {
     // Reports an installation progress event to the progress callback, if one is set
     pub fn report(self: *BackendMachine, event: StateId) void {
         const cb = self.request.on_progress orelse return;
-        cb(event, CSlice.fromSlice(self.request.pkg_path), self.request.progress_ctx);
+        cb(event, CSlice.fromSlice(std.mem.span(self.request.package_path_c)), self.request.progress_ctx);
     }
 
     pub fn reportDetail(self: *BackendMachine, message: []const u8) void {
         const cb = self.request.on_progress orelse return;
         cb(.special_step, CSlice.fromSlice(message), self.request.progress_ctx);
+    }
+
+    pub inline fn unwrap(self: *BackendMachine, value: anytype, comptime err: BackendError) BackendError!@typeInfo(@TypeOf(value)).Optional.child {
+        return value orelse {
+            stateFailed(self);
+            return err;
+        };
+    }
+
+    pub inline fn check(self: *BackendMachine, value: anytype, comptime err: BackendError) BackendError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+        return value catch {
+            stateFailed(self);
+            return err;
+        };
     }
 
     // The entry and launch point of the machine, responsible for returning the correct result
@@ -115,18 +134,20 @@ pub const BackendMachine = struct {
 
         var machine = BackendMachine{
             .request = request,
+
+            .meta = null,
+
             .stack = std.ArrayList(StateId).init(allocator),
             .allocator = allocator,
-            .meta = null,
         };
         defer machine.deinit();
         try states.stateVerifying(&machine);
 
-        const temp_path = machine.temp_path orelse return BackendError.TempDirFailed;
+        const temp_path = try machine.unwrap(machine.temp_path, BackendError.TempDirFailed);
         machine.temp_path = null;
 
         return PrepareResult{
-            .meta = machine.meta orelse return BackendError.InvalidPackage,
+            .meta = try machine.unwrap(machine.meta, BackendError.TempDirFailed),
             .temp_path = temp_path,
         };
     }
@@ -179,10 +200,10 @@ const CPackageMeta = extern struct {
 // C-compatible request parameter structure for use in FFI
 const CPrepareRequest = extern struct {
     struct_size: usize = @sizeOf(CPrepareRequest),
-
-    pkg_path: CSlice,
-    temp_dir: CSlice,
     checksum: CSlice,
+
+    pacakge_path: CSlice,
+    temp_dir_path: CSlice,
 
     on_progress: ?CBackendProgressFn = null,
     progress_ctx: ?*anyopaque = null,
@@ -190,8 +211,8 @@ const CPrepareRequest = extern struct {
     pub fn validate(req: CPrepareRequest) !void {
         if (req.struct_size != @sizeOf(CPrepareRequest)) return error.AbiMismatch;
 
-        if (req.pkg_path.isEmpty()) return error.InvalidEntry;
-        if (req.temp_dir.isEmpty()) return error.InvalidEntry;
+        if (req.pacakge_path.isEmpty()) return error.InvalidEntry;
+        if (req.temp_dir_path.isEmpty()) return error.InvalidEntry;
         if (req.checksum.isEmpty()) return error.InvalidEntry;
     }
 };
@@ -221,10 +242,15 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: **CPackageMeta, out_temp_path: *CSlice) callconv(.C) i32 {
     request_c.validate() catch |err| return @intFromEnum(fromError(err));
 
+    var arena_allocator = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena_allocator.deinit();
+
     const zig_request = PrepareRequest{
-        .pkg_path = request_c.pkg_path.toSlice(),
-        .temp_dir = request_c.temp_dir.toSlice(),
+        .package_path_c = arena_allocator.allocator().dupeZ(u8, request_c.pacakge_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed)),
+        .temp_dir_path_c = arena_allocator.allocator().dupeZ(u8, request_c.temp_dir_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed)),
+
         .checksum = request_c.checksum.toSlice(),
+
         .on_progress = request_c.on_progress,
         .progress_ctx = request_c.progress_ctx,
     };
@@ -316,17 +342,17 @@ pub const BackendErrorCode = enum(i32) {
 
 pub fn fromError(err: anyerror) BackendErrorCode {
     return switch (err) {
-        BackendError.ChecksumMismatch => .checksum_mismatch,
-        BackendError.ExtractionFailed => .extraction_failed,
-        BackendError.MetadataNotFound => .metadata_not_found,
-        BackendError.InvalidPackage => .invalid_package,
-        BackendError.ArchiveOpenFailed => .archive_open_failed,
-        BackendError.ArchiveReadFailed => .archive_read_failed,
-        BackendError.ArchiveExtractFailed => .archive_extract_failed,
-        BackendError.TempDirFailed => .temp_dir_failed,
-        BackendError.AllocZFailed, BackendError.OutOfMemory => .alloc_failed,
-        BackendError.Cancelled => .cancelled,
-        BackendError.ReadFailed => .read_failed,
+        error.ChecksumMismatch => .checksum_mismatch,
+        error.ExtractionFailed => .extraction_failed,
+        error.MetadataNotFound => .metadata_not_found,
+        error.InvalidPackage => .invalid_package,
+        error.ArchiveOpenFailed => .archive_open_failed,
+        error.ArchiveReadFailed => .archive_read_failed,
+        error.ArchiveExtractFailed => .archive_extract_failed,
+        error.TempDirFailed => .temp_dir_failed,
+        error.AllocZFailed, error.OutOfMemory => .alloc_failed,
+        error.Cancelled => .cancelled,
+        error.ReadFailed => .read_failed,
         error.InvalidEntry => .invalid_entry,
         error.AbiMismatch => .abi_mismatch,
         else => .unexpected,
