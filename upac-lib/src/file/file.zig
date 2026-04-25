@@ -56,8 +56,10 @@ pub const FileFSM = struct {
 
     file_checksum: ?[]const u8,
 
-    stack: std.ArrayList(FileFSMStateId),
     gerror: ?*c_libs.GError = null,
+    cancellable: *c_libs.GCancellable,
+
+    stack: std.ArrayList(FileFSMStateId),
     allocator: std.mem.Allocator,
 
     // Registers a transition to a new state by adding its identifier to the stack
@@ -110,7 +112,7 @@ pub const FileFSM = struct {
     }
 
     // A static function for initializing and starting the automaton's execution loop. It returns the final checksum of the processed file
-    pub fn run(data: FileFSMEnterData, max_retries: u8, allocator: std.mem.Allocator) FileError![]const u8 {
+    pub fn run(data: FileFSMEnterData, max_retries: u8, cancellable: *c_libs.GCancellable, allocator: std.mem.Allocator) FileError![]const u8 {
         var machine = FileFSM{
             .retries = 0,
             .max_retries = max_retries,
@@ -118,6 +120,8 @@ pub const FileFSM = struct {
             .data = data,
 
             .file_checksum = null,
+
+            .cancellable = cancellable,
 
             .stack = std.ArrayList(FileFSMStateId).init(allocator),
             .allocator = allocator,

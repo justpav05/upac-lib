@@ -122,11 +122,19 @@ fn stateRemoveFiles(machine: *UninstallerMachine) !void {
     try machine.enter(.remove_files);
 
     const repo = try machine.unwrap(machine.repo, error.RepoOpenFailed);
-    const mtree = try machine.unwrap(machine.mtree, error.PackageNotFound);
     const file_map = try machine.unwrap(machine.package_file_map, error.PackageNotFound);
+    const mtree = try machine.unwrap(machine.mtree, error.PackageNotFound);
 
     var iter = file_map.iterator();
-    while (iter.next()) |entry| removeFromMtree(repo, mtree, entry.key_ptr.*, machine.allocator) catch return machine.retry(stateRemoveFiles);
+    while (iter.next()) |entry| {
+        removeFromMtree(repo, mtree, entry.key_ptr.*, machine.allocator) catch |err| {
+            if (err == error.FileNotFound) continue;
+            if (machine.mtree) |old_mtree| c_libs.g_object_unref(old_mtree);
+            machine.mtree = utils.resolveMtree(machine, repo);
+
+            return machine.retry(stateRemoveFiles);
+        };
+    }
 
     machine.resetRetries();
     return stateRemoveDbFiles(machine);

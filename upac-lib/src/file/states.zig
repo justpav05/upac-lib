@@ -18,7 +18,7 @@ fn stateChecksum(machine: *FileFSM) FileError!void {
     var raw_checksum: ?[*:0]u8 = null;
     defer c_libs.g_free(@ptrCast(raw_checksum));
 
-    if (c_libs.ostree_checksum_file(gfile, c_libs.OSTREE_OBJECT_TYPE_FILE, &raw_checksum, null, &machine.gerror) == 0) return machine.retry(stateChecksum, FileError.ChecksumFailed);
+    if (c_libs.ostree_checksum_file(gfile, c_libs.OSTREE_OBJECT_TYPE_FILE, &raw_checksum, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateChecksum, FileError.ChecksumFailed);
 
     machine.file_checksum = try machine.allocator.dupe(u8, std.mem.span(raw_checksum.?));
     machine.resetRetries();
@@ -42,14 +42,14 @@ fn stateWriteObject(machine: *FileFSM) !void {
 
     var file_content_length: c_libs.guint64 = 0;
 
-    if (c_libs.ostree_raw_file_to_content_stream(@ptrCast(raw_file_stream), file_info, null, &file_content_stream, &file_content_length, null, &machine.gerror) == 0) return machine.retry(stateWriteObject, FileError.RepoWriteFailed);
+    if (c_libs.ostree_raw_file_to_content_stream(@ptrCast(raw_file_stream), file_info, null, &file_content_stream, &file_content_length, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateWriteObject, FileError.RepoWriteFailed);
 
     const expected_checksum = try machine.unwrap(machine.file_checksum, FileError.ChecksumFailed);
     const expected_checksum_c = try machine.allocator.dupeZ(u8, expected_checksum);
     defer machine.allocator.free(expected_checksum_c);
 
     var object_exists: c_libs.gboolean = 0;
-    _ = c_libs.ostree_repo_has_object(machine.data.repo, c_libs.OSTREE_OBJECT_TYPE_FILE, expected_checksum_c.ptr, &object_exists, null, null);
+    _ = c_libs.ostree_repo_has_object(machine.data.repo, c_libs.OSTREE_OBJECT_TYPE_FILE, expected_checksum_c.ptr, &object_exists, machine.cancellable, null);
 
     if (object_exists != 0) {
         machine.resetRetries();
@@ -57,7 +57,7 @@ fn stateWriteObject(machine: *FileFSM) !void {
     }
 
     var written_checksum_bin: ?[*]c_libs.guchar = null;
-    if (c_libs.ostree_repo_write_content(machine.data.repo, null, file_content_stream, file_content_length, &written_checksum_bin, null, &machine.gerror) == 0) return machine.retry(stateWriteObject, FileError.RepoWriteFailed);
+    if (c_libs.ostree_repo_write_content(machine.data.repo, null, file_content_stream, file_content_length, &written_checksum_bin, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateWriteObject, FileError.RepoWriteFailed);
     defer if (written_checksum_bin) |checksum_bin| c_libs.g_free(@ptrCast(checksum_bin));
 
     if (machine.file_checksum) |checksum| machine.allocator.free(checksum);

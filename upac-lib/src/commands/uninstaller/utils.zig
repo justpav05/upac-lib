@@ -40,7 +40,7 @@ pub fn removeFromMtree(repo: *c_libs.OstreeRepo, root_mtree: *c_libs.OstreeMutab
 
         if (c_libs.ostree_mutable_tree_lookup(current_subtree, directory_component_c.ptr, &out_file_checksum, &out_subdir, &gerror) == 0) return error.FileNotFound;
 
-        if (out_subdir == null) return error.FileNotFound;
+        if (out_subdir == null) return;
         current_subtree = out_subdir.?;
     }
 

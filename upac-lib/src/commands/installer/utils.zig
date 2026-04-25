@@ -39,10 +39,24 @@ pub fn collectFileChecksums(machine: *InstallerMachine, dir_path: []const u8, pr
                 c_libs.ostree_checksum_inplace_from_bytes(raw_checksum_bin.?, &hex_checksum_buf);
 
                 const relative = entry_path[prefix.len..];
-                try file_map.put(
-                    try machine.allocator.dupe(u8, relative),
-                    try machine.allocator.dupe(u8, hex_checksum_buf[0..64]),
-                );
+                try file_map.put(try machine.allocator.dupe(u8, relative), try machine.allocator.dupe(u8, hex_checksum_buf[0..64]));
+            },
+            .sym_link => {
+                const entry_path_c = try machine.allocator.dupeZ(u8, entry_path);
+                defer machine.allocator.free(entry_path_c);
+
+                const gfile = c_libs.g_file_new_for_path(entry_path_c.ptr);
+                defer c_libs.g_object_unref(@ptrCast(gfile));
+
+                var raw_checksum_bin: ?[*:0]u8 = null;
+                if (c_libs.ostree_checksum_file(gfile, c_libs.OSTREE_OBJECT_TYPE_FILE, &raw_checksum_bin, machine.cancellable, &gerror) == 0) return InstallerError.CollectFileChecksumsFailed;
+                defer c_libs.g_free(@ptrCast(raw_checksum_bin));
+
+                var hex_checksum_buf: [65]u8 = undefined;
+                c_libs.ostree_checksum_inplace_from_bytes(raw_checksum_bin.?, &hex_checksum_buf);
+
+                const relative_path = entry_path[prefix.len..];
+                try file_map.put(try machine.allocator.dupe(u8, relative_path), try machine.allocator.dupe(u8, hex_checksum_buf[0..64]));
             },
             else => {},
         }
