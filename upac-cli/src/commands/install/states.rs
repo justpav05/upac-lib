@@ -11,22 +11,19 @@ use std::time::Duration;
 
 use super::{
     c_void, on_install_progress, Colorize, InstallMachine, PreparedPackage, Result, State, UpacLib,
-    UpacLibGuard,
 };
 
-use crate::backends::{on_backend_progress, BackendKind, BackendLibGuard};
+use crate::backends::{Backend, BackendKind};
 use crate::ffi::{CInstallRequest, CPackageEntry, CSlice};
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::PreparingPackage);
-    machine.upac_lib = Some(UpacLibGuard::load()?);
-    machine.progress_bar = Some(spinner("Verifying and extracting package..."));
+    spinner(&machine.progress_bar, "Verifying and extracting package...");
 
     let files: Vec<String> = machine.files.clone();
 
-    let progress_bar_ptr =
-        machine.progress_bar.as_ref().unwrap() as *const ProgressBar as *mut c_void;
+    let progress_bar_ptr = &machine.progress_bar as *const ProgressBar as *mut c_void;
 
     for (index, file) in files.iter().enumerate() {
         machine.enter(State::DetectingBackend(file.clone()));
@@ -44,7 +41,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             .entry(kind.clone())
             .or_insert_with(|| {
                 Arc::new(
-                    BackendLibGuard::load(&kind)
+                    Backend::load(&kind)
                         .expect(format!("Failed to load backend lib for {}", kind).as_str()),
                 )
             })
@@ -52,8 +49,6 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 
         machine
             .progress_bar
-            .as_ref()
-            .unwrap()
             .println(format!("{} backend: {}", "→".cyan(), kind));
 
         let tmp_string_path = env::temp_dir()
@@ -79,11 +74,11 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
                 &abs_file_str,
                 &tmp_string_path,
                 &checksum,
-                Some(on_backend_progress),
+                Some(Backend::on_backend_progress),
                 progress_bar_ptr,
             )
             .map_err(|err| {
-                machine.progress_bar.as_ref().unwrap().finish_and_clear();
+                machine.progress_bar.finish_and_clear();
                 err
             })?;
 
@@ -103,8 +98,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 fn state_installing(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::Installing);
 
-    let progress_bar_ptr =
-        machine.progress_bar.as_ref().unwrap() as *const ProgressBar as *mut c_void;
+    let progress_bar_ptr = &machine.progress_bar as *const ProgressBar as *mut c_void;
 
     let packages_c: Vec<CPackageEntry> = machine
         .prepared_packages
@@ -131,15 +125,17 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         max_retries: machine.config.step_retries,
     };
 
-    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().install)(install_request_c) };
-    UpacLib::check(return_code, "install")?;
+    UpacLib::check(
+        unsafe { (machine.upac_lib.as_ref().install)(install_request_c) },
+        "install",
+    )?;
 
     state_done(machine)
 }
 
 fn state_done(machine: &mut InstallMachine) -> Result<()> {
     machine.enter(State::Done);
-    machine.progress_bar.as_ref().unwrap().finish_and_clear();
+    machine.progress_bar.finish_and_clear();
 
     for package in &machine.prepared_packages {
         let backend = &package.backend;
@@ -152,12 +148,16 @@ fn state_done(machine: &mut InstallMachine) -> Result<()> {
         println!("Installed: {} {}", name, version);
     }
 
+    machine.prepared_packages.clear();
+    machine.loaded_backends.clear();
+
+    (machine.upac_lib.as_ref().deinit);
+
     Ok(())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-fn spinner(message: &str) -> ProgressBar {
-    let progress_bar = ProgressBar::new_spinner();
+fn spinner(progress_bar: &ProgressBar, message: &str) -> () {
     progress_bar.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
@@ -166,7 +166,6 @@ fn spinner(message: &str) -> ProgressBar {
     );
     progress_bar.set_message(message.to_owned());
     progress_bar.enable_steady_tick(Duration::from_millis(80));
-    progress_bar
 }
 
 fn compute_checksum(file_path: &str) -> Result<String> {

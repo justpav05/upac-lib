@@ -1,12 +1,12 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
-
 use colored::Colorize;
-
 use indicatif::ProgressBar;
 
+use std::sync::Arc;
+
 use crate::config::Config;
-use crate::upac::{UpacLib, UpacLibGuard};
+use crate::upac::UpacLib;
 
 use self::states::state_validating;
 
@@ -31,22 +31,21 @@ enum State {
 struct RollbackMachine {
     commit_hash: String,
 
-    progress_bar: Option<ProgressBar>,
-
-    upac_lib: Option<UpacLibGuard>,
+    upac_lib: Arc<UpacLib>,
+    progress_bar: ProgressBar,
     config: Config,
     stack: Vec<State>,
 }
 
 impl RollbackMachine {
-    fn new(config: Config, commit_hash: String) -> Self {
-        Self {
+    fn new(config: Config, commit_hash: String) -> Result<Self> {
+        Ok(Self {
             commit_hash,
-            progress_bar: None,
-            upac_lib: None,
+            progress_bar: ProgressBar::new_spinner(),
+            upac_lib: Arc::new(UpacLib::load()?),
             config,
             stack: Vec::new(),
-        }
+        })
     }
 
     fn enter(&mut self, state: State) {
@@ -56,7 +55,7 @@ impl RollbackMachine {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: RollbackArgs) -> Result<()> {
-    let mut rolling_machine = RollbackMachine::new(config, args.commit);
+    let mut rolling_machine = RollbackMachine::new(config, args.commit)?;
 
     state_validating(&mut rolling_machine).map_err(|err| {
         if !matches!(rolling_machine.stack.last(), Some(State::Failed(_))) {

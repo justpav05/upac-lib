@@ -1,11 +1,13 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
-
 use colored::Colorize;
+use indicatif::ProgressBar;
+
+use std::sync::Arc;
 
 use crate::config::Config;
 use crate::ffi::CRepoMode;
-use crate::upac::{UpacLib, UpacLibGuard};
+use crate::upac::UpacLib;
 
 use self::states::state_validating;
 
@@ -34,19 +36,23 @@ struct InitMachine {
     config_path: String,
 
     config: Config,
-    upac_lib: Option<UpacLibGuard>,
+    progress_bar: ProgressBar,
+    upac_lib: Arc<UpacLib>,
     stack: Vec<State>,
 }
 
 impl InitMachine {
-    fn new(repo_mode_c: CRepoMode, config_path: String, config: Config) -> Self {
-        Self {
+    fn new(repo_mode_c: CRepoMode, config_path: String, config: Config) -> Result<Self> {
+        Ok(Self {
             repo_mode_c,
+
             config_path,
+
             config,
-            upac_lib: None,
+            progress_bar: ProgressBar::new_spinner(),
+            upac_lib: Arc::new(UpacLib::load()?),
             stack: Vec::new(),
-        }
+        })
     }
 
     fn enter(&mut self, state: State) {
@@ -66,7 +72,7 @@ pub fn run(config: Config, args: InitArgs) -> Result<()> {
         ),
     };
 
-    let mut init_machine = InitMachine::new(repo_mode_c, args.config_path, config);
+    let mut init_machine = InitMachine::new(repo_mode_c, args.config_path, config)?;
 
     state_validating(&mut init_machine).map_err(|err| {
         if !matches!(init_machine.stack.last(), Some(State::Failed(_))) {

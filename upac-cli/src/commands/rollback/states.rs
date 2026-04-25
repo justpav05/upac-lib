@@ -3,15 +3,14 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use std::time::Duration;
 
-use super::{Colorize, Result, RollbackMachine, State, UpacLib, UpacLibGuard};
+use super::{Colorize, Result, RollbackMachine, State, UpacLib};
 
 use crate::ffi::{CRollbackRequest, CSlice};
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_validating(machine: &mut RollbackMachine) -> Result<()> {
     machine.enter(State::Validating);
-    machine.upac_lib = Some(UpacLibGuard::load()?);
-    machine.progress_bar = Some(spinner("Rolling back..."));
+    spinner(&machine.progress_bar, "Validating rolling data...");
 
     if machine.commit_hash.len() != 64
         || !machine
@@ -25,7 +24,7 @@ pub fn state_validating(machine: &mut RollbackMachine) -> Result<()> {
         );
     }
 
-    machine.progress_bar.as_ref().unwrap().println(format!(
+    machine.progress_bar.println(format!(
         "{} rolling back to {}",
         "→".cyan(),
         &machine.commit_hash[..12].dimmed()
@@ -36,6 +35,7 @@ pub fn state_validating(machine: &mut RollbackMachine) -> Result<()> {
 
 fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
     machine.enter(State::RollingBack);
+    spinner(&machine.progress_bar, "Rolling back...");
 
     let rollback_request_c = CRollbackRequest {
         struct_size: std::mem::size_of::<CRollbackRequest>(),
@@ -49,28 +49,31 @@ fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
         commit_hash: CSlice::from_str(&machine.commit_hash),
     };
 
-    let return_code = unsafe { (machine.upac_lib.as_ref().unwrap().rollback)(rollback_request_c) };
-
-    UpacLib::check(return_code, "rollback")?;
+    UpacLib::check(
+        unsafe { (machine.upac_lib.as_ref().rollback)(rollback_request_c) },
+        "rollback",
+    )?;
 
     state_done(machine)
 }
 
 fn state_done(machine: &mut RollbackMachine) -> Result<()> {
     machine.enter(State::Done);
-    machine.progress_bar.as_ref().unwrap().finish_and_clear();
+    machine.progress_bar.finish_and_clear();
 
     println!(
         "{} rolled back to {}",
         "✓".green().bold(),
         &machine.commit_hash[..12].bold()
     );
+
+    (machine.upac_lib.as_ref().deinit);
+
     Ok(())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-fn spinner(message: &str) -> ProgressBar {
-    let progress_bar = ProgressBar::new_spinner();
+fn spinner(progress_bar: &ProgressBar, message: &str) -> () {
     progress_bar.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
@@ -79,5 +82,4 @@ fn spinner(message: &str) -> ProgressBar {
     );
     progress_bar.set_message(message.to_owned());
     progress_bar.enable_steady_tick(Duration::from_millis(80));
-    progress_bar
 }

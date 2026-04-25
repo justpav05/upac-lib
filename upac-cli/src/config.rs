@@ -42,8 +42,6 @@ pub struct OstreeConfig {
     pub branch: String,
     #[default = "usr"]
     pub prefix_directory: String,
-    #[default = "opt"]
-    pub addition_prefixes: String,
 }
 
 // ── Validation ─────────────────────────────────────────────────────────────────

@@ -5,7 +5,6 @@ use std::slice;
 
 use super::{
     format_size, Colorize, CommitRow, HandleGuard, ListMachine, PackageRow, Result, State, UpacLib,
-    UpacLibGuard,
 };
 
 use crate::ffi::{CCommitArray, CSlice};
@@ -13,7 +12,6 @@ use crate::ffi::{CCommitArray, CSlice};
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_fetching_mode(machine: &mut ListMachine) -> Result<()> {
     machine.enter(State::FetchingMode);
-    machine.upac_lib = Some(UpacLibGuard::load()?);
 
     match machine.commits_mode {
         true => state_get_commits_info(machine),
@@ -32,14 +30,12 @@ fn state_get_commits_info(machine: &mut ListMachine) -> Result<()> {
         len: 0,
     };
 
-    let return_code = unsafe {
-        (machine.upac_lib.as_ref().unwrap().list_commits)(
-            repo_path_c,
-            branch_c,
-            &mut commit_array_c,
-        )
-    };
-    UpacLib::check(return_code, "list commits")?;
+    UpacLib::check(
+        unsafe {
+            (machine.upac_lib.as_ref().list_commits)(repo_path_c, branch_c, &mut commit_array_c)
+        },
+        "list commits",
+    )?;
 
     let commit_entries = unsafe { slice::from_raw_parts(commit_array_c.ptr, commit_array_c.len) };
     machine.commits = commit_entries
@@ -52,7 +48,7 @@ fn state_get_commits_info(machine: &mut ListMachine) -> Result<()> {
         })
         .collect();
 
-    unsafe { (machine.upac_lib.as_ref().unwrap().commits_free)(&mut commit_array_c) };
+    unsafe { (machine.upac_lib.as_ref().commits_free)(&mut commit_array_c) };
 
     state_printing_commits(machine)
 }
@@ -63,7 +59,7 @@ fn state_get_packages_list(machine: &mut ListMachine) -> Result<()> {
     let mut handle: *mut c_void = null_mut();
 
     let return_code = unsafe {
-        (machine.upac_lib.as_ref().unwrap().list_packages)(
+        (machine.upac_lib.as_ref().list_packages)(
             CSlice::from_str(&machine.config.paths.repo_path),
             CSlice::from_str(&machine.config.ostree.branch),
             CSlice::from_str(&machine.config.paths.database_path),
@@ -72,7 +68,7 @@ fn state_get_packages_list(machine: &mut ListMachine) -> Result<()> {
     };
     UpacLib::check(return_code, "list packages")?;
 
-    let lib = machine.upac_lib.as_ref().unwrap();
+    let lib = machine.upac_lib.as_ref();
     let guard = HandleGuard::new(handle, lib.packages_free);
     let count = unsafe { (lib.packages_count)(guard.handle) };
 
@@ -237,5 +233,8 @@ fn state_printing_packeges(machine: &mut ListMachine) -> Result<()> {
 
 fn state_done(machine: &mut ListMachine) -> Result<()> {
     machine.enter(State::Done);
+
+    (machine.upac_lib.as_ref().deinit);
+
     Ok(())
 }

@@ -1,71 +1,77 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
-use anyhow::{bail, Result};
-
+use anyhow::Result;
 use indicatif::ProgressBar;
 
+use strum::{Display, EnumProperty, EnumString, FromRepr};
+
 use std::ffi::c_void;
-use std::fmt::{Display, Formatter};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
 
-use libloading::{Library, Symbol};
+use libloading::Library;
 
 use crate::ffi::{CSlice, PackageMetaHandle};
 
 // ── Backend Definition ────────────────────────────────────────
+#[derive(FromRepr)]
+#[repr(u8)]
+pub enum BackendEvent {
+    Verifying = 0,
+    Extracting = 1,
+    ReadingMeta = 2,
+    Status = 3,
+    Ready = 4,
+    Failed = 5,
+}
+
+impl BackendEvent {
+    pub fn format_message(&self, detail_string: &str) -> String {
+        match self {
+            Self::Verifying => format!("Verifying {detail_string}..."),
+            Self::Extracting => format!("Extracting {detail_string}..."),
+            Self::ReadingMeta => "Reading metadata...".to_string(),
+            Self::Status => detail_string.to_string(),
+            Self::Ready => "Ready".to_string(),
+            Self::Failed => "Failed".to_string(),
+        }
+    }
+}
+
 // Represents the type of backend (ALPM, RPM, DEB) for a package
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Display, EnumString, EnumProperty)]
 pub enum BackendKind {
+    #[strum(serialize = "arch", to_string = "alpm", props(so = "libupac-alpm.so"))]
     Alpm,
+    #[strum(serialize = "rpm", props(so = "libupac-rpm.so"))]
     Rpm,
+    #[strum(serialize = "deb", props(so = "libupac-deb.so"))]
     Deb,
 }
 
-impl Display for BackendKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BackendKind::Alpm => write!(f, "alpm"),
-            BackendKind::Rpm => write!(f, "rpm"),
-            BackendKind::Deb => write!(f, "deb"),
-        }
-    }
-}
-
 impl BackendKind {
-    // Automatically determines the package type (ALPM, RPM, DEB) based on the file extension
-    pub fn detect(path: &str) -> Option<Self> {
-        if path.ends_with(".pkg.tar.zst")
-            || path.ends_with(".pkg.tar.xz")
-            || path.ends_with(".pkg.tar.gz")
-        {
-            return Some(Self::Alpm);
-        }
-        if path.ends_with(".rpm") {
-            return Some(Self::Rpm);
-        }
-        if path.ends_with(".deb") {
-            return Some(Self::Deb);
-        }
-        None
+    pub fn detect(file_path: &str) -> Option<Self> {
+        let known_extensions = [
+            (".pkg.tar.zst", Self::Alpm),
+            (".pkg.tar.xz", Self::Alpm),
+            (".pkg.tar.gz", Self::Alpm),
+            (".rpm", Self::Rpm),
+            (".deb", Self::Deb),
+        ];
+
+        known_extensions
+            .iter()
+            .find(|(extension, _)| file_path.ends_with(extension))
+            .map(|(_, backend_kind)| backend_kind.clone())
     }
 
-    // Parses a string flag (e.g., "arch", "rpm", "deb") into a BackendKind
-    pub fn from_flag(string: &str) -> Result<Self> {
-        match string {
-            "arch" => Ok(Self::Alpm),
-            "rpm" => Ok(Self::Rpm),
-            "deb" => Ok(Self::Deb),
-            _ => bail!("unknown backend: '{string}'. Available: alpm, rpm, deb"),
-        }
+    pub fn from_flag(flag_string: &str) -> Result<Self> {
+        flag_string.parse().map_err(|_| {
+            anyhow::anyhow!("unknown backend: '{flag_string}'. Available: arch, rpm, deb")
+        })
     }
 
-    // Returns the name of the shared object file for this backend (e.g., "libupac-alpm.so")
     pub fn so_name(&self) -> &'static str {
-        match self {
-            Self::Alpm => "libupac-alpm.so",
-            Self::Rpm => "libupac-rpm.so",
-            Self::Deb => "libupac-deb.so",
-        }
+        self.get_str("so").expect("so property not defined")
     }
 }
 
@@ -99,32 +105,32 @@ pub struct Backend {
 
 impl Backend {
     // Loads the library from a file and initializes pointers to symbols
-    pub fn load(kind: &BackendKind) -> Result<Self> {
-        let lib = unsafe { Library::new(kind.so_name()) }
-            .map_err(|err| anyhow::anyhow!("failed to load {}: {err}", kind.so_name()))?;
+    unsafe fn load_symbol<T: Copy>(library: &Library, symbol_name: &str) -> Result<T> {
+        library
+            .get(symbol_name.as_bytes())
+            .map(|symbol| *symbol)
+            .map_err(|error| anyhow::anyhow!("Symbol {symbol_name} not found: {error}"))
+    }
 
-        macro_rules! sym {
-            ($name:literal) => {
-                unsafe {
-                    let symbol: Symbol<_> = lib.get($name).map_err(|err| {
-                        anyhow::anyhow!("symbol {} not found: {err}", stringify!($name))
-                    })?;
-                    *symbol
-                }
-            };
-        }
+    // Loads the library from a file and initializes pointers to symbols
+    pub fn load(backend_kind: &BackendKind) -> Result<Self> {
+        let loaded_library = unsafe { Library::new(backend_kind.so_name()) }.map_err(|error| {
+            anyhow::anyhow!("Failed to load {}: {error}", backend_kind.so_name())
+        })?;
 
         Ok(Self {
-            backend_prepare: sym!("upac_backend_prepare"),
-
-            backend_meta_free: sym!("upac_backend_meta_free"),
-
-            backend_meta_get_name: sym!("upac_backend_meta_get_name"),
-            backend_meta_get_version: sym!("upac_backend_meta_get_version"),
-
-            backend_cleanup: sym!("upac_backend_cleanup"),
-
-            _lib: lib,
+            backend_prepare: unsafe { Self::load_symbol(&loaded_library, "upac_backend_prepare")? },
+            backend_meta_free: unsafe {
+                Self::load_symbol(&loaded_library, "upac_backend_meta_free")?
+            },
+            backend_meta_get_name: unsafe {
+                Self::load_symbol(&loaded_library, "upac_backend_meta_get_name")?
+            },
+            backend_meta_get_version: unsafe {
+                Self::load_symbol(&loaded_library, "upac_backend_meta_get_version")?
+            },
+            backend_cleanup: unsafe { Self::load_symbol(&loaded_library, "upac_backend_cleanup")? },
+            _lib: loaded_library,
         })
     }
 
@@ -147,66 +153,40 @@ impl Backend {
             progress_ctx,
         };
 
-        let mut package_meta_handle: PackageMetaHandle = null_mut();
-        let mut package_temp_path = MaybeUninit::<CSlice>::uninit();
+        let mut package_meta_handle_ptr: PackageMetaHandle = null_mut();
+        let mut package_temp_path_ptr = MaybeUninit::<CSlice>::uninit();
 
-        let code = unsafe {
-            (self.backend_prepare)(
+        unsafe {
+            match (self.backend_prepare)(
                 &prepare_request_c,
-                &mut package_meta_handle,
-                package_temp_path.as_mut_ptr(),
-            )
+                &mut package_meta_handle_ptr,
+                package_temp_path_ptr.as_mut_ptr(),
+            ) {
+                0 if !package_meta_handle_ptr.is_null() => {
+                    Ok((package_meta_handle_ptr, package_temp_path_ptr.assume_init()))
+                }
+                0 => anyhow::bail!("Backend returned success code but NULL handle"),
+                error_code => anyhow::bail!("Backend prepare failed with code {error_code}"),
+            }
+        }
+    }
+
+    pub unsafe extern "C" fn on_backend_progress(
+        event_code: u8,
+        detail_c_slice: CSlice,
+        progress_context: *mut c_void,
+    ) {
+        let Some(progress_bar) = (progress_context as *const ProgressBar).as_ref() else {
+            return;
         };
-        if code != 0 {
-            anyhow::bail!("Backend prepare failed with code {code}");
-        }
 
-        if package_meta_handle.is_null() {
-            anyhow::bail!("Backend returned null meta handle (code 0)");
-        }
+        let detail_string = detail_c_slice.as_str();
 
-        let package_temp_path_c = unsafe { package_temp_path.assume_init() };
+        let message_string = match BackendEvent::from_repr(event_code) {
+            Some(backend_event) => backend_event.format_message(detail_string),
+            None => format!("Unknown error code {event_code}"),
+        };
 
-        Ok((package_meta_handle, package_temp_path_c))
-    }
-}
-
-pub unsafe extern "C" fn on_backend_progress(event: u8, detail_c: CSlice, ctx: *mut c_void) {
-    if ctx.is_null() {
-        return;
-    }
-    let progress_bar = &*(ctx as *const ProgressBar);
-    let detail = detail_c.as_str();
-
-    match event {
-        0 => progress_bar.set_message(format!("Verifying {}...", detail)),
-        1 => progress_bar.set_message(format!("Extracting {}...", detail)),
-        2 => progress_bar.set_message("Reading metadata..."),
-        3 => progress_bar.set_message(detail.to_string()),
-        4 => progress_bar.set_message(format!("Ready",)),
-        5 => progress_bar.set_message(format!("Failed",)),
-        _ => progress_bar.set_message(format!("Unknow error code {}", event)),
-    }
-}
-
-// An RAII wrapper that automatically calls the library initialization upon exiting the scope
-pub struct BackendLibGuard {
-    lib: Backend,
-}
-
-// Loads the library and wraps it in a Guard for automatic resource management
-impl BackendLibGuard {
-    pub fn load(kind: &BackendKind) -> Result<Self> {
-        Ok(Self {
-            lib: Backend::load(kind)?,
-        })
-    }
-}
-
-// Allows using BackendLibGuard just like the UpacLib structure itself, via dereferencing
-impl std::ops::Deref for BackendLibGuard {
-    type Target = Backend;
-    fn deref(&self) -> &Self::Target {
-        &self.lib
+        progress_bar.set_message(message_string);
     }
 }

@@ -10,10 +10,10 @@ use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::Arc;
 
-use crate::backends::{BackendKind, BackendLibGuard};
+use crate::backends::{Backend, BackendKind};
 use crate::config::Config;
 use crate::ffi::{CPackageEntry, CSlice, PackageMetaHandle};
-use crate::upac::{UpacLib, UpacLibGuard};
+use crate::upac::UpacLib;
 
 use self::states::state_preparing_package;
 
@@ -44,7 +44,7 @@ pub struct PreparedPackage {
     pub meta_handle: PackageMetaHandle,
     pub temp_path_c: CSlice,
     pub checksum: String,
-    pub backend: Arc<BackendLibGuard>,
+    pub backend: Arc<Backend>,
 }
 
 impl PreparedPackage {
@@ -82,10 +82,10 @@ struct InstallMachine {
     checksums: Vec<String>,
 
     prepared_packages: Vec<PreparedPackage>,
-    progress_bar: Option<ProgressBar>,
 
-    upac_lib: Option<UpacLibGuard>,
-    loaded_backends: HashMap<BackendKind, Arc<BackendLibGuard>>,
+    upac_lib: Arc<UpacLib>,
+    loaded_backends: HashMap<BackendKind, Arc<Backend>>,
+    progress_bar: ProgressBar,
     config: Config,
     stack: Vec<State>,
 }
@@ -96,18 +96,18 @@ impl InstallMachine {
         files: Vec<String>,
         backend: Option<String>,
         checksums: Vec<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        Ok(Self {
             files,
             backend,
             checksums,
             prepared_packages: Vec::new(),
-            progress_bar: None,
-            upac_lib: None,
+            progress_bar: ProgressBar::new_spinner(),
+            upac_lib: Arc::new(UpacLib::load()?),
             loaded_backends: HashMap::new(),
             config,
             stack: Vec::new(),
-        }
+        })
     }
 
     fn enter(&mut self, state: State) {
@@ -125,7 +125,8 @@ pub fn run(config: Config, args: InstallArgs) -> Result<()> {
         );
     }
 
-    let mut install_machine = InstallMachine::new(config, args.files, args.backend, args.checksums);
+    let mut install_machine =
+        InstallMachine::new(config, args.files, args.backend, args.checksums)?;
 
     state_preparing_package(&mut install_machine).map_err(|err| {
         if !matches!(install_machine.stack.last(), Some(State::Failed(_))) {

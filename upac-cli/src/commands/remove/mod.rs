@@ -1,17 +1,16 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
-
 use colored::Colorize;
-
 use indicatif::ProgressBar;
 
 use std::ffi::c_void;
+use std::sync::Arc;
 
 use crate::config::Config;
 
 use self::states::state_validating;
 use crate::ffi::CSlice;
-use crate::upac::{UpacLib, UpacLibGuard};
+use crate::upac::UpacLib;
 
 mod states;
 
@@ -35,22 +34,21 @@ enum State {
 struct RemoveMachine {
     package_names: Vec<String>,
 
-    progress_bar: Option<ProgressBar>,
-
-    upac_lib: Option<UpacLibGuard>,
+    upac_lib: Arc<UpacLib>,
+    progress_bar: ProgressBar,
     config: Config,
     stack: Vec<State>,
 }
 
 impl RemoveMachine {
-    fn new(config: Config, package_names: Vec<String>) -> Self {
-        Self {
+    fn new(config: Config, package_names: Vec<String>) -> Result<Self> {
+        Ok(Self {
             package_names,
-            progress_bar: None,
-            upac_lib: None,
+            progress_bar: ProgressBar::new_spinner(),
+            upac_lib: Arc::new(UpacLib::load()?),
             config,
             stack: Vec::new(),
-        }
+        })
     }
 
     fn enter(&mut self, state: State) {
@@ -60,7 +58,7 @@ impl RemoveMachine {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: RemoveArgs) -> Result<()> {
-    let mut remove_machine = RemoveMachine::new(config, args.name);
+    let mut remove_machine = RemoveMachine::new(config, args.name)?;
 
     state_validating(&mut remove_machine).map_err(|err| {
         if !matches!(remove_machine.stack.last(), Some(State::Failed(_))) {

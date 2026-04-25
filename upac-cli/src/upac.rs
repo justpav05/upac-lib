@@ -14,8 +14,6 @@ use crate::ffi::{
 // ── Wrapper around libupac.so ────────────────────────────────────────────────────
 // A wrapper for dynamically loading libupac.so and mapping its C functions to Rust types
 pub struct UpacLib {
-    _lib: Library,
-
     pub install: unsafe extern "C" fn(CInstallRequest) -> i32,
     pub uninstall: unsafe extern "C" fn(CUninstallRequest) -> i32,
     pub rollback: unsafe extern "C" fn(CRollbackRequest) -> i32,
@@ -45,6 +43,8 @@ pub struct UpacLib {
     pub init: unsafe extern "C" fn(CInitRequest) -> i32,
 
     pub deinit: unsafe extern "C" fn(),
+
+    _lib: Library,
 }
 
 impl UpacLib {
@@ -164,34 +164,5 @@ impl UpacLib {
             _ => "unknown error",
         };
         bail!("{context}: {msg} (code {code})");
-    }
-}
-
-// An RAII wrapper that automatically calls the library initialization upon exiting the scope
-pub struct UpacLibGuard {
-    lib: UpacLib,
-}
-
-// Loads the library and wraps it in a Guard for automatic resource management
-impl UpacLibGuard {
-    pub fn load() -> Result<Self> {
-        Ok(Self {
-            lib: UpacLib::load()?,
-        })
-    }
-}
-
-// Allows using UpacLibGuard just like the UpacLib structure itself, via dereferencing
-impl std::ops::Deref for UpacLibGuard {
-    type Target = UpacLib;
-    fn deref(&self) -> &Self::Target {
-        &self.lib
-    }
-}
-
-// Automatically calls the library deinitialization when the guard is dropped
-impl Drop for UpacLibGuard {
-    fn drop(&mut self) {
-        unsafe { (self.lib.deinit)() };
     }
 }

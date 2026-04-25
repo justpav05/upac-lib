@@ -1,16 +1,16 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
-
 use colored::Colorize;
-
 use indicatif::ProgressBar;
 
 use clap::Args;
 
+use std::sync::Arc;
+
 use self::states::state_validating;
 
 use crate::config::Config;
-use crate::upac::{UpacLib, UpacLibGuard};
+use crate::upac::UpacLib;
 
 mod states;
 
@@ -74,16 +74,21 @@ struct DiffMachine {
 
     files_mode: bool,
 
-    progress_bar: Option<ProgressBar>,
+    progress_bar: ProgressBar,
 
-    upac_lib: Option<UpacLibGuard>,
+    upac_lib: Arc<UpacLib>,
     config: Config,
     stack: Vec<State>,
 }
 
 impl DiffMachine {
-    fn new(config: Config, from: Option<String>, to: Option<String>, files_mode: bool) -> Self {
-        Self {
+    fn new(
+        config: Config,
+        from: Option<String>,
+        to: Option<String>,
+        files_mode: bool,
+    ) -> Result<Self> {
+        Ok(Self {
             from,
             to,
             resolved_from: String::new(),
@@ -91,11 +96,11 @@ impl DiffMachine {
             package_rows: Vec::new(),
             file_rows: Vec::new(),
             files_mode,
-            progress_bar: None,
-            upac_lib: None,
+            progress_bar: ProgressBar::new_spinner(),
+            upac_lib: Arc::new(UpacLib::load()?),
             config,
             stack: Vec::new(),
-        }
+        })
     }
 
     fn enter(&mut self, state: State) {
@@ -105,7 +110,7 @@ impl DiffMachine {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: DiffArgs) -> Result<()> {
-    let mut diff_machine = DiffMachine::new(config, args.from, args.to, args.files);
+    let mut diff_machine = DiffMachine::new(config, args.from, args.to, args.files)?;
 
     state_validating(&mut diff_machine).map_err(|err| {
         let last_state = diff_machine.stack.last().cloned();

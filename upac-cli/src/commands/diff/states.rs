@@ -7,7 +7,7 @@ use std::slice;
 
 use super::{
     Colorize, DiffMachine, FileDiffKind, FileDiffRow, PackageDiffRow, PkgDiffKind, Result, State,
-    UpacLib, UpacLibGuard,
+    UpacLib,
 };
 
 use crate::ffi::{
@@ -17,8 +17,7 @@ use crate::ffi::{
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_validating(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::Validating);
-    machine.upac_lib = Some(UpacLibGuard::load()?);
-    machine.progress_bar = Some(spinner("Fetching diff..."));
+    spinner(&machine.progress_bar, "Fetching diff...");
 
     match (&machine.from.clone(), &machine.to.clone()) {
         (Some(from), Some(to)) => {
@@ -32,7 +31,7 @@ pub fn state_validating(machine: &mut DiffMachine) -> Result<()> {
             };
 
             let return_code = unsafe {
-                (machine.upac_lib.as_ref().unwrap().list_commits)(
+                (machine.upac_lib.as_ref().list_commits)(
                     CSlice::from_str(&machine.config.paths.repo_path),
                     CSlice::from_str(&machine.config.ostree.branch),
                     &mut commits_c,
@@ -46,7 +45,7 @@ pub fn state_validating(machine: &mut DiffMachine) -> Result<()> {
                 .map(|entry| unsafe { entry.checksum.as_str().to_owned() })
                 .collect();
 
-            unsafe { (machine.upac_lib.as_ref().unwrap().commits_free)(&mut commits_c) };
+            unsafe { (machine.upac_lib.as_ref().commits_free)(&mut commits_c) };
 
             if checksums.is_empty() {
                 anyhow::bail!("no commits found");
@@ -73,7 +72,6 @@ pub fn state_validating(machine: &mut DiffMachine) -> Result<()> {
 
 fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::FetchingDiff);
-    let lib = machine.upac_lib.as_ref().unwrap();
 
     if machine.files_mode {
         let mut c_out = CAttributedDiffArray {
@@ -81,17 +79,19 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
             len: 0,
         };
 
-        let code = unsafe {
-            (lib.diff_files_attributed)(
-                CSlice::from_str(&machine.config.paths.repo_path),
-                CSlice::from_str(&machine.resolved_from),
-                CSlice::from_str(&machine.resolved_to),
-                CSlice::from_str(&machine.config.paths.root_path),
-                CSlice::from_str(&machine.config.paths.database_path),
-                &mut c_out,
-            )
-        };
-        UpacLib::check(code, "diff files attributed")?;
+        UpacLib::check(
+            unsafe {
+                (machine.upac_lib.as_ref().diff_files_attributed)(
+                    CSlice::from_str(&machine.config.paths.repo_path),
+                    CSlice::from_str(&machine.resolved_from),
+                    CSlice::from_str(&machine.resolved_to),
+                    CSlice::from_str(&machine.config.paths.root_path),
+                    CSlice::from_str(&machine.config.paths.database_path),
+                    &mut c_out,
+                )
+            },
+            "diff files attributed",
+        )?;
 
         let entries = unsafe { slice::from_raw_parts(c_out.ptr, c_out.len) };
         machine.file_rows = entries
@@ -109,7 +109,7 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
             })
             .collect();
 
-        unsafe { (lib.diff_files_attributed_free)(&mut c_out) };
+        unsafe { (machine.upac_lib.as_ref().diff_files_attributed_free)(&mut c_out) };
     } else {
         let mut c_out = CPackageDiffArray {
             ptr: std::ptr::null_mut(),
@@ -117,7 +117,7 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
         };
 
         let return_code = unsafe {
-            (lib.diff_packages)(
+            (machine.upac_lib.as_ref().diff_packages)(
                 CSlice::from_str(&machine.config.paths.repo_path),
                 CSlice::from_str(&machine.resolved_from),
                 CSlice::from_str(&machine.resolved_to),
@@ -141,7 +141,7 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
             })
             .collect();
 
-        unsafe { (lib.diff_packages_free)(&mut c_out) };
+        unsafe { (machine.upac_lib.as_ref().diff_packages_free)(&mut c_out) };
     }
 
     state_printing(machine)
@@ -208,14 +208,15 @@ fn state_printing(machine: &mut DiffMachine) -> Result<()> {
 
 fn state_done(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::Done);
-    machine.progress_bar.as_ref().unwrap().finish_and_clear();
+    machine.progress_bar.finish_and_clear();
+
+    (machine.upac_lib.as_ref().deinit);
 
     Ok(())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-fn spinner(message: &str) -> ProgressBar {
-    let progress_bar = ProgressBar::new_spinner();
+fn spinner(progress_bar: &ProgressBar, message: &str) -> () {
     progress_bar.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
@@ -224,5 +225,4 @@ fn spinner(message: &str) -> ProgressBar {
     );
     progress_bar.set_message(message.to_owned());
     progress_bar.enable_steady_tick(Duration::from_millis(80));
-    progress_bar
 }

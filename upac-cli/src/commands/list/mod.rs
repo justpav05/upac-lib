@@ -4,11 +4,12 @@ use anyhow::Result;
 use colored::Colorize;
 
 use std::ffi::c_void;
+use std::sync::Arc;
 
 use self::states::state_fetching_mode;
 
 use crate::config::Config;
-use crate::upac::{UpacLib, UpacLibGuard};
+use crate::upac::UpacLib;
 
 mod states;
 
@@ -80,13 +81,13 @@ struct ListMachine {
     packages: Vec<PackageRow>,
 
     config: Config,
-    upac_lib: Option<UpacLibGuard>,
+    upac_lib: Arc<UpacLib>,
     stack: Vec<State>,
 }
 
 impl ListMachine {
-    fn new(config: Config, commits_mode: bool, full: bool) -> Self {
-        Self {
+    fn new(config: Config, commits_mode: bool, full: bool) -> Result<Self> {
+        Ok(Self {
             full,
 
             commits_mode,
@@ -95,9 +96,9 @@ impl ListMachine {
             commits: Vec::new(),
 
             config,
-            upac_lib: None,
+            upac_lib: Arc::new(UpacLib::load()?),
             stack: Vec::new(),
-        }
+        })
     }
 
     fn enter(&mut self, state: State) {
@@ -107,7 +108,7 @@ impl ListMachine {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: ListArgs) -> Result<()> {
-    let mut list_machine = ListMachine::new(config, args.commit, args.full);
+    let mut list_machine = ListMachine::new(config, args.commit, args.full)?;
 
     state_fetching_mode(&mut list_machine).map_err(|err| {
         if !matches!(list_machine.stack.last(), Some(State::Failed(_))) {

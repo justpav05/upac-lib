@@ -63,6 +63,40 @@ pub struct CPackageEntry {
 pub type PackageMetaHandle = *mut std::ffi::c_void;
 
 // ── Requests ───────────────────────────────────────────────────────────────────
+// Represents the request struct for the backend's prepare function
+#[repr(C)]
+pub struct CPrepareRequest {
+    struct_size: usize,
+    checksum: CSlice,
+
+    package_path: CSlice,
+    temp_dir_path: CSlice,
+
+    on_progress: Option<unsafe extern "C" fn(u8, CSlice, *mut c_void)>,
+    progress_ctx: *mut c_void,
+}
+
+impl CPrepareRequest {
+    pub fn new(
+        package_path: &str,
+        temp_dir_path: &str,
+        checksum: &str,
+        on_progress: Option<unsafe extern "C" fn(u8, CSlice, *mut c_void)>,
+        progress_ctx: *mut c_void,
+    ) -> Self {
+        Self {
+            struct_size: size_of::<CPrepareRequest>(),
+            checksum: CSlice::from_str(checksum),
+
+            package_path: CSlice::from_str(package_path),
+            temp_dir_path: CSlice::from_str(temp_dir_path),
+
+            on_progress,
+            progress_ctx,
+        }
+    }
+}
+
 // Data container for the installation operation: list of packages, paths, and repository settings
 #[repr(C)]
 pub struct CInstallRequest {
