@@ -79,9 +79,11 @@ fn collectInstallEntries(c_install_request: CInstallRequest, allocator: std.mem.
     errdefer allocator.free(install_entries);
 
     for (packages_entrys_c, 0..) |package_entry_c, index| {
+        const package_meta: *CPackageMeta = @ptrCast(@alignCast(package_entry_c.meta));
+
         install_entries[index] = .{
             .package = .{
-                .meta = toMeta(package_entry_c.meta.*),
+                .meta = toMeta(package_meta.*),
                 .files = &.{},
             },
             .temp_path = package_entry_c.temp_path.toSlice(),
