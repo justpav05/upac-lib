@@ -78,6 +78,7 @@ pub fn run(config: Config, args: InitArgs) -> Result<()> {
     state_validating(&mut init_machine).map_err(|err| {
         if !matches!(init_machine.stack.last(), Some(State::Failed(_))) {
             init_machine.enter(State::Failed(err.to_string()));
+            unsafe { (init_machine.upac_lib.as_ref().deinit)() };
         }
         if init_machine.config.verbose {
             eprintln!(

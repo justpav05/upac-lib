@@ -71,7 +71,7 @@ fn state_done(machine: &mut RemoveMachine) -> Result<()> {
             .println(format!("{} removed {}", "✓".green().bold(), name.bold()));
     }
 
-    (machine.upac_lib.as_ref().deinit);
+    unsafe { (machine.upac_lib.as_ref().deinit)() };
 
     Ok(())
 }

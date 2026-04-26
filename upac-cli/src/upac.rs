@@ -64,37 +64,37 @@ impl UpacLib {
         })?;
 
         Ok(Self {
-            install: unsafe { Self::load_symbol(&loaded_library, "upac_install")? },
-            uninstall: unsafe { Self::load_symbol(&loaded_library, "upac_uninstall")? },
-            rollback: unsafe { Self::load_symbol(&loaded_library, "upac_rollback")? },
+            install: unsafe { Self::load_symbol(&loaded_library, "install")? },
+            uninstall: unsafe { Self::load_symbol(&loaded_library, "uninstall")? },
+            rollback: unsafe { Self::load_symbol(&loaded_library, "rollback")? },
 
-            diff_packages: unsafe { Self::load_symbol(&loaded_library, "upac_diff_packages")? },
+            diff_packages: unsafe { Self::load_symbol(&loaded_library, "diff_packages")? },
             diff_packages_free: unsafe {
-                Self::load_symbol(&loaded_library, "upac_diff_packages_free")?
+                Self::load_symbol(&loaded_library, "diff_packages_free")?
             },
             diff_files_attributed: unsafe {
-                Self::load_symbol(&loaded_library, "upac_diff_files_attributed")?
+                Self::load_symbol(&loaded_library, "diff_files_attributed")?
             },
             diff_files_attributed_free: unsafe {
-                Self::load_symbol(&loaded_library, "upac_diff_files_attributed_free")?
+                Self::load_symbol(&loaded_library, "diff_files_attributed_free")?
             },
 
-            list_packages: unsafe { Self::load_symbol(&loaded_library, "upac_list_packages")? },
-            packages_free: unsafe { Self::load_symbol(&loaded_library, "upac_packages_free")? },
-            packages_count: unsafe { Self::load_symbol(&loaded_library, "upac_packages_count")? },
+            list_packages: unsafe { Self::load_symbol(&loaded_library, "list_packages")? },
+            packages_free: unsafe { Self::load_symbol(&loaded_library, "packages_free")? },
+            packages_count: unsafe { Self::load_symbol(&loaded_library, "packages_count")? },
 
             package_get_slice_field: unsafe {
-                Self::load_symbol(&loaded_library, "upac_package_get_slice_field")?
+                Self::load_symbol(&loaded_library, "package_get_slice_field")?
             },
             package_get_int_field: unsafe {
-                Self::load_symbol(&loaded_library, "upac_package_get_int_field")?
+                Self::load_symbol(&loaded_library, "package_get_int_field")?
             },
 
-            list_commits: unsafe { Self::load_symbol(&loaded_library, "upac_list_commits")? },
-            commits_free: unsafe { Self::load_symbol(&loaded_library, "upac_commits_free")? },
+            list_commits: unsafe { Self::load_symbol(&loaded_library, "list_commits")? },
+            commits_free: unsafe { Self::load_symbol(&loaded_library, "commits_free")? },
 
-            init: unsafe { Self::load_symbol(&loaded_library, "upac_init")? },
-            deinit: unsafe { Self::load_symbol(&loaded_library, "upac_deinit")? },
+            init: unsafe { Self::load_symbol(&loaded_library, "init")? },
+            deinit: unsafe { Self::load_symbol(&loaded_library, "deinit")? },
 
             _lib: loaded_library,
         })

@@ -3,6 +3,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use std::time::Duration;
 
+use std::ptr::null_mut;
 use std::slice;
 
 use super::{
@@ -74,8 +75,8 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::FetchingDiff);
 
     if machine.files_mode {
-        let mut c_out = CAttributedDiffArray {
-            ptr: std::ptr::null_mut(),
+        let mut attributed_diff_array_c = CAttributedDiffArray {
+            ptr: null_mut(),
             len: 0,
         };
 
@@ -87,52 +88,58 @@ fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
                     CSlice::from_str(&machine.resolved_to),
                     CSlice::from_str(&machine.config.paths.root_path),
                     CSlice::from_str(&machine.config.paths.database_path),
-                    &mut c_out,
+                    &mut attributed_diff_array_c,
                 )
             },
             "diff files attributed",
         )?;
 
-        let entries = unsafe { slice::from_raw_parts(c_out.ptr, c_out.len) };
+        let entries = unsafe {
+            slice::from_raw_parts(attributed_diff_array_c.ptr, attributed_diff_array_c.len)
+        };
         machine.file_rows = entries
             .iter()
-            .map(|e| unsafe {
+            .map(|attributed_diff_array_c| unsafe {
                 FileDiffRow {
-                    path: e.path.as_str().to_owned(),
-                    kind: match e.kind {
+                    path: attributed_diff_array_c.path.as_str().to_owned(),
+                    kind: match attributed_diff_array_c.kind {
                         CDiffKind::Added => FileDiffKind::Added,
                         CDiffKind::Removed => FileDiffKind::Removed,
                         CDiffKind::Modified => FileDiffKind::Modified,
                     },
-                    package_name: e.package_name.as_str().to_owned(),
+                    package_name: attributed_diff_array_c.package_name.as_str().to_owned(),
                 }
             })
             .collect();
 
-        unsafe { (machine.upac_lib.as_ref().diff_files_attributed_free)(&mut c_out) };
+        unsafe {
+            (machine.upac_lib.as_ref().diff_files_attributed_free)(&mut attributed_diff_array_c)
+        };
     } else {
         let mut c_out = CPackageDiffArray {
             ptr: std::ptr::null_mut(),
             len: 0,
         };
 
-        let return_code = unsafe {
-            (machine.upac_lib.as_ref().diff_packages)(
-                CSlice::from_str(&machine.config.paths.repo_path),
-                CSlice::from_str(&machine.resolved_from),
-                CSlice::from_str(&machine.resolved_to),
-                &mut c_out,
-            )
-        };
-        UpacLib::check(return_code, "diff packages")?;
+        UpacLib::check(
+            unsafe {
+                (machine.upac_lib.as_ref().diff_packages)(
+                    CSlice::from_str(&machine.config.paths.repo_path),
+                    CSlice::from_str(&machine.resolved_from),
+                    CSlice::from_str(&machine.resolved_to),
+                    &mut c_out,
+                )
+            },
+            "diff packages",
+        )?;
 
         let entries = unsafe { slice::from_raw_parts(c_out.ptr, c_out.len) };
         machine.package_rows = entries
             .iter()
-            .map(|e| unsafe {
+            .map(|package_diff_entry_c| unsafe {
                 PackageDiffRow {
-                    name: e.name.as_str().to_owned(),
-                    kind: match e.kind {
+                    name: package_diff_entry_c.name.as_str().to_owned(),
+                    kind: match package_diff_entry_c.kind {
                         CPackageDiffKind::Added => PkgDiffKind::Added,
                         CPackageDiffKind::Removed => PkgDiffKind::Removed,
                         CPackageDiffKind::Updated => PkgDiffKind::Updated,
@@ -210,7 +217,7 @@ fn state_done(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::Done);
     machine.progress_bar.finish_and_clear();
 
-    (machine.upac_lib.as_ref().deinit);
+    unsafe { (machine.upac_lib.as_ref().deinit)() };
 
     Ok(())
 }

@@ -73,7 +73,7 @@ fn state_done(machine: &mut InitMachine) -> Result<()> {
         "Run 'upac list' to verify the installation.".dimmed()
     );
 
-    (machine.upac_lib.as_ref().deinit);
+    unsafe { (machine.upac_lib.as_ref().deinit)() };
 
     Ok(())
 }

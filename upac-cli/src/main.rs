@@ -7,6 +7,7 @@ use colored::Colorize;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread::Builder;
 
 use commands::diff::DiffArgs;
 use commands::init::InitArgs;
@@ -59,15 +60,36 @@ enum Command {
 // ── Entry points ───────────────────────────────────────────────────────────────
 // The main entry point, responsible for error output and the return code.
 fn main() {
-    if let Err(err) = run() {
-        eprintln!("{} {err}", "Error:".red().bold());
-        std::process::exit(1);
+    let result = Builder::new()
+        .name("upac-main".into())
+        .stack_size(64 * 1024 * 1024) // 64 MiB
+        .spawn(|| run())
+        .expect("Failed to spawn main thread")
+        .join()
+        .expect("Main thread panicked");
+
+    match result {
+        Ok(()) => {}
+        Err(err) if err.to_string().contains("cancelled") => {
+            eprintln!("\n{} Cancelled", "!".yellow().bold());
+            std::process::exit(130);
+        }
+        Err(err) => {
+            eprintln!("{} {err}", "Error:".red().bold());
+            std::process::exit(1);
+        }
     }
 }
 
 // Core business logic: argument parsing, config loading, and command execution
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    ctrlc::set_handler(move || {
+        println!(
+            "\n{} Abort signal received, exiting...",
+            "!".yellow().bold()
+        );
+    })?;
 
     let default_config_path =
         check_default_config_path().ok_or(anyhow::anyhow!("no default config path found"))?;

@@ -3,7 +3,6 @@ use anyhow::Result;
 
 use colored::Colorize;
 
-use std::ffi::c_void;
 use std::sync::Arc;
 
 use self::states::state_fetching_mode;
@@ -29,26 +28,6 @@ struct PackageRow {
 struct CommitRow {
     checksum: String,
     subject: String,
-}
-
-pub struct HandleGuard {
-    pub handle: *mut c_void,
-    free_fn: unsafe extern "C" fn(*mut c_void),
-}
-
-impl HandleGuard {
-    pub fn new(handle: *mut c_void, free_fn: unsafe extern "C" fn(*mut c_void)) -> Self {
-        Self { handle, free_fn }
-    }
-}
-
-impl Drop for HandleGuard {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe { (self.free_fn)(self.handle) };
-            self.handle = std::ptr::null_mut();
-        }
-    }
 }
 
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
@@ -114,6 +93,7 @@ pub fn run(config: Config, args: ListArgs) -> Result<()> {
     state_fetching_mode(&mut list_machine).map_err(|err| {
         if !matches!(list_machine.stack.last(), Some(State::Failed(_))) {
             list_machine.enter(State::Failed(err.to_string()));
+            unsafe { (list_machine.upac_lib.as_ref().deinit)() };
         }
         if list_machine.config.verbose {
             eprintln!(

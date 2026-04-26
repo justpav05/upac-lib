@@ -3,9 +3,7 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::slice;
 
-use super::{
-    format_size, Colorize, CommitRow, HandleGuard, ListMachine, PackageRow, Result, State, UpacLib,
-};
+use super::{format_size, Colorize, CommitRow, ListMachine, PackageRow, Result, State, UpacLib};
 
 use crate::ffi::{CCommitArray, CSlice};
 
@@ -56,85 +54,141 @@ fn state_get_commits_info(machine: &mut ListMachine) -> Result<()> {
 fn state_get_packages_list(machine: &mut ListMachine) -> Result<()> {
     machine.enter(State::GetPackages);
 
-    let mut handle: *mut c_void = null_mut();
+    let mut package_list: *mut c_void = null_mut();
 
-    let return_code = unsafe {
-        (machine.upac_lib.as_ref().list_packages)(
-            CSlice::from_str(&machine.config.paths.repo_path),
-            CSlice::from_str(&machine.config.ostree.branch),
-            CSlice::from_str(&machine.config.paths.database_path),
-            &mut handle,
-        )
-    };
-    UpacLib::check(return_code, "list packages")?;
+    UpacLib::check(
+        unsafe {
+            (machine.upac_lib.as_ref().list_packages)(
+                CSlice::from_str(&machine.config.paths.repo_path),
+                CSlice::from_str(&machine.config.ostree.branch),
+                CSlice::from_str(&machine.config.paths.database_path),
+                &mut package_list,
+            )
+        },
+        "list packages",
+    )?;
 
-    let lib = machine.upac_lib.as_ref();
-    let guard = HandleGuard::new(handle, lib.packages_free);
-    let count = unsafe { (lib.packages_count)(guard.handle) };
+    let package_count = unsafe { (machine.upac_lib.as_ref().packages_count)(package_list) };
 
-    machine.packages = (0..count)
-        .map(|i| -> Result<PackageRow> {
+    machine.packages = (0..package_count)
+        .map(|field_index| -> Result<PackageRow> {
             let mut name = CSlice {
                 ptr: null_mut(),
                 len: 0,
             };
-            let mut version = CSlice {
+            let version = CSlice {
                 ptr: null_mut(),
                 len: 0,
             };
-            let mut architecture = CSlice {
+            let architecture = CSlice {
                 ptr: null_mut(),
                 len: 0,
             };
-            let mut author = CSlice {
+            let author = CSlice {
                 ptr: null_mut(),
                 len: 0,
             };
-            let mut license = CSlice {
+            let license = CSlice {
                 ptr: null_mut(),
                 len: 0,
             };
-            let mut url = CSlice {
+            let url = CSlice {
                 ptr: null_mut(),
                 len: 0,
             };
-            let mut packager = CSlice {
+            let packager = CSlice {
                 ptr: null_mut(),
                 len: 0,
             };
-            let mut size: u32 = 0;
+            let size: u32 = 0;
 
             unsafe {
                 UpacLib::check(
-                    (lib.package_get_slice_field)(guard.handle, i, 0, &mut name),
+                    unsafe {
+                        (machine.upac_lib.as_ref().package_get_slice_field)(
+                            package_list,
+                            field_index,
+                            0,
+                            &mut name,
+                        )
+                    },
                     "get name",
                 )?;
                 UpacLib::check(
-                    (lib.package_get_slice_field)(guard.handle, i, 1, &mut version),
+                    unsafe {
+                        (machine.upac_lib.as_ref().package_get_slice_field)(
+                            package_list,
+                            field_index,
+                            1,
+                            &mut name,
+                        )
+                    },
                     "get version",
                 )?;
                 UpacLib::check(
-                    (lib.package_get_slice_field)(guard.handle, i, 2, &mut architecture),
+                    unsafe {
+                        (machine.upac_lib.as_ref().package_get_slice_field)(
+                            package_list,
+                            field_index,
+                            2,
+                            &mut name,
+                        )
+                    },
                     "get architecture",
                 )?;
                 UpacLib::check(
-                    (lib.package_get_slice_field)(guard.handle, i, 3, &mut author),
+                    unsafe {
+                        (machine.upac_lib.as_ref().package_get_slice_field)(
+                            package_list,
+                            field_index,
+                            4,
+                            &mut name,
+                        )
+                    },
                     "get author",
                 )?;
                 UpacLib::check(
-                    (lib.package_get_slice_field)(guard.handle, i, 5, &mut license),
+                    unsafe {
+                        (machine.upac_lib.as_ref().package_get_slice_field)(
+                            package_list,
+                            field_index,
+                            5,
+                            &mut name,
+                        )
+                    },
                     "get license",
                 )?;
                 UpacLib::check(
-                    (lib.package_get_slice_field)(guard.handle, i, 6, &mut url),
+                    unsafe {
+                        (machine.upac_lib.as_ref().package_get_slice_field)(
+                            package_list,
+                            field_index,
+                            6,
+                            &mut name,
+                        )
+                    },
                     "get url",
                 )?;
                 UpacLib::check(
-                    (lib.package_get_slice_field)(guard.handle, i, 7, &mut packager),
+                    unsafe {
+                        (machine.upac_lib.as_ref().package_get_slice_field)(
+                            package_list,
+                            field_index,
+                            7,
+                            &mut name,
+                        )
+                    },
                     "get packager",
                 )?;
                 UpacLib::check(
-                    (lib.package_get_int_field)(guard.handle, i, 9, &mut size),
+                    unsafe {
+                        (machine.upac_lib.as_ref().package_get_slice_field)(
+                            package_list,
+                            field_index,
+                            9,
+                            &mut name,
+                        )
+                    },
                     "get size",
                 )?;
             }
@@ -151,6 +205,8 @@ fn state_get_packages_list(machine: &mut ListMachine) -> Result<()> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+
+    unsafe { (machine.upac_lib.as_ref().packages_free)(package_list) };
 
     state_printing_packeges(machine)
 }
@@ -234,7 +290,7 @@ fn state_printing_packeges(machine: &mut ListMachine) -> Result<()> {
 fn state_done(machine: &mut ListMachine) -> Result<()> {
     machine.enter(State::Done);
 
-    (machine.upac_lib.as_ref().deinit);
+    unsafe { (machine.upac_lib.as_ref().deinit)() };
 
     Ok(())
 }

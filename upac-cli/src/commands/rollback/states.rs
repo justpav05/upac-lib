@@ -67,7 +67,7 @@ fn state_done(machine: &mut RollbackMachine) -> Result<()> {
         &machine.commit_hash[..12].bold()
     );
 
-    (machine.upac_lib.as_ref().deinit);
+    unsafe { (machine.upac_lib.as_ref().deinit)() };
 
     Ok(())
 }

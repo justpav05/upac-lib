@@ -117,6 +117,7 @@ pub fn run(config: Config, args: DiffArgs) -> Result<()> {
         let last_state = diff_machine.stack.last().cloned();
         if !matches!(last_state, Some(State::Failed(_))) {
             diff_machine.enter(State::Failed(err.to_string()));
+            unsafe { (diff_machine.upac_lib.as_ref().deinit)() };
         }
         if diff_machine.config.verbose {
             eprintln!(

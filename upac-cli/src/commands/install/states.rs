@@ -146,7 +146,7 @@ fn state_done(machine: &mut InstallMachine) -> Result<()> {
     machine.prepared_packages.clear();
     machine.loaded_backends.clear();
 
-    (machine.upac_lib.as_ref().deinit);
+    unsafe { (machine.upac_lib.as_ref().deinit)() };
 
     Ok(())
 }
