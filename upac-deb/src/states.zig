@@ -1,18 +1,25 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const std = @import("std");
-const posix = std.posix;
-
 const backend = @import("backend.zig");
+const std = backend.std;
+const posix = backend.std.posix;
+const c_libs = backend.c_libs;
+
 const Machine = backend.BackendMachine;
 const PackageMeta = backend.PackageMeta;
+const package_meta_field_map = backend.package_meta_field_map;
+
 const BackendError = backend.BackendError;
 
-const c_libs = @cImport({
-    @cInclude("archive.h");
-    @cInclude("archive_entry.h");
-});
-
 const parseLicenseFromCopyright = backend.parseLicenseFromCopyright;
+
+const copyArchiveEntry = backend.copyArchiveEntry;
+
+const computeMd5 = backend.computeMd5;
+
+const isControlFile = backend.isControlFile;
+const isCopyrightFile = backend.isCopyrightFile;
+
+const readFileFromNestedTar = backend.readFileFromNestedTar;
 
 // ── States ─────────────────────────────────────────────────────────────────
 // Archive integrity check status: calculating SHA256 and comparing against expected value
@@ -103,13 +110,10 @@ fn stateExtracting(machine: *Machine) BackendError!void {
 
         if (std.mem.startsWith(u8, entry_name, "data.tar")) {
             const size = @as(usize, @intCast(c_libs.archive_entry_size(entry)));
-            const buffer = machine.allocator.alloc(u8, size) catch {
-                stateFailed(machine);
-                return BackendError.OutOfMemory;
-            };
-            defer machine.allocator.free(buffer);
+            const data_tar_buffer = try machine.check(machine.allocator.alloc(u8, size), BackendError.OutOfMemory);
+            defer machine.allocator.free(data_tar_buffer);
 
-            if (c_libs.archive_read_data(archive_reader, buffer.ptr, size) < 0) {
+            if (c_libs.archive_read_data(archive_reader, data_tar_buffer.ptr, size) < 0) {
                 stateFailed(machine);
                 return BackendError.ArchiveReadFailed;
             }
@@ -120,7 +124,7 @@ fn stateExtracting(machine: *Machine) BackendError!void {
             _ = c_libs.archive_read_support_format_tar(inner_archive_reader);
             _ = c_libs.archive_read_support_filter_all(inner_archive_reader);
 
-            if (c_libs.archive_read_open_memory(inner_archive_reader, buffer.ptr, size) != c_libs.ARCHIVE_OK) {
+            if (c_libs.archive_read_open_memory(inner_archive_reader, data_tar_buffer.ptr, size) != c_libs.ARCHIVE_OK) {
                 stateFailed(machine);
                 return BackendError.ArchiveOpenFailed;
             }
@@ -131,26 +135,8 @@ fn stateExtracting(machine: *Machine) BackendError!void {
                     stateFailed(machine);
                     return BackendError.ArchiveExtractFailed;
                 }
-
-                while (true) {
-                    var block: ?*const anyopaque = null;
-                    var b_size: usize = 0;
-                    var offset: i64 = 0;
-
-                    const rd = c_libs.archive_read_data_block(inner_archive_reader, &block, &b_size, &offset);
-                    if (rd == c_libs.ARCHIVE_EOF) break;
-                    if (rd != c_libs.ARCHIVE_OK) {
-                        stateFailed(machine);
-                        return BackendError.ArchiveReadFailed;
-                    }
-
-                    if (c_libs.archive_write_data_block(archive_writer, block, b_size, offset) != c_libs.ARCHIVE_OK) {
-                        stateFailed(machine);
-                        return BackendError.ArchiveExtractFailed;
-                    }
-                }
+                try copyArchiveEntry(inner_archive_reader, archive_writer, machine);
             }
-            break;
         }
     }
     return stateVerifyingFiles(machine);
@@ -158,16 +144,10 @@ fn stateExtracting(machine: *Machine) BackendError!void {
 
 // Verifies the checksums of files listed in md5sums against their actual contents on disk
 fn stateVerifyingFiles(machine: *Machine) BackendError!void {
-    machine.enter(.special_step) catch {
-        stateFailed(machine);
-        return BackendError.OutOfMemory;
-    };
+    try machine.check(machine.enter(.special_step), BackendError.OutOfMemory);
     machine.reportDetail("verifying archive integrity...");
 
-    const md5_path = std.fs.path.join(machine.allocator, &.{ std.mem.span(machine.request.temp_dir), "md5sums" }) catch {
-        stateFailed(machine);
-        return BackendError.OutOfMemory;
-    };
+    const md5_path = try machine.check(std.fs.path.join(machine.allocator, &.{ std.mem.span(machine.request.temp_dir), "md5sums" }), BackendError.OutOfMemory);
     defer machine.allocator.free(md5_path);
 
     const content = std.fs.cwd().readFileAlloc(machine.allocator, md5_path, 10 * 1024 * 1024) catch |err| {
@@ -177,47 +157,27 @@ fn stateVerifyingFiles(machine: *Machine) BackendError!void {
     };
     defer machine.allocator.free(content);
 
-    var split_lines_iterator = std.mem.splitScalar(u8, content, '\n');
-    while (split_lines_iterator.next()) |line| {
-        const trimmed_line = std.mem.trim(u8, line, " \r");
-        if (trimmed_line.len == 0) continue;
+    var temp_dir = try machine.check(std.fs.openDirAbsolute(std.mem.span(machine.request.temp_dir), .{}), BackendError.ReadFailed);
+    defer temp_dir.close();
 
-        var token_iter = std.mem.tokenizeAny(u8, trimmed_line, " \t");
-        const expected_hash_hex = token_iter.next() orelse continue;
-        const file_path = token_iter.rest();
+    var io_buf: [4096]u8 = undefined;
+    var lines = std.mem.splitScalar(u8, content, '\n');
 
-        const full_file_path = std.fs.path.join(machine.allocator, &.{ std.mem.span(machine.request.temp_dir), file_path }) catch {
-            stateFailed(machine);
-            return BackendError.OutOfMemory;
-        };
-        defer machine.allocator.free(full_file_path);
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \r");
+        if (trimmed.len == 0) continue;
 
-        const file = std.fs.openFileAbsolute(full_file_path, .{}) catch {
-            stateFailed(machine);
-            return BackendError.ReadFailed;
-        };
+        var tokens = std.mem.tokenizeAny(u8, trimmed, " \t");
+        const expected_hex = tokens.next() orelse continue;
+        const file_path = std.mem.trim(u8, tokens.rest(), " \t");
+
+        const file = try machine.check(temp_dir.openFile(file_path, .{}), BackendError.ReadFailed);
         defer file.close();
 
-        var md5_hasher = std.crypto.hash.Md5.init(.{});
-        var md5_buf: [4096]u8 = undefined;
-        while (true) {
-            const number = file.read(&md5_buf) catch {
-                stateFailed(machine);
-                return BackendError.ReadFailed;
-            };
-            if (number == 0) break;
-            md5_hasher.update(md5_buf[0..number]);
-        }
+        const digest = try machine.check(computeMd5(file, &io_buf), BackendError.ReadFailed);
+        const actual_hex = std.fmt.bytesToHex(digest, .lower);
 
-        var digest: [std.crypto.hash.Md5.digest_length]u8 = undefined;
-        md5_hasher.final(&digest);
-        var actual_hex: [std.crypto.hash.Md5.digest_length * 2]u8 = undefined;
-        _ = std.fmt.bufPrint(&actual_hex, "{}", .{std.fmt.fmtSliceHexLower(&digest)}) catch {
-            stateFailed(machine);
-            return BackendError.OutOfMemory;
-        };
-
-        if (!std.mem.eql(u8, &actual_hex, expected_hash_hex)) {
+        if (!std.mem.eql(u8, &actual_hex, expected_hex)) {
             stateFailed(machine);
             return BackendError.ChecksumMismatch;
         }
@@ -228,87 +188,35 @@ fn stateVerifyingFiles(machine: *Machine) BackendError!void {
 
 // Extracts package metadata from the nested control.tar archive and parses the control file
 fn stateReadingMeta(machine: *Machine) BackendError!void {
-    machine.enter(.reading_meta) catch {
-        stateFailed(machine);
-        return BackendError.OutOfMemory;
-    };
+    try machine.check(machine.enter(.reading_meta), BackendError.OutOfMemory);
 
-    const pkg_path_c = std.fmt.allocPrintZ(machine.allocator, "{s}", .{machine.request.pkg_path}) catch {
-        stateFailed(machine);
-        return BackendError.OutOfMemory;
-    };
-    defer machine.allocator.free(pkg_path_c);
-
-    const archive_reader = c_libs.archive_read_new() orelse return BackendError.ArchiveOpenFailed;
+    const archive_reader = try machine.unwrap(c_libs.archive_read_new(), BackendError.ArchiveOpenFailed);
     defer _ = c_libs.archive_read_free(archive_reader);
     _ = c_libs.archive_read_support_format_ar(archive_reader);
     _ = c_libs.archive_read_support_filter_all(archive_reader);
 
-    if (c_libs.archive_read_open_filename(archive_reader, pkg_path_c.ptr, 16384) != c_libs.ARCHIVE_OK) {
+    if (c_libs.archive_read_open_filename(archive_reader, machine.request.pkg_path, 16384) != c_libs.ARCHIVE_OK) {
         stateFailed(machine);
         return BackendError.ArchiveOpenFailed;
     }
 
     var control_content: ?[]u8 = null;
-    defer if (control_content) |content| machine.allocator.free(content);
+    defer if (control_content) |c| machine.allocator.free(c);
 
     var copyright_content: ?[]u8 = null;
-    defer if (copyright_content) |content| machine.allocator.free(content);
+    defer if (copyright_content) |c| machine.allocator.free(c);
 
     var entry: ?*c_libs.archive_entry = null;
-    while (c_libs.archive_read_next_header(archive_reader, &entry) == c_libs.ARCHIVE_OK) {
+    outer: while (c_libs.archive_read_next_header(archive_reader, &entry) == c_libs.ARCHIVE_OK) {
         const entry_name = std.mem.span(c_libs.archive_entry_pathname(entry));
 
         if (std.mem.startsWith(u8, entry_name, "control.tar")) {
-            const size = @as(usize, @intCast(c_libs.archive_entry_size(entry)));
-            const tar_buffer = try machine.allocator.alloc(u8, size);
-            defer machine.allocator.free(tar_buffer);
-
-            if (c_libs.archive_read_data(archive_reader, tar_buffer.ptr, size) < 0) return BackendError.ArchiveReadFailed;
-
-            const inner_archive_reader = c_libs.archive_read_new() orelse return BackendError.ArchiveOpenFailed;
-            defer _ = c_libs.archive_read_free(inner_archive_reader);
-            _ = c_libs.archive_read_support_format_tar(inner_archive_reader);
-            _ = c_libs.archive_read_support_filter_all(inner_archive_reader);
-
-            if (c_libs.archive_read_open_memory(inner_archive_reader, tar_buffer.ptr, size) == c_libs.ARCHIVE_OK) {
-                var inner_entry: ?*c_libs.archive_entry = null;
-                while (c_libs.archive_read_next_header(inner_archive_reader, &inner_entry) == c_libs.ARCHIVE_OK) {
-                    const inner_name = std.mem.span(c_libs.archive_entry_pathname(inner_entry));
-                    if (std.mem.endsWith(u8, inner_name, "control")) {
-                        const c_size = @as(usize, @intCast(c_libs.archive_entry_size(inner_entry)));
-                        control_content = try machine.allocator.alloc(u8, c_size);
-                        _ = c_libs.archive_read_data(inner_archive_reader, control_content.?.ptr, c_size);
-                        break;
-                    }
-                }
-            }
+            control_content = try readFileFromNestedTar(machine, archive_reader, entry, isControlFile);
+        } else if (std.mem.startsWith(u8, entry_name, "data.tar")) {
+            copyright_content = try readFileFromNestedTar(machine, archive_reader, entry, isCopyrightFile);
         }
 
-        if (std.mem.startsWith(u8, entry_name, "data.tar")) {
-            const size = @as(usize, @intCast(c_libs.archive_entry_size(entry)));
-            const tar_buffer = try machine.allocator.alloc(u8, size);
-            defer machine.allocator.free(tar_buffer);
-            _ = c_libs.archive_read_data(archive_reader, tar_buffer.ptr, size);
-
-            const inner_archive_reader = c_libs.archive_read_new();
-            defer _ = c_libs.archive_read_free(inner_archive_reader);
-            _ = c_libs.archive_read_support_format_tar(inner_archive_reader);
-            _ = c_libs.archive_read_support_filter_all(inner_archive_reader);
-
-            if (c_libs.archive_read_open_memory(inner_archive_reader, tar_buffer.ptr, size) == c_libs.ARCHIVE_OK) {
-                var inner_entry: ?*c_libs.archive_entry = null;
-                while (c_libs.archive_read_next_header(inner_archive_reader, &inner_entry) == c_libs.ARCHIVE_OK) {
-                    const inner_name = std.mem.span(c_libs.archive_entry_pathname(inner_entry));
-                    if (std.mem.indexOf(u8, inner_name, "/usr/share/doc/") != null and std.mem.endsWith(u8, inner_name, "/copyright")) {
-                        const c_size = @as(usize, @intCast(c_libs.archive_entry_size(inner_entry)));
-                        copyright_content = try machine.allocator.alloc(u8, c_size);
-                        _ = c_libs.archive_read_data(inner_archive_reader, copyright_content.?.ptr, c_size);
-                        break;
-                    }
-                }
-            }
-        }
+        if (control_content != null and copyright_content != null) break :outer;
     }
 
     if (control_content == null) {
@@ -329,35 +237,25 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
         const trimmed = std.mem.trim(u8, line, " \t\r");
         if (trimmed.len == 0) continue;
 
-        const sep = std.mem.indexOf(u8, trimmed, ": ") orelse continue;
-        const key = trimmed[0..sep];
-        const value = std.mem.trim(u8, trimmed[sep + 2 ..], " \t");
+        const separator_index = std.mem.indexOf(u8, trimmed, ": ") orelse continue;
+        const key = trimmed[0..separator_index];
+        const value = std.mem.trim(u8, trimmed[separator_index + 2 ..], " \t");
 
-        if (std.mem.eql(u8, key, "Package")) {
-            name = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "Version")) {
-            version = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "Installed-Size")) {
-            size = std.fmt.parseInt(u32, std.mem.trim(u8, value, " \t"), 10) catch 0;
-        } else if (std.mem.eql(u8, key, "Architecture")) {
-            architecture = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "Description")) {
-            description = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "Homepage")) {
-            url = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "Maintainer")) {
-            packager = try machine.allocator.dupe(u8, value);
+        const field = package_meta_field_map.get(key) orelse continue;
+        switch (field) {
+            .Package => name = try machine.allocator.dupe(u8, value),
+            .Version => version = try machine.allocator.dupe(u8, value),
+            .@"Installed-Size" => size = std.fmt.parseInt(u32, value, 10) catch 0,
+            .Architecture => architecture = try machine.allocator.dupe(u8, value),
+            .Description => description = try machine.allocator.dupe(u8, value),
+            .Homepage => url = try machine.allocator.dupe(u8, value),
+            .Maintainer => packager = try machine.allocator.dupe(u8, value),
         }
     }
 
-    if (name == null or version == null) {
-        stateFailed(machine);
-        return BackendError.InvalidPackage;
-    }
-
     machine.meta = PackageMeta{
-        .name = name.?,
-        .version = version.?,
+        .name = try machine.unwrap(name, BackendError.MetadataNotFound),
+        .version = try machine.unwrap(version, BackendError.MetadataNotFound),
         .author = packager orelse try machine.allocator.dupe(u8, "Unknown"),
         .size = size,
         .architecture = architecture orelse try machine.allocator.dupe(u8, "No architecture"),
@@ -374,14 +272,12 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
 
 // The final state representing the successful completion of all processing stages
 fn stateDone(machine: *Machine) BackendError!void {
-    machine.enter(.done) catch {
-        stateFailed(machine);
-        return BackendError.OutOfMemory;
-    };
+    try machine.check(machine.enter(.done), BackendError.OutOfMemory);
 }
 
 // An error state signaling that the machine failed to reach the required state at a certain stage
 pub fn stateFailed(machine: *Machine) void {
+    machine.enter(.failed) catch {};
     if (machine.temp_path) |path| {
         std.fs.deleteTreeAbsolute(path) catch {};
         machine.allocator.free(path);
