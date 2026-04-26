@@ -102,10 +102,9 @@ impl UpacLib {
 
     // Converts numeric error codes from the C-layer into human-readable anyhow::Result values
     pub fn check(code: i32, context: &str) -> Result<()> {
-        if code == 0 {
-            return Ok(());
-        }
         let message = match code {
+            0 => return Ok(()),
+
             1 => "unexpected error",
             2 => "out of memory",
             3 => "file not found",
@@ -117,7 +116,7 @@ impl UpacLib {
             9 => "thread error",
             10 => "lock would block — another process is running",
             11 => "allocz_failed",
-            12 => "cancelled",
+            12 => return Err(anyhow::anyhow!("{context}: cancelled (code {code})")),
             13 => "max_retries_exceeded",
             14 => "read_failed",
             15 => "write_failed",

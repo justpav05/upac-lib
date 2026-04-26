@@ -68,12 +68,6 @@ fn main() {
 // Core business logic: argument parsing, config loading, and command execution
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    ctrlc::set_handler(move || {
-        println!(
-            "\n{} Abort signal received, exiting...",
-            "!".yellow().bold()
-        );
-    })?;
 
     let default_config_path =
         check_default_config_path().ok_or(anyhow::anyhow!("no default config path found"))?;
