@@ -1,10 +1,35 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const std = @import("std");
-
 const states = @import("states.zig");
 const stateFailed = states.stateFailed;
 
+pub const std = @import("std");
+pub const c_libs = @cImport({
+    @cInclude("archive.h");
+    @cInclude("archive_entry.h");
+});
+
 // ── Public types ────────────────────────────────────────────────────────────
+const PackageMetaField = enum {
+    Package,
+    Version,
+    @"Installed-Size",
+    Architecture,
+    Description,
+    License,
+    Homepage,
+    Maintainer,
+};
+
+pub const package_meta_field_map = std.StaticStringMap(PackageMetaField).initComptime(.{
+    .{ "pkgname", .Package },
+    .{ "pkgver", .Version },
+    .{ "size", .@"Installed-Size" },
+    .{ "arch", .Architecture },
+    .{ "pkgdesc", .Description },
+    .{ "license", .License },
+    .{ "url", .Homepage },
+    .{ "packager", .Maintainer },
+});
 // Main structure containing package metadata
 pub const PackageMeta = struct {
     name: []const u8,

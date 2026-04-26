@@ -1,16 +1,14 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const std = @import("std");
-const posix = std.posix;
-
 const backend = @import("backend.zig");
+const std = backend.std;
+const posix = backend.std.posix;
+const c_libs = backend.c_libs;
+
 const Machine = backend.BackendMachine;
 const PackageMeta = backend.PackageMeta;
 const BackendError = backend.BackendError;
 
-const c_libs = @cImport({
-    @cInclude("archive.h");
-    @cInclude("archive_entry.h");
-});
+const package_meta_field_map = backend.package_meta_field_map;
 
 // ── States ─────────────────────────────────────────────────────────────────
 // Archive integrity check status: calculating SHA256 and comparing against expected value
@@ -18,7 +16,7 @@ pub fn stateVerifying(machine: *Machine) BackendError!void {
     try machine.check(machine.enter(.verifying), BackendError.OutOfMemory);
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    var hasher_buf: [4096]u8 = undefined;
+    var hasher_buf: [65536]u8 = undefined;
 
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     var actual: [std.crypto.hash.sha2.Sha256.digest_length * 2]u8 = undefined;
@@ -41,12 +39,17 @@ pub fn stateVerifying(machine: *Machine) BackendError!void {
         return BackendError.ChecksumMismatch;
     }
 
+    const file_descriptor = try machine.unwrap(machine.file, BackendError.ArchiveOpenFailed);
+    try machine.check(file_descriptor.seekTo(0), BackendError.ArchiveOpenFailed);
+
     return stateExtracting(machine);
 }
 
 // Unpacking state: uses libarchive to extract files to the temp directory
 fn stateExtracting(machine: *Machine) BackendError!void {
     try machine.check(machine.enter(.extracting), BackendError.OutOfMemory);
+
+    const file_descriptor = try machine.unwrap(machine.file, BackendError.ArchiveOpenFailed);
 
     var tem_dir_buf: [256]u8 = undefined;
     const timestamp = std.time.milliTimestamp();
@@ -65,10 +68,7 @@ fn stateExtracting(machine: *Machine) BackendError!void {
     _ = c_libs.archive_read_support_filter_xz(archive_reader);
     _ = c_libs.archive_read_support_filter_gzip(archive_reader);
 
-    if (c_libs.archive_read_open_filename(archive_reader, machine.request.package_path_c, 16384) != c_libs.ARCHIVE_OK) {
-        stateFailed(machine);
-        return BackendError.ArchiveOpenFailed;
-    }
+    _ = c_libs.archive_read_open_fd(archive_reader, file_descriptor.handle, 16384);
 
     const archive_writer = c_libs.archive_write_disk_new() orelse {
         stateFailed(machine);
@@ -106,30 +106,16 @@ fn stateExtracting(machine: *Machine) BackendError!void {
         const is_pkginfo = entry_path != null and std.mem.eql(u8, std.mem.span(entry_path), ".PKGINFO");
 
         if (is_pkginfo) {
-            var pkginfo_buf = std.ArrayList(u8).init(machine.allocator);
+            const entry_unwraped = try machine.unwrap(entry, BackendError.ArchiveReadFailed);
+            const pkginfo_size: usize = @intCast(c_libs.archive_entry_size(entry_unwraped));
+            const pkginfo_buf = try machine.allocator.alloc(u8, pkginfo_size);
 
-            var block: ?*const anyopaque = null;
-            var size: usize = 0;
-            var offset: i64 = 0;
-
-            while (true) {
-                const reader = c_libs.archive_read_data_block(archive_reader, &block, &size, &offset);
-                if (reader == c_libs.ARCHIVE_EOF) break;
-                if (reader != c_libs.ARCHIVE_OK) {
-                    pkginfo_buf.deinit();
-                    stateFailed(machine);
-                    return BackendError.ArchiveReadFailed;
-                }
-                if (block) |b| {
-                    pkginfo_buf.appendSlice(@as([*]const u8, @ptrCast(b))[0..size]) catch {
-                        pkginfo_buf.deinit();
-                        stateFailed(machine);
-                        return BackendError.OutOfMemory;
-                    };
-                }
+            if (c_libs.archive_read_data(archive_reader, pkginfo_buf.ptr, pkginfo_size) < 0) {
+                machine.allocator.free(pkginfo_buf);
+                stateFailed(machine);
+                return BackendError.ArchiveReadFailed;
             }
-
-            machine.pkginfo_content = try pkginfo_buf.toOwnedSlice();
+            machine.pkginfo_content = pkginfo_buf;
             continue;
         }
 
@@ -167,15 +153,11 @@ fn stateExtracting(machine: *Machine) BackendError!void {
 
 // Parsing status: searching for and parsing the .PKGINFO file to populate package metadata
 fn stateReadingMeta(machine: *Machine) BackendError!void {
-    machine.enter(.reading_meta) catch {
-        stateFailed(machine);
-        return BackendError.OutOfMemory;
-    };
+    try machine.check(machine.enter(.reading_meta), BackendError.OutOfMemory);
 
-    const temp_path = try machine.unwrap(machine.temp_path, BackendError.TempDirFailed);
-
-    const pkginfo_path = try std.fs.path.join(machine.allocator, &.{ temp_path, ".PKGINFO" });
-    defer machine.allocator.free(pkginfo_path);
+    const temp_path_c = try machine.unwrap(machine.temp_path, BackendError.TempDirFailed);
+    var temp_dir = try machine.check(std.fs.openDirAbsolute(temp_path_c, .{}), BackendError.TempDirFailed);
+    defer temp_dir.close();
 
     const content = try machine.unwrap(machine.pkginfo_content, BackendError.MetadataNotFound);
     defer {
@@ -212,60 +194,43 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
         const key = std.mem.trim(u8, trimmed_line[0..separator_index], " \t");
         const value = std.mem.trim(u8, trimmed_line[separator_index + 3 ..], " \t");
 
-        if (std.mem.eql(u8, key, "pkgname")) {
-            name = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "pkgver")) {
-            version = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "arch")) {
-            arch = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "pkgdesc")) {
-            description = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "url")) {
-            url = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "packager")) {
-            packager = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "license")) {
-            license = try machine.allocator.dupe(u8, value);
-        } else if (std.mem.eql(u8, key, "size")) {
-            size = std.fmt.parseInt(u32, value, 10) catch 0;
+        const field = package_meta_field_map.get(key) orelse continue;
+        switch (field) {
+            .Package => name = try machine.allocator.dupe(u8, value),
+            .Version => version = try machine.allocator.dupe(u8, value),
+            .@"Installed-Size" => size = std.fmt.parseInt(u32, value, 10) catch 0,
+            .Architecture => arch = try machine.allocator.dupe(u8, value),
+            .Description => description = try machine.allocator.dupe(u8, value),
+            .License => license = try machine.allocator.dupe(u8, value),
+            .Homepage => url = try machine.allocator.dupe(u8, value),
+            .Maintainer => packager = try machine.allocator.dupe(u8, value),
         }
     }
 
-    if (name == null or version == null) {
-        stateFailed(machine);
-        return BackendError.InvalidPackage;
-    }
-
     machine.meta = PackageMeta{
-        .name = name.?,
-        .version = version.?,
+        .name = try machine.unwrap(name, BackendError.MetadataNotFound),
+        .version = try machine.unwrap(version, BackendError.MetadataNotFound),
         .arch = arch orelse try machine.allocator.dupe(u8, "any"),
-        .size = size,
         .author = packager orelse try machine.allocator.dupe(u8, ""),
         .packager = packager orelse try machine.allocator.dupe(u8, ""),
         .description = description orelse try machine.allocator.dupe(u8, ""),
         .license = license orelse try machine.allocator.dupe(u8, ""),
         .url = url orelse try machine.allocator.dupe(u8, ""),
-        .installed_at = std.time.timestamp(),
         .checksum = try machine.allocator.dupe(u8, machine.request.checksum),
+
+        .size = size,
+        .installed_at = std.time.timestamp(),
     };
 
     const alpm_junk_files = [_][]const u8{ ".BUILDINFO", ".MTREE", ".INSTALL", ".CHANGELOG" };
-    for (alpm_junk_files) |filename| {
-        const junk_file_path = std.fs.path.join(machine.allocator, &.{ machine.temp_path.?, filename }) catch continue;
-        defer machine.allocator.free(junk_file_path);
-        std.fs.cwd().deleteFile(junk_file_path) catch {};
-    }
+    for (alpm_junk_files) |filename| temp_dir.deleteFile(filename) catch {};
 
     return stateDone(machine);
 }
 
 // The final state representing the successful completion of all processing stages
 fn stateDone(machine: *Machine) BackendError!void {
-    machine.enter(.done) catch {
-        stateFailed(machine);
-        return BackendError.OutOfMemory;
-    };
+    try machine.check(machine.enter(.done), BackendError.OutOfMemory);
 }
 
 // An error state signaling that the machine failed to reach the required state at a certain stage
