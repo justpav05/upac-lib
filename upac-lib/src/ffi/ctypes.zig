@@ -371,7 +371,7 @@ pub const CRepoMode = enum(u8) {
     bare_user = 2,
 };
 
-var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true, .thread_safe = false }){};
 
 pub fn allocator() std.mem.Allocator {
     return gpa.allocator();

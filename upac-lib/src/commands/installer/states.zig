@@ -104,16 +104,17 @@ fn stateCheckInstalled(machine: *InstallerMachine) InstallerError!void {
 
     const repo = try machine.unwrap(machine.repo, error.RepoOpenFailed);
 
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
-
     var commit_variant: ?*c_libs.GVariant = null;
     defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
 
-    if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, machine.previous_commit_checksum, &commit_variant, &gerror) == 0) {
+    std.debug.print("{any}", .{machine.previous_commit_checksum == null});
+
+    if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, machine.previous_commit_checksum, &commit_variant, &machine.gerror) == 0) {
         machine.resetRetries();
         return stateWriteDatabase(machine);
     }
+
+    std.debug.print("{any}", .{machine.previous_commit_checksum == null});
 
     var body_variant: ?*c_libs.GVariant = null;
     defer if (body_variant) |variant| c_libs.g_variant_unref(variant);

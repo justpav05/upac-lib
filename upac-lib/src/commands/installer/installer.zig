@@ -96,17 +96,8 @@ pub const InstallerMachine = struct {
 
     // Registers a transition to a new state, saving it to the stack. This allows for the reconstruction of the sequence of actions during debugging
     pub fn enter(self: *InstallerMachine, state_id: InstallStateId) !void {
-        if (isCancelRequested()) {
-            stateFailed(self);
-            return InstallerError.Cancelled;
-        }
+        isBroked(self) catch |err| return err;
 
-        if (self.cancellable) |cancellable| {
-            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
-                stateFailed(self);
-                return InstallerError.Cancelled;
-            }
-        }
         try self.stack.append(self.allocator, state_id);
         self.report(state_id);
     }
@@ -122,22 +113,7 @@ pub const InstallerMachine = struct {
     }
 
     pub fn retry(self: *InstallerMachine, comptime state_fn: anytype) InstallerError!void {
-        if (self.cancellable) |cancellable| {
-            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
-                stateFailed(self);
-                return InstallerError.Cancelled;
-            }
-        }
-
-        if (self.exhausted()) {
-            stateFailed(self);
-            return InstallerError.MaxRetriesExceeded;
-        }
-
-        if (self.gerror) |err| {
-            c_libs.g_error_free(err);
-            self.gerror = null;
-        }
+        isBroked(self) catch |err| return err;
 
         self.retries += 1;
 
@@ -181,12 +157,12 @@ pub const InstallerMachine = struct {
         if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
         if (self.repo) |repo| c_libs.g_object_unref(repo);
 
-        if (self.commit_checksum != null) c_libs.g_free(@ptrCast(self.commit_checksum));
-        if (self.previous_commit_checksum != null) c_libs.g_free(@ptrCast(self.previous_commit_checksum));
+        if (self.commit_checksum != null) c_libs.g_free(self.commit_checksum);
+        if (self.previous_commit_checksum != null) c_libs.g_free(self.previous_commit_checksum);
 
         if (self.staging_path_c) |ptr| self.allocator.free(ptr);
 
-        if (self.gerror) |ptr| c_libs.g_error_free(@ptrCast(ptr));
+        if (self.gerror) |ptr| c_libs.g_error_free(ptr);
         if (self.cancellable) |cancellable| c_libs.g_object_unref(cancellable);
 
         if (self.signal_loop) |loop| {
@@ -212,6 +188,27 @@ pub const InstallerMachine = struct {
         else
             "";
         cb(event, CSlice.fromSlice(name), self.data.progress_ctx);
+    }
+
+    fn isBroked(self: *InstallerMachine) InstallerError!void {
+        if (self.cancellable) |cancellable| {
+            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
+                stateFailed(self);
+                return InstallerError.Cancelled;
+            }
+        }
+
+        if (self.exhausted()) {
+            stateFailed(self);
+            return InstallerError.MaxRetriesExceeded;
+        }
+
+        if (self.gerror) |err| {
+            c_libs.g_error_free(err);
+            self.gerror = null;
+
+            return InstallerError.MaxRetriesExceeded;
+        }
     }
 
     // Initializes the machine, creates the state stack, and launches the first stage—verification
