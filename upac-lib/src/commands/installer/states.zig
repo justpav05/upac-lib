@@ -13,6 +13,7 @@ const InstallerError = installer.InstallerError;
 const utils = @import("utils.zig");
 const dirSize = utils.dirSize;
 const collectFileChecksums = utils.collectFileChecksums;
+const estimateCheckoutSize = utils.estimateCheckoutSize;
 
 // ── InstallerFSM states ─────────────────────────────────────────────────────────────────
 // It verifies the physical existence of the temporary package folder and the repository path. If the paths do not exist, the installation is immediately aborted
@@ -36,22 +37,23 @@ pub fn stateVerifying(machine: *InstallerMachine) InstallerError!void {
 fn stateCheckSpace(machine: *InstallerMachine) InstallerError!void {
     machine.enter(.check_space) catch return InstallerError.OutOfMemory;
 
-    var required_space: u64 = 0;
-    for (machine.data.packages) |entry| {
-        required_space += dirSize(machine.allocator, entry.temp_path) catch {
-            stateFailed(machine);
-            return InstallerError.CheckSpaceFailed;
-        };
-    }
+    var new_packages_size: u64 = 0;
+    for (machine.data.packages) |entry| new_packages_size += try machine.check(dirSize(machine.allocator, entry.temp_path), InstallerError.CheckSpaceFailed);
 
-    var root_path_stat: c_libs.struct_statvfs = undefined;
-    if (c_libs.statvfs(machine.data.root_path, &root_path_stat) != 0) {
+    const prefix_path = try machine.check(std.fs.path.join(machine.allocator, &.{ std.mem.span(machine.data.root_path), std.mem.span(machine.data.prefix_path) }), InstallerError.CheckSpaceFailed);
+    defer machine.allocator.free(prefix_path);
+
+    const existing_prefix_size = dirSize(machine.allocator, prefix_path) catch 0;
+    const required = existing_prefix_size + new_packages_size * 2;
+
+    var stat: c_libs.struct_statvfs = undefined;
+    if (c_libs.statvfs(machine.data.root_path, &stat) != 0) {
         stateFailed(machine);
         return InstallerError.CheckSpaceFailed;
     }
 
-    const available_space: u64 = @as(u64, @intCast(root_path_stat.f_bavail)) * @as(u64, @intCast(root_path_stat.f_bsize));
-    if (required_space > available_space) {
+    const available: u64 = @as(u64, @intCast(stat.f_bavail)) * @as(u64, @intCast(stat.f_bsize));
+    if (required > available) {
         stateFailed(machine);
         return InstallerError.NotEnoughSpace;
     }
@@ -264,14 +266,24 @@ fn stateCheckout(machine: *InstallerMachine) InstallerError!void {
 
     const repo = try machine.unwrap(machine.repo, InstallerError.RepoOpenFailed);
     const commit_checksum = try machine.unwrap(machine.commit_checksum, InstallerError.CheckoutFailed);
+    const estimated = estimateCheckoutSize(machine, repo, commit_checksum, machine.cancellable) catch 0;
 
     var buf: [256]u8 = undefined;
+    var stat: c_libs.struct_statvfs = undefined;
     const timestamp = std.time.milliTimestamp();
 
     const temp_folder_name = try machine.check(std.fmt.bufPrintZ(&buf, "{s}-remove-{d}", .{ std.mem.span(machine.data.prefix_path), timestamp }), error.AllocZFailed);
 
     const staging_path_c = try machine.check(std.fs.path.joinZ(machine.allocator, &.{ std.mem.span(machine.data.root_path), temp_folder_name }), InstallerError.AllocZFailed);
     machine.staging_path_c = staging_path_c;
+
+    if (c_libs.statvfs(machine.data.root_path, &stat) == 0) {
+        const available: u64 = @as(u64, @intCast(stat.f_bavail)) * @as(u64, @intCast(stat.f_bsize));
+        if (estimated * 2 > available) {
+            stateFailed(machine);
+            return InstallerError.NotEnoughSpace;
+        }
+    }
 
     var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
