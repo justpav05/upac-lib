@@ -170,8 +170,8 @@ pub const UninstallerMachine = struct {
         if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
         if (self.repo) |repo| c_libs.g_object_unref(repo);
 
-        if (self.commit_checksum) |checksum| c_libs.g_free(@ptrCast(checksum));
-        if (self.previous_commit_checksum) |checksum| c_libs.g_free(@ptrCast(checksum));
+        if (self.commit_checksum != null) c_libs.g_free(self.commit_checksum);
+        if (self.previous_commit_checksum != null) c_libs.g_free(self.previous_commit_checksum);
 
         if (self.staging_path_c) |path| self.allocator.free(path);
 

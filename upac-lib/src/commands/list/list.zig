@@ -31,7 +31,7 @@ pub fn listPackages(repo_path_c: [*:0]u8, branch_c: [*:0]u8, db_path: []const u8
 
     var head_checksum: [*c]u8 = null;
     if (c_libs.ostree_repo_resolve_rev(repo, branch_c, 1, &head_checksum, null) == 0 or head_checksum == null) return &.{};
-    defer c_libs.g_free(@ptrCast(head_checksum));
+    defer if (head_checksum != null) c_libs.g_free(@ptrCast(head_checksum));
 
     const body = try check(getRefBody(repo, branch_c, cancellable, allocator), DiffError.CommitNotFound) orelse return &.{};
     defer allocator.free(body);
@@ -72,6 +72,7 @@ pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, cancellable: ?*c_lib
     }
 
     var current_checksum: [*c]u8 = null;
+    defer if (current_checksum != null) c_libs.g_free(current_checksum);
     if (c_libs.ostree_repo_resolve_rev(repo, branch_c, 0, &current_checksum, &gerror) == 0) return try check(entries.toOwnedSlice(allocator), DiffError.AllocZPrintFailed);
 
     var checksum = current_checksum;
@@ -80,7 +81,7 @@ pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, cancellable: ?*c_lib
     while (checksum) |current_cs| {
         var commit_variant: ?*c_libs.GVariant = null;
         if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, current_cs, &commit_variant, &gerror) == 0) {
-            if (!is_first) c_libs.g_free(@ptrCast(current_cs));
+            if (!is_first) c_libs.g_free(current_cs);
             break;
         }
         defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
@@ -103,7 +104,6 @@ pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, cancellable: ?*c_lib
         checksum = parent;
     }
 
-    if (current_checksum) |cs| c_libs.g_free(@ptrCast(cs));
     return try check(entries.toOwnedSlice(allocator), DiffError.AllocZPrintFailed);
 }
 
@@ -115,7 +115,7 @@ pub fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref_c: [*:0]u8, cancellable: 
     _ = cancellable;
 
     var checksum: [*c]u8 = null;
-    defer if (checksum) |checksum_unwraped| c_libs.g_free(@ptrCast(checksum_unwraped));
+    defer if (checksum != null) c_libs.g_free(checksum);
 
     if (c_libs.ostree_repo_resolve_rev(repo, ostree_ref_c, 1, &checksum, &gerror) == 0 or checksum == null) return null;
 
