@@ -107,15 +107,10 @@ fn stateCheckInstalled(machine: *InstallerMachine) InstallerError!void {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
-    const previous_commit_checksum = machine.previous_commit_checksum orelse {
-        machine.resetRetries();
-        return stateWriteDatabase(machine);
-    };
-
     var commit_variant: ?*c_libs.GVariant = null;
     defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
 
-    if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, previous_commit_checksum, &commit_variant, &gerror) == 0) {
+    if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, machine.previous_commit_checksum, &commit_variant, &gerror) == 0) {
         machine.resetRetries();
         return stateWriteDatabase(machine);
     }
@@ -211,11 +206,11 @@ fn stateCommit(machine: *InstallerMachine) InstallerError!void {
     defer body_alloc.deinit();
     const body_writer = &body_alloc.writer;
 
-    if (machine.previous_commit_checksum) |checksum| {
+    if (machine.previous_commit_checksum != null) {
         var previous_commit: ?*c_libs.GVariant = null;
         defer if (previous_commit) |variant| c_libs.g_variant_unref(variant);
 
-        if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, checksum, &previous_commit, &machine.gerror) != 0) {
+        if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, machine.previous_commit_checksum, &previous_commit, &machine.gerror) != 0) {
             var prev_body_variant: ?*c_libs.GVariant = null;
             defer if (prev_body_variant) |variant| c_libs.g_variant_unref(variant);
 

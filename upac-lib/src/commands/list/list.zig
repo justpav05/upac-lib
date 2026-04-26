@@ -78,10 +78,10 @@ pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, cancellable: ?*c_lib
     var checksum = current_checksum;
     var is_first = true;
 
-    while (checksum) |current_cs| {
+    while (checksum != null) {
         var commit_variant: ?*c_libs.GVariant = null;
-        if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, current_cs, &commit_variant, &gerror) == 0) {
-            if (!is_first) c_libs.g_free(current_cs);
+        if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, checksum, &commit_variant, &gerror) == 0) {
+            if (!is_first) c_libs.g_free(checksum);
             break;
         }
         defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
@@ -92,13 +92,13 @@ pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, cancellable: ?*c_lib
         var subject_len: usize = 0;
         const subject_ptr = c_libs.g_variant_get_string(subject_variant, &subject_len);
 
-        const checksum_dupe = try check(allocator.dupe(u8, std.mem.span(current_cs)), DiffError.AllocZPrintFailed);
+        const checksum_dupe = try check(allocator.dupe(u8, std.mem.span(checksum)), DiffError.AllocZPrintFailed);
         const subject_dupe = try check(allocator.dupe(u8, subject_ptr[0..subject_len]), DiffError.AllocZPrintFailed);
 
         try check(entries.append(allocator, .{ .checksum = checksum_dupe, .subject = subject_dupe }), DiffError.AllocZPrintFailed);
 
         const parent = c_libs.ostree_commit_get_parent(commit_variant);
-        if (!is_first) c_libs.g_free(@ptrCast(current_cs));
+        if (!is_first) c_libs.g_free(checksum);
 
         is_first = false;
         checksum = parent;

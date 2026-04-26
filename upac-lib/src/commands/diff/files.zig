@@ -131,7 +131,7 @@ fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [*:0]u8, destination_path: [*:0]
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
     var resolved_checksum: [*c]u8 = null;
-    defer if (resolved_checksum) |checksum_unwraped| c_libs.g_free(@ptrCast(checksum_unwraped));
+    defer if (resolved_checksum != null) c_libs.g_free(resolved_checksum);
 
     if (c_libs.ostree_repo_resolve_rev(repo, ref_c, 0, &resolved_checksum, &gerror) == 0) return error.DiffFailed;
 
