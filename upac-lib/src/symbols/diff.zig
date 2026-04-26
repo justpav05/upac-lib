@@ -1,5 +1,5 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const diff = @import("diff.zig");
+const diff = @import("upac-diff");
 const std = diff.std;
 const c_libs = diff.c_libs;
 const data = diff.data;
@@ -15,11 +15,11 @@ const CAttributedDiffEntry = diff.ffi.CAttributedDiffEntry;
 const ErrorCode = diff.ffi.ErrorCode;
 const Operation = diff.ffi.Operation;
 
-const files = @import("files.zig");
+const files = diff.files;
 
 const diffFilesAttributed = files.diffFilesAttributed;
 
-const packages = @import("packages.zig");
+const packages = diff.packages;
 
 const diffPackages = packages.diffPackages;
 
@@ -35,7 +35,7 @@ const SignalHandle = struct {
     thread: std.Thread,
 };
 
-pub export fn upac_diff_packages(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, out_c: *CPackageDiffArray) callconv(.C) i32 {
+pub fn diff_packages(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, out_c: *CPackageDiffArray) callconv(.c) i32 {
     validateDiffPackagesRequest(repo_path, from_ref, to_ref, out_c) catch |err| return @intFromEnum(fromError(err, Operation.diff));
 
     var arena_allocator = std.heap.ArenaAllocator.init(diff.ffi.allocator());
@@ -83,7 +83,7 @@ fn validateDiffPackagesRequest(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c
     _ = out_c;
 }
 
-pub export fn upac_diff_packages_free(c_out: *CPackageDiffArray) callconv(.C) void {
+pub fn diff_packages_free(c_out: *CPackageDiffArray) callconv(.c) void {
     const allocator = diff.ffi.allocator();
     const entries = c_out.toSlice();
 
@@ -92,7 +92,7 @@ pub export fn upac_diff_packages_free(c_out: *CPackageDiffArray) callconv(.C) vo
     diff.ffi.allocator().free(entries);
 }
 
-pub export fn upac_diff_files_attributed(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, root_path: CSlice, db_path: CSlice, out_c: *CAttributedDiffArray) callconv(.C) i32 {
+pub fn diff_files_attributed(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, root_path: CSlice, db_path: CSlice, out_c: *CAttributedDiffArray) callconv(.c) i32 {
     validateListCommitsRequest(repo_path, from_ref) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.diff));
     validateListCommitsRequest(repo_path, to_ref) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.diff));
 
@@ -139,7 +139,7 @@ fn validateListCommitsRequest(repo_path: CSlice, branch: CSlice) !void {
     if (branch.isEmpty()) return error.InvalidEntry;
 }
 
-pub export fn upac_diff_files_attributed_free(out_c: *CAttributedDiffArray) callconv(.C) void {
+pub fn diff_files_attributed_free(out_c: *CAttributedDiffArray) callconv(.c) void {
     const entries = out_c.toSlice();
     for (entries) |entry| {
         diff.ffi.allocator().free(entry.path.toSlice());

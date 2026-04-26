@@ -7,7 +7,7 @@ const InstallProgressFn = ffi.InstallProgressFn;
 const Package = ffi.Package;
 const PackageMeta = ffi.PackageMeta;
 
-const file = @import("upac-file");
+const isCancelRequested = ffi.isCancelRequested;
 
 const states = @import("states.zig");
 const stateFailed = states.stateFailed;
@@ -19,13 +19,10 @@ const signalLoopThread = utils.signalLoopThread;
 // ── Public imports ─────────────────────────────────────────────────────────────────────
 pub const std = @import("std");
 
-pub const c_libs = file.c_libs;
-
 pub const ffi = @import("upac-ffi");
-pub const data = @import("upac-data");
+pub const c_libs = ffi.c_libs;
 
-// ── Imports symbols ─────────────────────────────────────────────────────────────────────
-pub usingnamespace @import("symbols.zig");
+pub const data = @import("upac-data");
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 //
@@ -83,8 +80,8 @@ pub const InstallerMachine = struct {
     repo: ?*c_libs.OstreeRepo,
     mtree: ?*c_libs.OstreeMutableTree,
 
-    commit_checksum: ?[*:0]u8 = null,
-    previous_commit_checksum: ?[*:0]u8 = null,
+    commit_checksum: [*c]u8 = null,
+    previous_commit_checksum: [*c]u8 = null,
 
     staging_path_c: ?[:0]const u8 = null,
 
@@ -99,13 +96,18 @@ pub const InstallerMachine = struct {
 
     // Registers a transition to a new state, saving it to the stack. This allows for the reconstruction of the sequence of actions during debugging
     pub fn enter(self: *InstallerMachine, state_id: InstallStateId) !void {
+        if (isCancelRequested()) {
+            stateFailed(self);
+            return InstallerError.Cancelled;
+        }
+
         if (self.cancellable) |cancellable| {
             if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
                 stateFailed(self);
                 return InstallerError.Cancelled;
             }
         }
-        try self.stack.append(state_id);
+        try self.stack.append(self.allocator, state_id);
         self.report(state_id);
     }
 
@@ -147,19 +149,20 @@ pub const InstallerMachine = struct {
     pub fn resetTransaction(self: *InstallerMachine) InstallerError!void {
         var gerror: ?*c_libs.GError = null;
         defer if (gerror) |err| c_libs.g_error_free(err);
+        const repo = try self.unwrap(self.repo, InstallerError.RepoOpenFailed);
 
-        _ = c_libs.ostree_repo_abort_transaction(self.repo.?, null, null);
-        if (c_libs.ostree_repo_prepare_transaction(self.repo.?, null, null, &gerror) == 0) return InstallerError.RepoOpenFailed;
+        _ = c_libs.ostree_repo_abort_transaction(repo, null, null);
+        if (c_libs.ostree_repo_prepare_transaction(repo, null, null, &gerror) == 0) return InstallerError.RepoOpenFailed;
     }
 
-    pub inline fn unwrap(self: *InstallerMachine, value: anytype, comptime err: InstallerError) InstallerError!@typeInfo(@TypeOf(value)).Optional.child {
+    pub inline fn unwrap(self: *InstallerMachine, value: anytype, comptime err: InstallerError) InstallerError!@typeInfo(@TypeOf(value)).optional.child {
         return value orelse {
             stateFailed(self);
             return err;
         };
     }
 
-    pub inline fn check(self: *InstallerMachine, value: anytype, comptime err: InstallerError) InstallerError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+    pub inline fn check(self: *InstallerMachine, value: anytype, comptime err: InstallerError) InstallerError!@typeInfo(@TypeOf(value)).error_union.payload {
         return value catch {
             stateFailed(self);
             return err;
@@ -178,8 +181,8 @@ pub const InstallerMachine = struct {
         if (self.mtree) |mtree| c_libs.g_object_unref(mtree);
         if (self.repo) |repo| c_libs.g_object_unref(repo);
 
-        if (self.commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
-        if (self.previous_commit_checksum) |ptr| c_libs.g_free(@ptrCast(ptr));
+        if (self.commit_checksum != null) c_libs.g_free(@ptrCast(self.commit_checksum));
+        if (self.previous_commit_checksum != null) c_libs.g_free(@ptrCast(self.previous_commit_checksum));
 
         if (self.staging_path_c) |ptr| self.allocator.free(ptr);
 
@@ -198,7 +201,7 @@ pub const InstallerMachine = struct {
             self.signal_loop = null;
         }
 
-        self.stack.deinit();
+        self.stack.deinit(self.allocator);
     }
 
     // Reports an installation progress event to the progress callback, if one is set
@@ -230,7 +233,7 @@ pub const InstallerMachine = struct {
 
             .cancellable = c_libs.g_cancellable_new() orelse return InstallerError.OutOfMemory,
 
-            .stack = std.ArrayList(InstallStateId).init(allocator),
+            .stack = std.ArrayList(InstallStateId).empty,
             .allocator = allocator,
         };
         defer machine.deinit();

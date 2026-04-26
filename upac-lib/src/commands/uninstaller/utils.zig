@@ -15,12 +15,12 @@ pub fn removeFromMtree(repo: *c_libs.OstreeRepo, root_mtree: *c_libs.OstreeMutab
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(@ptrCast(err));
 
-    var path_components = std.ArrayList([]const u8).init(allocator);
-    defer path_components.deinit();
+    var path_components = std.ArrayList([]const u8).empty;
+    defer path_components.deinit(allocator);
 
     var path_components_iter = std.mem.splitScalar(u8, relative_path, '/');
     while (path_components_iter.next()) |path_part| {
-        if (path_part.len > 0) path_components.append(path_part) catch return error.AllocZFailed;
+        if (path_part.len > 0) path_components.append(allocator, path_part) catch return error.AllocZFailed;
     }
     if (path_components.items.len == 0) return;
 
@@ -72,15 +72,12 @@ pub fn removeDbFile(machine: *UninstallerMachine, repo: *c_libs.OstreeRepo, mtre
     const path = std.fs.path.join(machine.allocator, &.{ relative_db_path, filename }) catch return error.AllocZFailed;
     defer machine.allocator.free(path);
 
-    removeFromMtree(repo, mtree, path, machine.allocator) catch {
-        stateFailed(machine);
-        return error.FileNotFound;
-    };
+    try machine.check(removeFromMtree(repo, mtree, path, machine.allocator), UninstallerError.FileNotFound);
 }
 
-pub fn buildCommitBody(machine: *UninstallerMachine, repo: *c_libs.OstreeRepo, prev_checksum: [*:0]u8, writer: anytype) UninstallerError!void {
+pub fn buildCommitBody(machine: *UninstallerMachine, repo: *c_libs.OstreeRepo, prev_checksum: [*:0]u8, writer: *std.Io.Writer) UninstallerError!void {
     var prev_commit_variant: ?*c_libs.GVariant = null;
-    defer if (prev_commit_variant) |v| c_libs.g_variant_unref(v);
+    defer if (prev_commit_variant) |variant| c_libs.g_variant_unref(variant);
 
     if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, prev_checksum, &prev_commit_variant, &machine.gerror) == 0) return;
 
@@ -104,23 +101,22 @@ pub fn buildCommitBody(machine: *UninstallerMachine, repo: *c_libs.OstreeRepo, p
             if (std.ascii.eqlIgnoreCase(package_name, name)) break true;
         } else false;
 
-        if (!should_remove) try writer.print("{s}\n", .{trimmed_line});
+        if (!should_remove) try machine.check(writer.print("{s}\n", .{trimmed_line}), UninstallerError.AllocZFailed);
     }
 }
 
 pub fn buildCommitSubject(machine: *UninstallerMachine) UninstallerError![:0]u8 {
-    var buf = std.ArrayList(u8).init(machine.allocator);
+    var buf = std.Io.Writer.Allocating.init(machine.allocator);
     defer buf.deinit();
+    const writer = &buf.writer;
 
-    try buf.appendSlice("remove:");
-    for (machine.data.package_names, 0..) |name, index| {
-        try buf.writer().print("{s}{s}", .{ if (index == 0) " " else ", ", name });
-    }
+    try machine.check(writer.writeAll("remove:"), UninstallerError.AllocZFailed);
+    for (machine.data.package_names, 0..) |name, index| try machine.check(writer.print("{s}{s}", .{ if (index == 0) " " else ", ", name }), UninstallerError.AllocZFailed);
 
-    return machine.allocator.dupeZ(u8, buf.items) catch error.AllocZFailed;
+    return machine.check(machine.allocator.dupeZ(u8, buf.written()), UninstallerError.AllocZFailed);
 }
 
-pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.C) c_libs.gboolean {
+pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.c) c_libs.gboolean {
     const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
     c_libs.g_cancellable_cancel(cancellable);
     return c_libs.G_SOURCE_REMOVE;

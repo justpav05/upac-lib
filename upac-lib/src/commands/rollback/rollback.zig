@@ -13,15 +13,10 @@ const utils = @import("utils.zig");
 const onCancelSignal = utils.onCancelSignal;
 const signalLoopThread = utils.signalLoopThread;
 
-// ── Imports symbols ─────────────────────────────────────────────────────────────────────
-pub usingnamespace @import("symbols.zig");
-
 // ──Public imports ─────────────────────────────────────────────────────────────────────
 pub const std = @import("std");
 pub const ffi = @import("upac-ffi");
-
-pub const file = @import("upac-file");
-pub const c_libs = file.c_libs;
+pub const c_libs = ffi.c_libs;
 
 // ── Errors ─────────────────────────────────────────────────────────────────────
 // Specific rollback errors: failure to open the repository, missing specified commit, or failure to compute the difference between versions
@@ -88,7 +83,7 @@ pub const RollbackMachine = struct {
             }
         }
 
-        try self.stack.append(state_id);
+        try self.stack.append(self.allocator, state_id);
         self.report(state_id);
     }
 
@@ -129,14 +124,14 @@ pub const RollbackMachine = struct {
         cb(event, CSlice.fromSlice(std.mem.span(self.data.commit_hash)), self.data.progress_ctx);
     }
 
-    pub fn unwrap(self: *RollbackMachine, value: anytype, comptime err: RollbackError) RollbackError!@typeInfo(@TypeOf(value)).Optional.child {
+    pub fn unwrap(self: *RollbackMachine, value: anytype, comptime err: RollbackError) RollbackError!@typeInfo(@TypeOf(value)).optional.child {
         return value orelse {
             stateFailed(self);
             return err;
         };
     }
 
-    pub inline fn check(self: *RollbackMachine, value: anytype, comptime err: RollbackError) RollbackError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+    pub inline fn check(self: *RollbackMachine, value: anytype, comptime err: RollbackError) RollbackError!@typeInfo(@TypeOf(value)).error_union.payload {
         return value catch {
             stateFailed(self);
             return err;
@@ -171,7 +166,7 @@ pub const RollbackMachine = struct {
             self.signal_loop = null;
         }
 
-        self.stack.deinit();
+        self.stack.deinit(self.allocator);
     }
 
     pub fn run(data: RollbackData, allocator: std.mem.Allocator) !void {
@@ -186,7 +181,7 @@ pub const RollbackMachine = struct {
 
             .retries = 0,
 
-            .stack = std.ArrayList(RollbackStateId).init(allocator),
+            .stack = std.ArrayList(RollbackStateId).empty,
             .cancellable = c_libs.g_cancellable_new() orelse return RollbackError.OutOfMemory,
             .allocator = allocator,
         };

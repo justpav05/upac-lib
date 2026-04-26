@@ -67,7 +67,7 @@ fn updateBranchRef(repo: *c_libs.OstreeRepo, branch_c: [:0]const u8, resolved_ch
     }
 }
 
-pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.C) c_libs.gboolean {
+pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.c) c_libs.gboolean {
     const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
     c_libs.g_cancellable_cancel(cancellable);
     return c_libs.G_SOURCE_REMOVE;

@@ -3,10 +3,9 @@ const std = @import("std");
 
 const data = @import("upac-data");
 
-const file = @import("upac-file");
-const c_libs = file.c_libs;
-
 const uninstaller = @import("uninstaller.zig");
+const c_libs = uninstaller.c_libs;
+
 const CSlice = uninstaller.CSlice;
 
 const UninstallerMachine = uninstaller.UninstallerMachine;
@@ -25,7 +24,7 @@ const buildCommitSubject = utils.buildCommitSubject;
 // ── States ─────────────────────────────────────────────────────────────────────
 // The status of the path validation check
 pub fn stateVerifying(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.verifying);
+    try machine.check(machine.enter(.verifying), UninstallerError.AllocZFailed);
 
     try machine.check(std.fs.accessAbsoluteZ(machine.data.root_path, .{}), UninstallerError.PathNotFound);
     try machine.check(std.fs.accessAbsoluteZ(machine.data.repo_path, .{}), UninstallerError.PathNotFound);
@@ -41,7 +40,7 @@ pub fn stateVerifying(machine: *UninstallerMachine) UninstallerError!void {
 
 // The state of opening the repository and writing its data to the machine
 fn stateOpenRepo(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.open_repo);
+    try machine.check(machine.enter(.open_repo), UninstallerError.AllocZFailed);
 
     if (machine.mtree) |mtree| c_libs.g_object_unref(mtree);
 
@@ -67,19 +66,18 @@ fn stateOpenRepo(machine: *UninstallerMachine) UninstallerError!void {
 
 // Installation verification status, designed to prevent the removal of non-existent items
 fn stateCheckInstalled(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.check_installed);
+    try machine.check(machine.enter(.check_installed), UninstallerError.AllocZFailed);
 
     var body_len: usize = 0;
     var body_variant: ?*c_libs.GVariant = null;
     defer if (body_variant) |variant| c_libs.g_variant_unref(variant);
 
     const repo = try machine.unwrap(machine.repo, error.RepoOpenFailed);
-    const previos_commit_checksum = try machine.unwrap(machine.previous_commit_checksum, error.PackageNotFound);
 
     var commit_variant: ?*c_libs.GVariant = null;
     defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
 
-    try machine.gcheck(c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, previos_commit_checksum, &commit_variant, &machine.gerror), error.PackageNotFound);
+    try machine.gcheck(c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, machine.previous_commit_checksum, &commit_variant, &machine.gerror), error.PackageNotFound);
 
     body_variant = c_libs.g_variant_get_child_value(commit_variant, 4);
     const body_ptr = c_libs.g_variant_get_string(body_variant, &body_len);
@@ -107,7 +105,7 @@ fn stateCheckInstalled(machine: *UninstallerMachine) UninstallerError!void {
 
 // State for loading the list of paths created during installation, in order to precisely identify which OSTree tree nodes need to be removed
 fn stateLoadFiles(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.load_files);
+    try machine.check(machine.enter(.load_files), UninstallerError.AllocZFailed);
 
     const package_checksum = try machine.unwrap(machine.package_checksum, error.PackageNotFound);
 
@@ -119,7 +117,7 @@ fn stateLoadFiles(machine: *UninstallerMachine) UninstallerError!void {
 
 // State of file removal from mtree
 fn stateRemoveFiles(machine: *UninstallerMachine) !void {
-    try machine.enter(.remove_files);
+    try machine.check(machine.enter(.remove_files), UninstallerError.AllocZFailed);
 
     const repo = try machine.unwrap(machine.repo, error.RepoOpenFailed);
     const file_map = try machine.unwrap(machine.package_file_map, error.PackageNotFound);
@@ -142,7 +140,7 @@ fn stateRemoveFiles(machine: *UninstallerMachine) !void {
 
 // The state of removal from the global index, as well as of files belonging to the package in the database
 fn stateRemoveDbFiles(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.remove_db_files);
+    try machine.check(machine.enter(.remove_db_files), UninstallerError.AllocZFailed);
 
     const repo = try machine.unwrap(machine.repo, error.RepoOpenFailed);
     const mtree = try machine.unwrap(machine.mtree, error.PackageNotFound);
@@ -177,18 +175,19 @@ fn stateRemoveDbFiles(machine: *UninstallerMachine) UninstallerError!void {
 
 // Creates a new commit in OSTree representing the system state without the files of this package
 fn stateCommit(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.commit);
+    try machine.check(machine.enter(.commit), UninstallerError.AllocZFailed);
 
     const repo = try machine.unwrap(machine.repo, error.RepoOpenFailed);
     const mtree = try machine.unwrap(machine.mtree, error.PackageNotFound);
-    const previos_commit_checksum = try machine.unwrap(machine.previous_commit_checksum, error.PackageNotFound);
 
-    var body_buf = std.ArrayList(u8).init(machine.allocator);
-    defer body_buf.deinit();
+    var body_buf = std.ArrayList(u8).empty;
+    defer body_buf.deinit(machine.allocator);
 
-    try buildCommitBody(machine, repo, previos_commit_checksum, body_buf.writer());
+    var body_alloc = std.Io.Writer.Allocating.init(machine.allocator);
+    defer body_alloc.deinit();
+    try buildCommitBody(machine, repo, machine.previous_commit_checksum, &body_alloc.writer);
 
-    const body_c = machine.allocator.dupeZ(u8, body_buf.items) catch return error.AllocZFailed;
+    const body_c = try machine.check(machine.allocator.dupeZ(u8, body_buf.items), UninstallerError.AllocZFailed);
     defer machine.allocator.free(body_c);
 
     var out_g_file: ?*c_libs.GFile = null;
@@ -198,20 +197,20 @@ fn stateCommit(machine: *UninstallerMachine) UninstallerError!void {
     const subject_c = try buildCommitSubject(machine);
     defer machine.allocator.free(subject_c);
 
-    var commit_checksum: ?[*:0]u8 = null;
-    if (c_libs.ostree_repo_write_commit(repo, previos_commit_checksum, subject_c.ptr, body_c.ptr, null, @as(?*c_libs.OstreeRepoFile, @ptrCast(out_g_file)), &commit_checksum, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
+    var commit_checksum: [*c]u8 = null;
+    if (c_libs.ostree_repo_write_commit(repo, machine.previous_commit_checksum, subject_c.ptr, body_c.ptr, null, @as(?*c_libs.OstreeRepoFile, @ptrCast(out_g_file)), &commit_checksum, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
 
     c_libs.ostree_repo_transaction_set_ref(repo, null, machine.data.branch, commit_checksum);
 
     if (c_libs.ostree_repo_commit_transaction(repo, null, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateCommit);
-
     machine.commit_checksum = commit_checksum;
+
     machine.resetRetries();
     return stateCheckoutStaging(machine);
 }
 
 fn stateCheckoutStaging(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.checkout_staging);
+    try machine.check(machine.enter(.checkout_staging), UninstallerError.AllocZFailed);
 
     const repo = try machine.unwrap(machine.repo, error.AllocZFailed);
 
@@ -239,7 +238,7 @@ fn stateCheckoutStaging(machine: *UninstallerMachine) UninstallerError!void {
 }
 
 fn stateAtomicSwap(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.atomic_swap);
+    try machine.check(machine.enter(.atomic_swap), UninstallerError.AllocZFailed);
 
     const staging_path_c = try machine.unwrap(machine.staging_path_c, error.AllocZFailed);
 
@@ -257,7 +256,7 @@ fn stateAtomicSwap(machine: *UninstallerMachine) UninstallerError!void {
 }
 
 fn stateCleanupStaging(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.cleanup_staging);
+    try machine.check(machine.enter(.cleanup_staging), UninstallerError.AllocZFailed);
 
     const staging_path_c = try machine.unwrap(machine.staging_path_c, UninstallerError.AllocZFailed);
     try machine.check(std.fs.deleteTreeAbsolute(staging_path_c), UninstallerError.CheckoutFailed);
@@ -267,7 +266,7 @@ fn stateCleanupStaging(machine: *UninstallerMachine) UninstallerError!void {
 
 // State of successful completion of the package removal process and deployment of the new commit
 fn stateDone(machine: *UninstallerMachine) UninstallerError!void {
-    try machine.enter(.done);
+    try machine.check(machine.enter(.done), UninstallerError.AllocZFailed);
 }
 
 // A state of unsuccessful package removal, signaling the system that a rollback is required to revert the changes

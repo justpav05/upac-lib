@@ -1,28 +1,28 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const installer = @import("installer.zig");
-const std = installer.std;
-const PackageMeta = installer.ffi.PackageMeta;
-const InstallProgressEvent = installer.ffi.InstallProgressEvent;
+const installer_module = @import("upac-installer");
+const std = installer_module.std;
+const PackageMeta = installer_module.ffi.PackageMeta;
+const InstallProgressEvent = installer_module.ffi.InstallProgressEvent;
 
-const CSlice = installer.ffi.CSlice;
-const CPackageMeta = installer.ffi.CPackageMeta;
-const CInstallRequest = installer.ffi.CInstallRequest;
+const CSlice = installer_module.ffi.CSlice;
+const CPackageMeta = installer_module.ffi.CPackageMeta;
+const CInstallRequest = installer_module.ffi.CInstallRequest;
 
-const ErrorCode = installer.ffi.ErrorCode;
-const Operation = installer.ffi.Operation;
-const fromError = installer.ffi.fromError;
+const ErrorCode = installer_module.ffi.ErrorCode;
+const Operation = installer_module.ffi.Operation;
+const fromError = installer_module.ffi.fromError;
 
 // The main entry point for package installation. It gathers installation data from the request, initializes the installation engine, and returns an error code as an i32
-pub export fn upac_install(install_request_c: CInstallRequest) callconv(.C) i32 {
+pub fn install(install_request_c: CInstallRequest) callconv(.c) i32 {
     install_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.install));
 
-    var arena_allocator = std.heap.ArenaAllocator.init(installer.ffi.allocator());
+    var arena_allocator = std.heap.ArenaAllocator.init(installer_module.ffi.allocator());
     defer arena_allocator.deinit();
 
-    const install_entries = collectInstallEntries(install_request_c, installer.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.install));
-    defer installer.ffi.allocator().free(install_entries);
+    const install_entries = collectInstallEntries(install_request_c, installer_module.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.install));
+    defer installer_module.ffi.allocator().free(install_entries);
 
-    const install_data = installer.InstallData{
+    const install_data = installer_module.InstallData{
         .packages = install_entries,
         .branch = arena_allocator.allocator().dupeZ(u8, install_request_c.branch.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
 
@@ -37,13 +37,13 @@ pub export fn upac_install(install_request_c: CInstallRequest) callconv(.C) i32 
         .max_retries = install_request_c.max_retries,
     };
 
-    installer.InstallerMachine.run(install_data, installer.ffi.allocator()) catch |err|
+    installer_module.InstallerMachine.run(install_data, installer_module.ffi.allocator()) catch |err|
         return @intFromEnum(fromError(err, Operation.install));
 
     return @intFromEnum(ErrorCode.ok);
 }
 
-fn onInstallProgress(event: InstallProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.C) void {
+fn onInstallProgress(event: InstallProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.c) void {
     _ = ctx;
     _ = event;
     _ = pkg;
@@ -66,7 +66,7 @@ fn toMeta(c_package_meta: CPackageMeta) PackageMeta {
     };
 }
 
-fn collectInstallEntries(c_install_request: CInstallRequest, allocator: std.mem.Allocator) ![]installer.InstallEntry {
+fn collectInstallEntries(c_install_request: CInstallRequest, allocator: std.mem.Allocator) ![]installer_module.InstallEntry {
     if (c_install_request.packages_count > 0 and c_install_request.packages == null) {
         return error.InvalidEntry;
     }
@@ -75,7 +75,7 @@ fn collectInstallEntries(c_install_request: CInstallRequest, allocator: std.mem.
 
     const packages_entrys_c = pkgs_ptr[0..c_install_request.packages_count];
 
-    const install_entries = allocator.alloc(installer.InstallEntry, packages_entrys_c.len) catch return error.OutOfMemory;
+    const install_entries = allocator.alloc(installer_module.InstallEntry, packages_entrys_c.len) catch return error.OutOfMemory;
     errdefer allocator.free(install_entries);
 
     for (packages_entrys_c, 0..) |package_entry_c, index| {

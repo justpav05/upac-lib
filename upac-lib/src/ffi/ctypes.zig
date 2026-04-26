@@ -1,5 +1,16 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const std = @import("std");
+pub const std = @import("std");
+
+pub const c_libs = @cImport({
+    @cInclude("ostree.h");
+    @cInclude("glib.h");
+    @cInclude("gio/gio.h");
+    @cInclude("fcntl.h");
+    @cInclude("glib-unix.h");
+    @cInclude("sys/statvfs.h");
+});
+
+pub var global_cancel = std.atomic.Value(bool).init(false);
 
 // ── Reimports types ─────────────────────────────────────────────────────────────────────
 const types = @import("types.zig");
@@ -163,13 +174,13 @@ pub const InstallProgressFn = *const fn (
     event: InstallStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 pub const CInstallProgressFn = *const fn (
     event: InstallStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 // // Parameter sets for the сorresponding operation — Uninstallation
 pub const CUninstallRequest = extern struct {
@@ -213,13 +224,13 @@ pub const UninstallProgressFn = *const fn (
     event: UninstallStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 pub const CUninstallProgressFn = *const fn (
     event: UninstallStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 // Enumeration of file system change types (added, deleted, modified)
 pub const CDiffKind = enum(u8) {
@@ -316,13 +327,13 @@ pub const RollbackProgressFn = *const fn (
     event: RollbackStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 pub const CRollbackProgressFn = *const fn (
     event: RollbackStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 // Request structure for initializing the system with branch specification
 pub const CInitRequest = extern struct {
@@ -364,6 +375,10 @@ var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
 
 pub fn allocator() std.mem.Allocator {
     return gpa.allocator();
+}
+
+pub fn isCancelRequested() bool {
+    return global_cancel.load(.acquire);
 }
 
 pub fn deinit() void {

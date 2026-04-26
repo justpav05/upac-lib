@@ -33,11 +33,11 @@ const FieldEntry = struct {
     field: *[]const u8,
 };
 
-inline fn check(value: anytype, comptime err: DatabaseError) DatabaseError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+inline fn check(value: anytype, comptime err: DatabaseError) DatabaseError!@typeInfo(@TypeOf(value)).error_union.payload {
     return value catch err;
 }
 
-inline fn unwrap(value: anytype, comptime err: DatabaseError) DatabaseError!@typeInfo(@TypeOf(value)).Optional.child {
+inline fn unwrap(value: anytype, comptime err: DatabaseError) DatabaseError!@typeInfo(@TypeOf(value)).optional.child {
     return value orelse err;
 }
 
@@ -106,6 +106,8 @@ pub fn readFiles(database_path: []const u8, package_checksum: []const u8, alloca
 
 // ── Write meta file ────────────────────────────────────────────────────────────────────
 // Formats the package data (name, version, author, etc.) into a text format and writes it to a file at the absolute path
+// ── Write meta file ────────────────────────────────────────────────────────────────────
+// Formats the package data (name, version, author, etc.) into a text format and writes it to a file at the absolute path
 fn writeMeta(temp_path: []const u8, package_checksum: []const u8, package_meta: PackageMeta, allocator: std.mem.Allocator) DatabaseError!void {
     const package_meta_path = try check(metaPath(temp_path, package_checksum, allocator), DatabaseError.WriteError);
     defer allocator.free(package_meta_path);
@@ -113,13 +115,17 @@ fn writeMeta(temp_path: []const u8, package_checksum: []const u8, package_meta: 
     const package_meta_file = try check(std.fs.createFileAbsolute(package_meta_path, .{}), DatabaseError.WriteError);
     defer package_meta_file.close();
 
-    const w = package_meta_file.writer();
+    var write_buf: [1024]u8 = undefined;
+    var meta_writer = package_meta_file.writer(&write_buf);
+    const writer = &meta_writer.interface;
 
     inline for (std.meta.fields(PackageMeta)) |field| {
         const val = @field(package_meta, field.name);
         const fmt = comptime if (field.type == []const u8) "s" else "d";
-        try check(w.print("{s} {" ++ fmt ++ "}\n", .{ field.name, val }), DatabaseError.WriteError);
+        try check(writer.print("{s} {" ++ fmt ++ "}\n", .{ field.name, val }), DatabaseError.WriteError);
     }
+
+    try check(writer.flush(), DatabaseError.WriteError);
 }
 
 // ── Write file about package files ────────────────────────────────────────────────────────────────────
@@ -131,9 +137,16 @@ fn writeFiles(temp_path: []const u8, package_checksum: []const u8, file_map: Fil
     const package_files_file = try check(std.fs.createFileAbsolute(package_files_path, .{}), DatabaseError.WriteError);
     defer package_files_file.close();
 
-    const package_file_writer = package_files_file.writer();
+    var write_buf: [4096]u8 = undefined;
+    var file_writer = package_files_file.writer(&write_buf);
+    const writer = &file_writer.interface;
+
     var package_files_iter = file_map.iterator();
-    while (package_files_iter.next()) |package_entry| try check(package_file_writer.print("{s} {s}\n", .{ package_entry.key_ptr.*, package_entry.value_ptr.* }), DatabaseError.WriteError);
+    while (package_files_iter.next()) |package_entry| {
+        try check(writer.print("{s} {s}\n", .{ package_entry.key_ptr.*, package_entry.value_ptr.* }), DatabaseError.WriteError);
+    }
+
+    try check(writer.flush(), DatabaseError.WriteError);
 }
 
 // ── Parsing meta file ───────────────────────────────────────────────────────────────────

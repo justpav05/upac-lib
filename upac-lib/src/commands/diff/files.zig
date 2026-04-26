@@ -10,7 +10,7 @@ const AttributedDiffEntry = diff.ffi.AttributedDiffEntry;
 
 const DiffError = diff.DiffError;
 
-const packages = @import("packages.zig");
+const packages = diff.packages;
 
 const openRepo = diff.openRepo;
 
@@ -74,10 +74,10 @@ pub fn diffFiles(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, r
         return error.DiffFailed;
     }
 
-    var diff_entries = std.ArrayList(DiffEntry).init(allocator);
+    var diff_entries = std.ArrayList(DiffEntry).empty;
     errdefer {
         for (diff_entries.items) |entry| allocator.free(entry.path);
-        diff_entries.deinit();
+        diff_entries.deinit(allocator);
     }
 
     const to_prefix = @as([]const u8, to_checkout_path_c);
@@ -87,7 +87,7 @@ pub fn diffFiles(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, r
     try collectEntries(removed_entries, from_prefix, .removed, false, &diff_entries, allocator);
     try collectEntries(modified_entries, to_prefix, .modified, true, &diff_entries, allocator);
 
-    return try check(diff_entries.toOwnedSlice(), DiffError.AllocZPrintFailed);
+    return try check(diff_entries.toOwnedSlice(allocator), DiffError.AllocZPrintFailed);
 }
 
 // Enriches a file diff with package attribution by mapping each changed path to its owning package
@@ -105,34 +105,33 @@ pub fn diffFilesAttributed(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: 
 
     try check(buildFilePkgMap(repo_path_c, from_ref_c, db_path, &file_pkg, cancellable, allocator), DiffError.DiffFailed);
 
-    var result = std.ArrayList(AttributedDiffEntry).init(allocator);
+    var result = std.ArrayList(AttributedDiffEntry).empty;
     errdefer {
         for (result.items) |entry| {
             allocator.free(entry.path);
             allocator.free(entry.package_name);
         }
-        result.deinit();
+        result.deinit(allocator);
     }
 
     for (raw_diff) |entry| {
         const pkg = file_pkg.get(entry.path) orelse "";
-        result.append(.{
-            .path = allocator.dupe(u8, entry.path) catch return error.AllocZPrintFailed,
+        try check(result.append(allocator, .{
+            .path = try check(allocator.dupe(u8, entry.path), DiffError.AllocZPrintFailed),
             .kind = entry.kind,
-            .package_name = allocator.dupe(u8, pkg) catch return error.AllocZPrintFailed,
-        }) catch return error.AllocZPrintFailed;
+            .package_name = try check(allocator.dupe(u8, pkg), DiffError.AllocZPrintFailed),
+        }), DiffError.AllocZPrintFailed);
     }
 
-    return result.toOwnedSlice() catch return DiffError.AllocZPrintFailed;
+    return try check(result.toOwnedSlice(allocator), DiffError.AllocZPrintFailed);
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [*:0]u8, destination_path: [*:0]u8, cancellable: ?*c_libs.GCancellable) DiffError!void {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
-
-    var resolved_checksum: ?[*:0]u8 = null;
-    defer if (resolved_checksum) |cs| c_libs.g_free(@ptrCast(cs));
+    var resolved_checksum: [*c]u8 = null;
+    defer if (resolved_checksum) |checksum_unwraped| c_libs.g_free(@ptrCast(checksum_unwraped));
 
     if (c_libs.ostree_repo_resolve_rev(repo, ref_c, 0, &resolved_checksum, &gerror) == 0) return error.DiffFailed;
 
@@ -178,12 +177,7 @@ fn buildFilePkgMap(repo_path_c: [*:0]u8, ref_c: [*:0]u8, db_path: []const u8, ou
 
         var file_map_iter = file_map.iterator();
         while (file_map_iter.next()) |file_entry| {
-            if (!out.contains(file_entry.key_ptr.*)) {
-                out.put(
-                    allocator.dupe(u8, file_entry.key_ptr.*) catch return error.AllocZPrintFailed,
-                    allocator.dupe(u8, pkg_name) catch return error.AllocZPrintFailed,
-                ) catch return error.AllocZPrintFailed;
-            }
+            if (!out.contains(file_entry.key_ptr.*)) try check(out.put(try check(allocator.dupe(u8, file_entry.key_ptr.*), DiffError.AllocZPrintFailed), try check(allocator.dupe(u8, pkg_name), DiffError.AllocZPrintFailed)), DiffError.AllocZPrintFailed);
         }
     }
 }
@@ -205,6 +199,6 @@ fn collectEntries(entries_ptr_array: *c_libs.GPtrArray, prefix: []const u8, kind
         const rel_path = if (std.mem.startsWith(u8, file_path, prefix)) file_path[prefix.len..] else file_path;
         const rel_path_dupe = try check(allocator.dupe(u8, rel_path), DiffError.AllocZPrintFailed);
 
-        try check(result.append(.{ .path = rel_path_dupe, .kind = kind }), DiffError.AllocZPrintFailed);
+        try check(result.append(allocator, .{ .path = rel_path_dupe, .kind = kind }), DiffError.AllocZPrintFailed);
     }
 }

@@ -1,7 +1,8 @@
 .{
-    .name = "upac-lib",
+    .name = .upac_lib,
     .version = "0.1.3",
-    .minimum_zig_version = "0.13.0",
+    .fingerprint = 0xb5e0bcfe9385219e,
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{ "build.zig", "build.zig.zon", "src" },
 }

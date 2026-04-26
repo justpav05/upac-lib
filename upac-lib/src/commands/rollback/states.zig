@@ -1,7 +1,7 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const rollback = @import("rollback.zig");
 const std = rollback.std;
-const c_libs = rollback.file.c_libs;
+const c_libs = rollback.c_libs;
 
 const RollbackMachine = rollback.RollbackMachine;
 const RollbackError = rollback.RollbackError;
@@ -47,10 +47,9 @@ fn stateResolveCommit(machine: *RollbackMachine) RollbackError!void {
 
     const repo = try machine.unwrap(machine.repo, error.RepoOpenFailed);
 
-    var resolved: ?[*:0]u8 = null;
+    var resolved: [*c]u8 = null;
     try machine.gcheck(c_libs.ostree_repo_resolve_rev(repo, machine.data.commit_hash, 0, &resolved, &machine.gerror), error.CommitNotFound);
-
-    machine.resolved_checksum = try machine.unwrap(resolved, error.CommitNotFound);
+    machine.resolved_checksum = resolved;
 
     machine.resetRetries();
     return stateCheckoutStaging(machine);

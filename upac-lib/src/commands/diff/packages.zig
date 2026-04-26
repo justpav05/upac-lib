@@ -33,10 +33,10 @@ pub fn diffPackages(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8
     var fileMap_to = try parsePackageBody(to_body orelse "", allocator);
     defer freeStringMap(&fileMap_to, allocator);
 
-    var entries = std.ArrayList(PackageDiffEntry).init(allocator);
+    var entries = std.ArrayList(PackageDiffEntry).empty;
     errdefer {
         for (entries.items) |entry| allocator.free(entry.name);
-        entries.deinit();
+        entries.deinit(allocator);
     }
 
     var files_map_to_iter = fileMap_to.iterator();
@@ -44,11 +44,11 @@ pub fn diffPackages(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8
         if (file_map_from.get(entry.key_ptr.*)) |from_checksum| {
             if (!std.mem.eql(u8, from_checksum, entry.value_ptr.*)) {
                 const entry_ley_dupe = try check(allocator.dupe(u8, entry.key_ptr.*), DiffError.AllocZPrintFailed);
-                try check(entries.append(.{ .name = entry_ley_dupe, .kind = .updated }), DiffError.AllocZPrintFailed);
+                try check(entries.append(allocator, .{ .name = entry_ley_dupe, .kind = .updated }), DiffError.AllocZPrintFailed);
             }
         } else {
             const entry_ley_dupe = try check(allocator.dupe(u8, entry.key_ptr.*), DiffError.AllocZPrintFailed);
-            try check(entries.append(.{ .name = entry_ley_dupe, .kind = .added }), DiffError.AllocZPrintFailed);
+            try check(entries.append(allocator, .{ .name = entry_ley_dupe, .kind = .added }), DiffError.AllocZPrintFailed);
         }
     }
 
@@ -56,22 +56,20 @@ pub fn diffPackages(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8
     while (file_map_from_iter.next()) |entry| {
         if (!fileMap_to.contains(entry.key_ptr.*)) {
             const entry_key_dupe = try check(allocator.dupe(u8, entry.key_ptr.*), DiffError.AllocZPrintFailed);
-            try check(entries.append(.{ .name = entry_key_dupe, .kind = .removed }), DiffError.AllocZPrintFailed);
+            try check(entries.append(allocator, .{ .name = entry_key_dupe, .kind = .removed }), DiffError.AllocZPrintFailed);
         }
     }
 
-    return try check(entries.toOwnedSlice(), DiffError.AllocZPrintFailed);
+    return try check(entries.toOwnedSlice(allocator), DiffError.AllocZPrintFailed);
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 pub fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError!?[]const u8 {
+    _ = cancellable;
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
-
-    _ = cancellable;
-
-    var checksum: ?[*:0]u8 = null;
-    defer c_libs.g_free(@ptrCast(checksum));
+    var checksum: [*c]u8 = null;
+    defer if (checksum) |checksum_unwraped| c_libs.g_free(@ptrCast(checksum_unwraped));
 
     if (c_libs.ostree_repo_resolve_rev(repo, ostree_ref_c, 1, &checksum, &gerror) == 0 or checksum == null) return null;
 
@@ -86,7 +84,7 @@ pub fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref_c: [*:0]u8, cancellable: 
     var body_len: usize = 0;
     const body_ptr = c_libs.g_variant_get_string(body_variant, &body_len);
 
-    return allocator.dupe(u8, body_ptr[0..body_len]) catch return DiffError.AllocZPrintFailed;
+    return try check(allocator.dupe(u8, body_ptr[0..body_len]), DiffError.AllocZPrintFailed);
 }
 
 pub fn parsePackageBody(body: []const u8, allocator: std.mem.Allocator) DiffError!std.StringHashMap([]const u8) {

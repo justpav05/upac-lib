@@ -1,18 +1,12 @@
-// ── Imports ─────────────────────────────────────────────────────────────────────
-const file = @import("upac-file");
-
 // ── Public imports ───────────────────────────────────────────────────────────
 pub const std = @import("std");
-pub const c_libs = file.c_libs;
 
 pub const data = @import("upac-data");
 pub const ffi = @import("upac-ffi");
+pub const c_libs = ffi.c_libs;
 
 const PackageMeta = ffi.PackageMeta;
 const CommitEntry = ffi.CommitEntry;
-
-// ── Imports symbols ──────────────────────────────────────────────────────────
-pub usingnamespace @import("symbols.zig");
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 pub const DiffError = error{
@@ -28,66 +22,57 @@ pub const DiffError = error{
 };
 
 // Returns the installed package metadata list from the latest commit on a branch
-pub fn listPackages(repo_path: []const u8, branch: []const u8, db_path: []const u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]PackageMeta {
+pub fn listPackages(repo_path_c: [*:0]u8, branch_c: [*:0]u8, db_path: []const u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]PackageMeta {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
-    const repo_path_c = try check(allocator.dupeZ(u8, repo_path), DiffError.AllocZPrintFailed);
-    defer allocator.free(repo_path_c);
-
-    const branch_c = try check(allocator.dupeZ(u8, branch), DiffError.AllocZPrintFailed);
-    defer allocator.free(branch_c);
-
-    const repo = try openRepo(repo_path, cancellable, &gerror, allocator);
+    const repo = try openRepo(repo_path_c, cancellable, &gerror);
     defer c_libs.g_object_unref(repo);
 
-    var head_checksum: ?[*:0]u8 = null;
+    var head_checksum: [*c]u8 = null;
     if (c_libs.ostree_repo_resolve_rev(repo, branch_c, 1, &head_checksum, null) == 0 or head_checksum == null) return &.{};
     defer c_libs.g_free(@ptrCast(head_checksum));
 
-    const body = try check(getRefBody(repo, branch, cancellable, allocator), DiffError.CommitNotFound) orelse return &.{};
+    const body = try check(getRefBody(repo, branch_c, cancellable, allocator), DiffError.CommitNotFound) orelse return &.{};
     defer allocator.free(body);
 
     var package_map = parsePackageBody(body, allocator) catch return &.{};
     defer freeStringMap(&package_map, allocator);
 
-    var result_package_metas = std.ArrayList(PackageMeta).init(allocator);
+    var result_package_metas = std.ArrayList(PackageMeta).empty;
     errdefer {
         for (result_package_metas.items) |package_meta| data.freePackageMeta(package_meta, allocator);
-        result_package_metas.deinit();
+        result_package_metas.deinit(allocator);
     }
 
     var package_map_iter = package_map.iterator();
     while (package_map_iter.next()) |entry| {
         const package_meta = data.readMeta(db_path, entry.value_ptr.*, allocator) catch continue;
-        try check(result_package_metas.append(package_meta), DiffError.AllocZPrintFailed);
+        try check(result_package_metas.append(allocator, package_meta), DiffError.AllocZPrintFailed);
     }
 
-    return try check(result_package_metas.toOwnedSlice(), DiffError.AllocZPrintFailed);
+    return try check(result_package_metas.toOwnedSlice(allocator), DiffError.AllocZPrintFailed);
 }
 
 // Walks the commit chain of a branch and returns all commits as a slice
-pub fn listCommits(repo_path: []const u8, branch: []const u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]CommitEntry {
+pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]CommitEntry {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
-    const branch_c = try check(allocator.dupeZ(u8, branch), DiffError.AllocZPrintFailed);
-    defer allocator.free(branch_c);
-
-    const repo = try openRepo(repo_path, cancellable, &gerror, allocator);
+    const repo = try openRepo(repo_path_c, cancellable, &gerror);
     defer c_libs.g_object_unref(repo);
 
-    var entries = std.ArrayList(CommitEntry).init(allocator);
+    var entries = std.ArrayList(CommitEntry).empty;
     errdefer {
         for (entries.items) |entry| {
             allocator.free(entry.checksum);
             allocator.free(entry.subject);
         }
-        entries.deinit();
+        entries.deinit(allocator);
     }
 
-    var current_checksum: ?[*:0]u8 = null;
-    if (c_libs.ostree_repo_resolve_rev(repo, branch_c.ptr, 0, &current_checksum, &gerror) == 0) return try check(entries.toOwnedSlice(), DiffError.AllocZPrintFailed);
+    var current_checksum: [*c]u8 = null;
+    if (c_libs.ostree_repo_resolve_rev(repo, branch_c, 0, &current_checksum, &gerror) == 0) return try check(entries.toOwnedSlice(allocator), DiffError.AllocZPrintFailed);
 
     var checksum = current_checksum;
     var is_first = true;
@@ -109,7 +94,7 @@ pub fn listCommits(repo_path: []const u8, branch: []const u8, cancellable: ?*c_l
         const checksum_dupe = try check(allocator.dupe(u8, std.mem.span(current_cs)), DiffError.AllocZPrintFailed);
         const subject_dupe = try check(allocator.dupe(u8, subject_ptr[0..subject_len]), DiffError.AllocZPrintFailed);
 
-        try check(entries.append(.{ .checksum = checksum_dupe, .subject = subject_dupe }), DiffError.AllocZPrintFailed);
+        try check(entries.append(allocator, .{ .checksum = checksum_dupe, .subject = subject_dupe }), DiffError.AllocZPrintFailed);
 
         const parent = c_libs.ostree_commit_get_parent(commit_variant);
         if (!is_first) c_libs.g_free(@ptrCast(current_cs));
@@ -119,23 +104,20 @@ pub fn listCommits(repo_path: []const u8, branch: []const u8, cancellable: ?*c_l
     }
 
     if (current_checksum) |cs| c_libs.g_free(@ptrCast(cs));
-    return try check(entries.toOwnedSlice(), DiffError.AllocZPrintFailed);
+    return try check(entries.toOwnedSlice(allocator), DiffError.AllocZPrintFailed);
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
-pub fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref: []const u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError!?[]const u8 {
+pub fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError!?[]const u8 {
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(err);
 
     _ = cancellable;
 
-    const ostree_ref_c = try check(allocator.dupeZ(u8, ostree_ref), DiffError.AllocZPrintFailed);
-    defer allocator.free(ostree_ref_c);
+    var checksum: [*c]u8 = null;
+    defer if (checksum) |checksum_unwraped| c_libs.g_free(@ptrCast(checksum_unwraped));
 
-    var checksum: ?[*:0]u8 = null;
-    defer c_libs.g_free(@ptrCast(checksum));
-
-    if (c_libs.ostree_repo_resolve_rev(repo, ostree_ref_c.ptr, 1, &checksum, &gerror) == 0 or checksum == null) return null;
+    if (c_libs.ostree_repo_resolve_rev(repo, ostree_ref_c, 1, &checksum, &gerror) == 0 or checksum == null) return null;
 
     var commit_variant: ?*c_libs.GVariant = null;
     defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
@@ -183,11 +165,8 @@ pub fn freeStringMap(map: *std.StringHashMap([]const u8), allocator: std.mem.All
     map.deinit();
 }
 
-fn openRepo(repo_path: []const u8, cancellable: ?*c_libs.GCancellable, gerror: *?*c_libs.GError, allocator: std.mem.Allocator) DiffError!*c_libs.OstreeRepo {
-    const repo_path_c = try check(allocator.dupeZ(u8, repo_path), DiffError.AllocZPrintFailed);
-    defer allocator.free(repo_path_c);
-
-    const gfile = c_libs.g_file_new_for_path(repo_path_c.ptr);
+fn openRepo(repo_path_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, gerror: *?*c_libs.GError) DiffError!*c_libs.OstreeRepo {
+    const gfile = c_libs.g_file_new_for_path(repo_path_c);
     defer c_libs.g_object_unref(gfile);
 
     const repo = c_libs.ostree_repo_new(gfile);
@@ -198,15 +177,15 @@ fn openRepo(repo_path: []const u8, cancellable: ?*c_libs.GCancellable, gerror: *
     return try unwrap(repo, DiffError.RepoOpenFailed);
 }
 
-pub inline fn unwrap(value: anytype, comptime err: DiffError) DiffError!@typeInfo(@TypeOf(value)).Optional.child {
+pub inline fn unwrap(value: anytype, comptime err: DiffError) DiffError!@typeInfo(@TypeOf(value)).optional.child {
     return value orelse err;
 }
 
-pub inline fn check(value: anytype, comptime err: DiffError) DiffError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+pub inline fn check(value: anytype, comptime err: DiffError) DiffError!@typeInfo(@TypeOf(value)).error_union.payload {
     return value catch err;
 }
 
-pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.C) c_libs.gboolean {
+pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.c) c_libs.gboolean {
     const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
     c_libs.g_cancellable_cancel(cancellable);
     return c_libs.G_SOURCE_REMOVE;

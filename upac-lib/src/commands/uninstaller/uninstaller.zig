@@ -15,14 +15,11 @@ const signalLoopThread = utils.signalLoopThread;
 // ── Public imports ─────────────────────────────────────────────────────────────────────
 pub const std = @import("std");
 pub const ffi = @import("upac-ffi");
+pub const c_libs = ffi.c_libs;
+
 pub const CSlice = ffi.CSlice;
 
-pub const c_libs = file.c_libs;
-
 pub const stateFailed = states.stateFailed;
-
-// ── Imports symbols ─────────────────────────────────────────────────────────────────────
-pub usingnamespace @import("symbols.zig");
 
 // ── Errors ─────────────────────────────────────────────────────────────────────
 // Errors specific to the removal process
@@ -72,7 +69,7 @@ pub const UninstallerMachine = struct {
     mtree: ?*c_libs.OstreeMutableTree,
 
     commit_checksum: ?[*:0]u8 = null,
-    previous_commit_checksum: ?[*:0]u8 = null,
+    previous_commit_checksum: [*c]u8 = null,
 
     staging_path_c: ?[:0]const u8 = null,
 
@@ -97,7 +94,7 @@ pub const UninstallerMachine = struct {
             }
         }
 
-        try self.stack.append(state_id);
+        try self.stack.append(self.allocator, state_id);
         self.report(state_id);
     }
 
@@ -147,14 +144,14 @@ pub const UninstallerMachine = struct {
         }
     }
 
-    pub inline fn unwrap(self: *UninstallerMachine, value: anytype, comptime err: UninstallerError) UninstallerError!@typeInfo(@TypeOf(value)).Optional.child {
+    pub inline fn unwrap(self: *UninstallerMachine, value: anytype, comptime err: UninstallerError) UninstallerError!@typeInfo(@TypeOf(value)).optional.child {
         return value orelse {
             stateFailed(self);
             return err;
         };
     }
 
-    pub inline fn check(self: *UninstallerMachine, value: anytype, comptime err: UninstallerError) UninstallerError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+    pub inline fn check(self: *UninstallerMachine, value: anytype, comptime err: UninstallerError) UninstallerError!@typeInfo(@TypeOf(value)).error_union.payload {
         return value catch {
             stateFailed(self);
             return err;
@@ -196,7 +193,7 @@ pub const UninstallerMachine = struct {
             self.signal_loop = null;
         }
 
-        self.stack.deinit();
+        self.stack.deinit(self.allocator);
     }
 
     // Reports an uninstallation progress event to the progress callback, if one is set
@@ -231,7 +228,7 @@ pub const UninstallerMachine = struct {
 
             .cancellable = c_libs.g_cancellable_new() orelse return error.OutOfMemory,
 
-            .stack = std.ArrayList(UninstallStateId).init(allocator),
+            .stack = std.ArrayList(UninstallStateId).empty,
             .allocator = allocator,
         };
         defer machine.deinit();
