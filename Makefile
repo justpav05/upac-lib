@@ -10,12 +10,6 @@ CPU         ?= native
 
 CARGO_TARGET ?= $(shell rustc -Vv | grep host | cut -d ' ' -f 2)
 
-OSTREE_REPO := https://github.com/ostreedev/ostree.git
-OSTREE_DIR  := $(ROOT_DIR)/ostree
-
-LIBARCHIVE_REPO := https://github.com/libarchive/libarchive.git
-LIBARCHIVE_DIR  := $(ROOT_DIR)/libarchive
-
 ARCH_PKG_FLAGS  ?= --nodeps --noconfirm -f
 RPM_PKG_FLAGS   ?= -bb --define "_topdir $(PKG_DIR)/rpm" \
                        --define "_rpmdir $(PKG_DIR)/rpm/RPMS" \
@@ -32,8 +26,8 @@ DEB_PKG_FLAGS   ?= --root-owner-group
 ifeq ($(strip $(MODE)), release)
     $(info --- INFO: Building in RELEASE mode ---)
     CARGO_BUILD_FLAG := --release
-    RUST_BUILD_FLAGS  := -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false -C target-cpu=$(subst _,-,$(strip $(CPU)))
-    ZIG_BUILD_FLAGS  := -Doptimize=ReleaseSafe -Dstrip=true -Dstack-check=false
+    RUST_BUILD_FLAGS  := -C lto=fat -C opt-level=3 -C strip=symbols -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false -C target-cpu=$(subst _,-,$(strip $(CPU)))
+    ZIG_BUILD_FLAGS  := -Doptimize=ReleaseFast -Dstrip=true -Dstack-check=false
 else
     $(info --- INFO: Building in DEBUG mode ---)
     CARGO_BUILD_FLAG :=
