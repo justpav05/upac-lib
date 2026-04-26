@@ -280,10 +280,17 @@ fn stateCheckout(machine: *InstallerMachine) InstallerError!void {
     if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, staging_path_c, commit_checksum, machine.cancellable, &machine.gerror) == 0) {
         try machine.check(std.fs.deleteTreeAbsolute(staging_path_c), InstallerError.CheckoutFailed);
 
-        machine.allocator.free(staging_path_c);
-        machine.staging_path_c = null;
+        if (machine.exhausted()) {
+            stateFailed(machine);
+            return InstallerError.MaxRetriesExceeded;
+        }
+        if (machine.gerror) |err| {
+            c_libs.g_error_free(err);
+            machine.gerror = null;
+        }
+        machine.retries += 1;
 
-        return machine.retry(stateCheckout);
+        return stateCheckout(machine);
     }
 
     machine.resetRetries();
@@ -333,6 +340,9 @@ fn stateDone(machine: *InstallerMachine) InstallerError!void {
 
 // An automaton error state, signaling that a system rollback is required
 pub fn stateFailed(machine: *InstallerMachine) void {
+    var abort_err: ?*c_libs.GError = null;
+    defer if (abort_err) |err| c_libs.g_error_free(err);
+
     if (machine.staging_path_c) |staging| {
         std.fs.deleteTreeAbsolute(staging) catch {};
         machine.allocator.free(staging);
@@ -340,7 +350,7 @@ pub fn stateFailed(machine: *InstallerMachine) void {
     }
 
     if (machine.repo) |repo| {
-        _ = c_libs.ostree_repo_abort_transaction(repo, null, &machine.gerror);
+        _ = c_libs.ostree_repo_abort_transaction(repo, null, &abort_err);
 
         if (machine.commit_checksum != null) _ = c_libs.ostree_repo_set_ref_immediate(repo, null, machine.data.branch, null, null, null);
     }

@@ -34,7 +34,6 @@ ifeq ($(strip $(MODE)), release)
     CARGO_BUILD_FLAG := --release
     RUST_BUILD_FLAGS  := -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C panic=abort -C prefer-dynamic=false -C target-cpu=$(subst _,-,$(strip $(CPU)))
     ZIG_BUILD_FLAGS  := -Doptimize=ReleaseSafe -Dstrip=true -Dstack-check=false
-    OSTREE_BUILD_CFLAGS := -O3 -flto -march=$(subst _,-,$(strip $(CPU)))
 else
     $(info --- INFO: Building in DEBUG mode ---)
     CARGO_BUILD_FLAG :=
