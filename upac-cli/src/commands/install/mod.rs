@@ -62,11 +62,11 @@ impl Drop for PreparedPackage {
     fn drop(&mut self) {
         unsafe {
             if !self.meta_handle.is_null() {
-                (self.backend.backend_meta_free)(self.meta_handle);
+                (self.backend.meta_free)(self.meta_handle);
                 self.meta_handle = null_mut();
             }
             if !self.temp_path_c.ptr.is_null() {
-                (self.backend.backend_cleanup)(self.temp_path_c);
+                (self.backend.cleanup)(self.temp_path_c);
                 self.temp_path_c = CSlice {
                     ptr: null(),
                     len: 0,

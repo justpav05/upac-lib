@@ -43,14 +43,14 @@ impl BackendEvent {
 pub struct Backend {
     _lib: Library,
 
-    pub backend_prepare:
+    pub prepare:
         unsafe extern "C" fn(*const CPrepareRequest, *mut PackageMetaHandle, *mut CSlice) -> i32,
-    pub backend_meta_free: unsafe extern "C" fn(PackageMetaHandle),
+    pub meta_free: unsafe extern "C" fn(PackageMetaHandle),
 
-    pub backend_meta_get_name: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
-    pub backend_meta_get_version: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
+    pub meta_get_name: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
+    pub meta_get_version: unsafe extern "C" fn(PackageMetaHandle) -> CSlice,
 
-    pub backend_cleanup: unsafe extern "C" fn(CSlice),
+    pub cleanup: unsafe extern "C" fn(CSlice),
 }
 
 impl Backend {
@@ -69,17 +69,11 @@ impl Backend {
         })?;
 
         Ok(Self {
-            backend_prepare: unsafe { Self::load_symbol(&loaded_library, "upac_backend_prepare")? },
-            backend_meta_free: unsafe {
-                Self::load_symbol(&loaded_library, "upac_backend_meta_free")?
-            },
-            backend_meta_get_name: unsafe {
-                Self::load_symbol(&loaded_library, "upac_backend_meta_get_name")?
-            },
-            backend_meta_get_version: unsafe {
-                Self::load_symbol(&loaded_library, "upac_backend_meta_get_version")?
-            },
-            backend_cleanup: unsafe { Self::load_symbol(&loaded_library, "upac_backend_cleanup")? },
+            prepare: unsafe { Self::load_symbol(&loaded_library, "prepare")? },
+            meta_free: unsafe { Self::load_symbol(&loaded_library, "meta_free")? },
+            meta_get_name: unsafe { Self::load_symbol(&loaded_library, "meta_get_name")? },
+            meta_get_version: unsafe { Self::load_symbol(&loaded_library, "meta_get_version")? },
+            cleanup: unsafe { Self::load_symbol(&loaded_library, "cleanup")? },
             _lib: loaded_library,
         })
     }
@@ -104,7 +98,7 @@ impl Backend {
         let mut package_temp_path_ptr = MaybeUninit::<CSlice>::uninit();
 
         unsafe {
-            match (self.backend_prepare)(
+            match (self.prepare)(
                 &prepare_request_c,
                 &mut package_meta_handle_ptr,
                 package_temp_path_ptr.as_mut_ptr(),

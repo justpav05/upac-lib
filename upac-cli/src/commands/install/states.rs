@@ -4,8 +4,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 
 use std::env;
+use std::ffi::CString;
 use std::fs;
 use std::io::Read;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,27 +52,34 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
 
         machine
             .progress_bar
-            .println(format!("{} backend: {}", "→".cyan(), kind));
+            .println(format!("{} Backend: {}", "→".cyan(), kind));
 
-        let tmp_string_path = env::temp_dir()
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("invalid temp dir path"))?
-            .to_owned();
+        let tmp_string_path = CString::from_str(
+            env::temp_dir()
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid temp dir path"))?,
+        )?;
 
-        let abs_file_str = fs::canonicalize(file)
-            .map_err(|err| anyhow::anyhow!("cannot resolve path '{file}': {err}"))?
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("invalid path encoding"))?
-            .to_owned();
+        let abs_file_str = CString::from_str(
+            fs::canonicalize(file)
+                .map_err(|err| anyhow::anyhow!("cannot resolve path '{file}': {err}"))?
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid path encoding"))?,
+        )?;
 
         let checksum = if machine.checksums.is_empty() {
-            compute_checksum(&abs_file_str)?
+            CString::from_str(&compute_checksum(&abs_file_str.to_str()?)?)?
         } else {
-            machine.checksums[index].clone()
+            CString::from_str(&machine.checksums[index])?
         };
 
         let (meta_handle, temp_path_c) = backend
-            .meta_prepare(&abs_file_str, &tmp_string_path, &checksum, progress_bar_ptr)
+            .meta_prepare(
+                &abs_file_str.to_str()?,
+                &tmp_string_path.to_str()?,
+                &checksum.to_str()?,
+                progress_bar_ptr,
+            )
             .map_err(|err| {
                 machine.progress_bar.finish_and_clear();
                 err
@@ -79,7 +88,7 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
         let prepared_packege = PreparedPackage {
             meta_handle,
             temp_path_c,
-            checksum,
+            checksum: checksum.to_str()?.to_owned(),
             backend,
         };
 
@@ -127,12 +136,12 @@ fn state_done(machine: &mut InstallMachine) -> Result<()> {
     for package in &machine.prepared_packages {
         let backend = &package.backend;
         let name = unsafe {
-            (backend.backend_meta_get_name)(package.meta_handle)
+            (backend.meta_get_name)(package.meta_handle)
                 .as_str()
                 .to_owned()
         };
         let version = unsafe {
-            (backend.backend_meta_get_version)(package.meta_handle)
+            (backend.meta_get_version)(package.meta_handle)
                 .as_str()
                 .to_owned()
         };

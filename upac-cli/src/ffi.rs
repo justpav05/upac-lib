@@ -85,7 +85,7 @@ pub struct CPackageEntry {
 impl CPackageEntry {
     pub fn new(meta: PackageMetaHandle, temp_path: &str, checksum: &str) -> Self {
         Self {
-            struct_size: size_of::<CPrepareRequest>(),
+            struct_size: size_of::<CPackageEntry>(),
 
             meta,
             temp_path: CSlice::from_str(temp_path),
