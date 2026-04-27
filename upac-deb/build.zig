@@ -21,6 +21,7 @@ pub fn build(b: *std.Build) void {
     // ── Shared library ────────────────────────────────────────────────────────
     const shared_lib = b.addLibrary(.{
         .name = "upac-deb",
+        .linkage = .dynamic,
         .root_module = upac_root,
     });
 
