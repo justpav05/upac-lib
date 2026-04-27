@@ -7,6 +7,8 @@ const Machine = backend.BackendMachine;
 const PackageMeta = backend.PackageMeta;
 const BackendError = backend.BackendError;
 
+const metaToC = backend.metaToC;
+
 const rpm_parser = @import("parser.zig");
 
 // ── States ─────────────────────────────────────────────────────────────────
@@ -41,7 +43,7 @@ pub fn stateVerifying(machine: *Machine) BackendError!void {
     const file_descriptor = try machine.unwrap(machine.file, BackendError.ArchiveOpenFailed);
     try machine.check(file_descriptor.seekTo(0), BackendError.ArchiveOpenFailed);
 
-    return stateExtracting(machine);
+    return stateReadingMeta(machine);
 }
 
 // Parses the RPM header to extract package information into the machine metadata
@@ -54,8 +56,8 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
     defer rpm_header.deinit(machine.allocator);
 
     const name = try machine.unwrap(rpm_header.name, BackendError.MetadataNotFound);
-    const version = try machine.unwrap(rpm_header.name, BackendError.MetadataNotFound);
-    const arch = try machine.unwrap(rpm_header.name, BackendError.MetadataNotFound);
+    const version = try machine.unwrap(rpm_header.version, BackendError.MetadataNotFound);
+    const arch = try machine.unwrap(rpm_header.version, BackendError.MetadataNotFound);
 
     machine.meta = PackageMeta{
         .name = try machine.check(machine.allocator.dupe(u8, name), BackendError.MetadataNotFound),

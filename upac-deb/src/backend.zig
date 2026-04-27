@@ -9,6 +9,8 @@ pub const c_libs = @cImport({
     @cInclude("archive_entry.h");
 });
 
+var cancel_requested = std.atomic.Value(bool).init(false);
+
 // ── Public types ────────────────────────────────────────────────────────────
 const PackageMetaField = enum {
     Package,
@@ -98,8 +100,16 @@ pub const BackendMachine = struct {
 
     // Method for transitioning to a new state with history addition
     pub fn enter(self: *BackendMachine, state_id: StateId) !void {
+        if (isCancelRequested()) {
+            stateFailed(self);
+            return BackendError.Cancelled;
+        }
         try self.stack.append(self.allocator, state_id);
         self.report(state_id);
+    }
+
+    pub fn isCancelRequested() bool {
+        return cancel_requested.load(.acquire);
     }
 
     // Releasing resources (stack memory) occupied by the state machine
@@ -177,8 +187,11 @@ const CSlice = extern struct {
     }
 
     // A simple check to determine whether a passed string or data array is empty (i.e., has zero length)
-    pub fn isEmpty(self: CSlice) bool {
-        return self.len == 0 or self.ptr == null;
+    pub fn validate(self: CSlice) bool {
+        const ptr = self.ptr orelse return false;
+        if (self.len == 0) return false;
+
+        return ptr[self.len] == 0;
     }
 };
 
@@ -214,9 +227,9 @@ const CPrepareRequest = extern struct {
     pub fn validate(req: CPrepareRequest) !void {
         if (req.struct_size != @sizeOf(CPrepareRequest)) return error.AbiMismatch;
 
-        if (req.pkg_path.isEmpty()) return error.InvalidEntry;
-        if (req.temp_dir.isEmpty()) return error.InvalidEntry;
-        if (req.checksum.isEmpty()) return error.InvalidEntry;
+        if (req.pkg_path.validate()) return error.InvalidEntry;
+        if (req.temp_dir.validate()) return error.InvalidEntry;
+        if (req.checksum.validate()) return error.InvalidEntry;
     }
 };
 
@@ -242,7 +255,7 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 // ── FFI экспорты ──────────────────────────────────────────────────────────────
 // An exported C function (FFI) for initiating the preparation process from external code
-pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: *?*anyopaque, out_temp_path: *CSlice) callconv(.c) i32 {
+pub export fn prepare(request_c: *const CPrepareRequest, out_meta: *?*anyopaque, out_temp_path: *CSlice) callconv(.c) i32 {
     request_c.validate() catch |err| return @intFromEnum(fromError(err));
 
     var arena_allocator = std.heap.ArenaAllocator.init(gpa.allocator());
@@ -284,20 +297,12 @@ pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: 
     return @intFromEnum(BackendErrorCode.ok);
 }
 
-fn on_backend_progress(event: StateId, detail_c: CSlice, ctx: ?*anyopaque) callconv(.c) void {
-    if (ctx != null) {
-        return;
-    }
-    _ = event;
-    _ = detail_c;
-}
-
 fn dupeToCSlice(allocator: std.mem.Allocator, slice: []const u8) BackendError!CSlice {
     const dupe_slice = allocator.dupe(u8, slice) catch return BackendError.AllocZFailed;
     return CSlice.fromSlice(dupe_slice);
 }
 
-pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.c) void {
+pub export fn cleanup(path_c: CSlice) callconv(.c) void {
     const path = path_c.toSlice();
 
     std.fs.deleteTreeAbsolute(path) catch {};
@@ -305,7 +310,7 @@ pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.c) void {
 }
 
 // A function for safely clearing metadata memory allocated on the Zig side
-pub export fn upac_backend_meta_free(package_meta_c: *CPackageMeta) callconv(.c) void {
+pub export fn meta_free(package_meta_c: *CPackageMeta) callconv(.c) void {
     gpa.allocator().free(package_meta_c.name.toSlice());
     gpa.allocator().free(package_meta_c.version.toSlice());
     gpa.allocator().free(package_meta_c.architecture.toSlice());
@@ -318,12 +323,20 @@ pub export fn upac_backend_meta_free(package_meta_c: *CPackageMeta) callconv(.c)
     gpa.allocator().destroy(package_meta_c);
 }
 
-pub export fn upac_backend_meta_get_name(meta: *const CPackageMeta) callconv(.c) CSlice {
+pub export fn meta_get_name(meta: *const CPackageMeta) callconv(.c) CSlice {
     return meta.name;
 }
 
-pub export fn upac_backend_meta_get_version(meta: *const CPackageMeta) callconv(.c) CSlice {
+pub export fn meta_get_version(meta: *const CPackageMeta) callconv(.c) CSlice {
     return meta.version;
+}
+
+pub export fn request_cancel() callconv(.c) void {
+    cancel_requested.store(true, .release);
+}
+
+pub export fn reset_cancel() callconv(.c) void {
+    cancel_requested.store(false, .release);
 }
 
 pub const BackendErrorCode = enum(i32) {

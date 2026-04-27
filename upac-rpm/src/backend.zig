@@ -8,6 +8,8 @@ pub const c_libs = @cImport({
     @cInclude("archive_entry.h");
 });
 
+var cancel_requested = std.atomic.Value(bool).init(false);
+
 // ── Public types ────────────────────────────────────────────────────────────
 // Main structure containing package metadata
 pub const PackageMeta = struct {
@@ -77,8 +79,16 @@ pub const BackendMachine = struct {
 
     // Method for transitioning to a new state with history addition
     pub fn enter(self: *BackendMachine, state_id: StateId) !void {
+        if (isCancelRequested()) {
+            stateFailed(self);
+            return BackendError.Cancelled;
+        }
         try self.stack.append(self.allocator, state_id);
         self.report(state_id);
+    }
+
+    pub fn isCancelRequested() bool {
+        return cancel_requested.load(.acquire);
     }
 
     // Releasing resources (stack memory) occupied by the state machine
@@ -156,8 +166,11 @@ const CSlice = extern struct {
     }
 
     // A simple check to determine whether a passed string or data array is empty (i.e., has zero length)
-    pub fn isEmpty(self: CSlice) bool {
-        return self.len == 0 or self.ptr == null;
+    pub fn validate(self: CSlice) bool {
+        const ptr = self.ptr orelse return false;
+        if (self.len == 0) return false;
+
+        return ptr[self.len] == 0;
     }
 };
 
@@ -193,9 +206,9 @@ const CPrepareRequest = extern struct {
     pub fn validate(req: CPrepareRequest) !void {
         if (req.struct_size != @sizeOf(CPrepareRequest)) return error.AbiMismatch;
 
-        if (req.package_path.isEmpty()) return error.InvalidEntry;
-        if (req.temp_dir.isEmpty()) return error.InvalidEntry;
-        if (req.checksum.isEmpty()) return error.InvalidEntry;
+        if (req.package_path.validate()) return error.InvalidEntry;
+        if (req.temp_dir.validate()) return error.InvalidEntry;
+        if (req.checksum.validate()) return error.InvalidEntry;
     }
 };
 
@@ -221,41 +234,18 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 // ── FFI экспорты ──────────────────────────────────────────────────────────────
 // An exported C function (FFI) for initiating the preparation process from external code
-pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: *?*anyopaque, out_temp_path: *CSlice) callconv(.c) i32 {
+pub export fn prepare(request_c: *const CPrepareRequest, out_meta: *?*anyopaque, out_temp_path: *CSlice) callconv(.c) i32 {
     request_c.validate() catch |err| return @intFromEnum(fromError(err));
 
     var arena_allocator = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena_allocator.deinit();
 
-    const zig_request = PrepareRequest{
-        .package_path = arena_allocator.allocator().dupeZ(u8, request_c.package_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed)),
-        .temp_dir = arena_allocator.allocator().dupeZ(u8, request_c.temp_dir.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed)),
-
-        .checksum = request_c.checksum.toSlice(),
-
-        .on_progress = request_c.on_progress,
-        .progress_ctx = request_c.progress_ctx,
-    };
+    const zig_request = toPrepareRequest(arena_allocator.allocator(), request_c) catch |err| return @intFromEnum(fromError(err));
 
     const result = BackendMachine.run(zig_request, gpa.allocator()) catch |err| return @intFromEnum(fromError(err));
 
     const out_meta_ptr = gpa.allocator().create(CPackageMeta) catch return @intFromEnum(BackendErrorCode.alloc_failed);
-
-    out_meta_ptr.* = CPackageMeta{
-        .struct_size = @sizeOf(CPackageMeta),
-
-        .name = dupeToCSlice(gpa.allocator(), result.meta.name) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
-        .version = dupeToCSlice(gpa.allocator(), result.meta.version) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
-        .size = @intCast(result.meta.size),
-        .arch = dupeToCSlice(gpa.allocator(), result.meta.arch) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
-        .author = dupeToCSlice(gpa.allocator(), result.meta.author) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
-        .description = dupeToCSlice(gpa.allocator(), result.meta.description) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
-        .license = dupeToCSlice(gpa.allocator(), result.meta.license) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
-        .url = dupeToCSlice(gpa.allocator(), result.meta.url) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
-        .packager = dupeToCSlice(gpa.allocator(), result.meta.packager) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
-        .installed_at = result.meta.installed_at,
-        .checksum = dupeToCSlice(gpa.allocator(), result.meta.checksum) catch return @intFromEnum(fromError(BackendError.AllocZFailed)),
-    };
+    out_meta_ptr.* = metaToC(gpa.allocator(), result.meta) catch return @intFromEnum(fromError(BackendError.AllocZFailed));
 
     out_meta.* = out_meta_ptr;
     out_temp_path.* = dupeToCSlice(gpa.allocator(), result.temp_path) catch return @intFromEnum(fromError(BackendError.AllocZFailed));
@@ -263,20 +253,12 @@ pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: 
     return @intFromEnum(BackendErrorCode.ok);
 }
 
-fn on_backend_progress(event: StateId, detail_c: CSlice, ctx: ?*anyopaque) callconv(.c) void {
-    if (ctx != null) {
-        return;
-    }
-    _ = event;
-    _ = detail_c;
-}
-
 fn dupeToCSlice(allocator: std.mem.Allocator, slice: []const u8) BackendError!CSlice {
     const dupe_slice = allocator.dupe(u8, slice) catch return BackendError.AllocZFailed;
     return CSlice.fromSlice(dupe_slice);
 }
 
-pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.c) void {
+pub export fn cleanup(path_c: CSlice) callconv(.c) void {
     const path = path_c.toSlice();
 
     std.fs.deleteTreeAbsolute(path) catch {};
@@ -284,7 +266,7 @@ pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.c) void {
 }
 
 // A function for safely clearing metadata memory allocated on the Zig side
-pub export fn upac_backend_meta_free(package_meta_c: *CPackageMeta) callconv(.c) void {
+pub export fn meta_free(package_meta_c: *CPackageMeta) callconv(.c) void {
     gpa.allocator().free(package_meta_c.name.toSlice());
     gpa.allocator().free(package_meta_c.version.toSlice());
     gpa.allocator().free(package_meta_c.arch.toSlice());
@@ -298,12 +280,20 @@ pub export fn upac_backend_meta_free(package_meta_c: *CPackageMeta) callconv(.c)
     gpa.allocator().destroy(package_meta_c);
 }
 
-pub export fn upac_backend_meta_get_name(meta: *const CPackageMeta) callconv(.c) CSlice {
+pub export fn meta_get_name(meta: *const CPackageMeta) callconv(.c) CSlice {
     return meta.name;
 }
 
-pub export fn upac_backend_meta_get_version(meta: *const CPackageMeta) callconv(.c) CSlice {
+pub export fn meta_get_version(meta: *const CPackageMeta) callconv(.c) CSlice {
     return meta.version;
+}
+
+pub export fn request_cancel() callconv(.c) void {
+    cancel_requested.store(true, .release);
+}
+
+pub export fn reset_cancel() callconv(.c) void {
+    cancel_requested.store(false, .release);
 }
 
 pub const BackendErrorCode = enum(i32) {
@@ -341,4 +331,48 @@ pub fn fromError(err: anyerror) BackendErrorCode {
         error.AbiMismatch => .abi_mismatch,
         else => .unexpected,
     };
+}
+
+fn toPrepareRequest(allocator: std.mem.Allocator, req: *const CPrepareRequest) BackendError!PrepareRequest {
+    return .{
+        .package_path = allocator.dupeZ(u8, req.package_path.toSlice()) catch return BackendError.AllocZFailed,
+        .temp_dir = allocator.dupeZ(u8, req.temp_dir.toSlice()) catch return BackendError.AllocZFailed,
+        .checksum = req.checksum.toSlice(),
+        .on_progress = req.on_progress,
+        .progress_ctx = req.progress_ctx,
+    };
+}
+
+pub fn metaToC(allocator: std.mem.Allocator, meta: PackageMeta) BackendError!CPackageMeta {
+    var result = CPackageMeta{
+        .size = @intCast(meta.size),
+        .installed_at = meta.installed_at,
+        .name = .{ .ptr = null, .len = 0 },
+        .version = .{ .ptr = null, .len = 0 },
+        .arch = .{ .ptr = null, .len = 0 },
+        .author = .{ .ptr = null, .len = 0 },
+        .description = .{ .ptr = null, .len = 0 },
+        .license = .{ .ptr = null, .len = 0 },
+        .url = .{ .ptr = null, .len = 0 },
+        .packager = .{ .ptr = null, .len = 0 },
+        .checksum = .{ .ptr = null, .len = 0 },
+    };
+
+    const string_fields = .{
+        .{ "name", meta.name },
+        .{ "version", meta.version },
+        .{ "arch", meta.arch },
+        .{ "author", meta.author },
+        .{ "description", meta.description },
+        .{ "license", meta.license },
+        .{ "url", meta.url },
+        .{ "packager", meta.packager },
+        .{ "checksum", meta.checksum },
+    };
+
+    inline for (string_fields) |pair| {
+        @field(result, pair[0]) = try dupeToCSlice(allocator, pair[1]);
+    }
+
+    return result;
 }
