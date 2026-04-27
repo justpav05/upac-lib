@@ -19,7 +19,7 @@ pub fn stateVerifying(machine: *Machine) BackendError!void {
     var hasher_buf: [65536]u8 = undefined;
 
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
-    var actual: [std.crypto.hash.sha2.Sha256.digest_length * 2]u8 = undefined;
+    var expected_bytes: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
 
     const package_file = try machine.check(std.fs.openFileAbsoluteZ(machine.request.package_path_c, .{}), BackendError.ReadFailed);
     machine.file = package_file;
@@ -32,9 +32,9 @@ pub fn stateVerifying(machine: *Machine) BackendError!void {
     }
     hasher.final(&digest);
 
-    _ = try machine.check(std.fmt.bufPrint(&actual, "{}", .{std.fmt.fmtSliceHexLower(&digest)}), BackendError.ReadFailed);
+    _ = try machine.check(std.fmt.hexToBytes(&expected_bytes, machine.request.checksum.ptr[0..machine.request.checksum.len]), BackendError.InvalidPackage);
 
-    if (!std.mem.eql(u8, &actual, machine.request.checksum)) {
+    if (!std.mem.eql(u8, &digest, &expected_bytes)) {
         stateFailed(machine);
         return BackendError.ChecksumMismatch;
     }
@@ -81,7 +81,7 @@ fn stateExtracting(machine: *Machine) BackendError!void {
         c_libs.ARCHIVE_EXTRACT_FFLAGS);
     _ = c_libs.archive_write_disk_set_standard_lookup(archive_writer);
 
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    var buf: [std.os.linux.PATH_MAX]u8 = undefined;
     const cwd_path = std.posix.getcwd(&buf) catch {
         stateFailed(machine);
         return BackendError.TempDirFailed;

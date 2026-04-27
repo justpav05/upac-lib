@@ -8,13 +8,23 @@ pub fn build(b: *std.Build) void {
     const strip = b.option(bool, "strip", "Strip debug symbols") orelse false;
     const stack_check = b.option(bool, "stack-check", "Check for stack overflows") orelse false;
 
-    // ── Shared library ────────────────────────────────────────────────────────
-    const shared_lib = b.addSharedLibrary(.{
-        .name = "upac-alpm",
+    // ── Root ──────────────────────────────────────────────────────────────────
+    const upac_root = b.createModule(.{
         .root_source_file = b.path("src/backend.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    upac_root.strip = strip;
+    upac_root.stack_check = stack_check;
+
+    // ── Shared library ────────────────────────────────────────────────────────
+    const shared_lib = b.addLibrary(.{
+        .name = "upac-alpm",
+        .linkage = .dynamic,
+        .root_module = upac_root,
+    });
+
     shared_lib.linkLibC();
     shared_lib.linkSystemLibrary("archive");
 
