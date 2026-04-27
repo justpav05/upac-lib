@@ -27,10 +27,10 @@ pub fn stateVerifying(machine: *Machine) BackendError!void {
     try machine.check(machine.enter(.verifying), BackendError.OutOfMemory);
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    var hasher_buf: [4096]u8 = undefined;
+    var hasher_buf: [65536]u8 = undefined;
 
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
-    var actual: [std.crypto.hash.sha2.Sha256.digest_length * 2]u8 = undefined;
+    var expected_bytes: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
 
     const package_file = try machine.check(std.fs.openFileAbsoluteZ(machine.request.pkg_path, .{}), BackendError.ReadFailed);
     machine.file = package_file;
@@ -41,15 +41,17 @@ pub fn stateVerifying(machine: *Machine) BackendError!void {
         if (index == 0) break;
         hasher.update(hasher_buf[0..index]);
     }
-
     hasher.final(&digest);
 
-    _ = try machine.check(std.fmt.bufPrint(&actual, "{}", .{std.fmt.fmtSliceHexLower(&digest)}), BackendError.ReadFailed);
+    _ = try machine.check(std.fmt.hexToBytes(&expected_bytes, machine.request.checksum.ptr[0..machine.request.checksum.len]), BackendError.InvalidPackage);
 
-    if (!std.mem.eql(u8, &actual, machine.request.checksum)) {
+    if (!std.mem.eql(u8, &digest, &expected_bytes)) {
         stateFailed(machine);
         return BackendError.ChecksumMismatch;
     }
+
+    const file_descriptor = try machine.unwrap(machine.file, BackendError.ArchiveOpenFailed);
+    try machine.check(file_descriptor.seekTo(0), BackendError.ArchiveOpenFailed);
 
     return stateExtracting(machine);
 }
@@ -92,7 +94,7 @@ fn stateExtracting(machine: *Machine) BackendError!void {
     );
     _ = c_libs.archive_write_disk_set_standard_lookup(archive_writer);
 
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    var buf: [std.os.linux.PATH_MAX]u8 = undefined;
     const cwd_path = std.posix.getcwd(&buf) catch {
         stateFailed(machine);
         return BackendError.OutOfMemory;

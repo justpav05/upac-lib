@@ -1,6 +1,7 @@
 .{
-    .name = "upac-deb",
+    .name = .upac_deb,
     .version = "0.1.3",
+    .fingerprint = 0x1746a24a2a0dd22e,
     .minimum_zig_version = "0.13.0",
     .dependencies = .{},
     .paths = .{ "build.zig", "build.zig.zon", "src" },
