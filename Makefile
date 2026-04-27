@@ -49,19 +49,19 @@ build: prepare-dirs build-lib build-alpm-backend build-rpm-backend build-deb-bac
 
 build-lib:
 	@echo "--- Building upac-lib in $(MODE) mode ---"
-	@cd $(ROOT_DIR)/upac-lib && zig build --prefix-lib-dir $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
+	@cd $(ROOT_DIR)/upac-lib && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-alpm-backend:
 	@echo "--- Building upac-alpm in $(MODE) mode ---"
-	@cd $(ROOT_DIR)/upac-alpm && zig build --prefix-lib-dir $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
+	@cd $(ROOT_DIR)/upac-alpm && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-rpm-backend:
 	@echo "--- Building upac-rpm in $(MODE) mode ---"
-	@cd $(ROOT_DIR)/upac-rpm && zig build --prefix-lib-dir $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
+	@cd $(ROOT_DIR)/upac-rpm && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-deb-backends:
 	@echo "--- Building upac-deb in $(MODE) mode ---"
-	@cd $(ROOT_DIR)/upac-deb && zig build --prefix-lib-dir $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
+	@cd $(ROOT_DIR)/upac-deb && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-cli:
 	@cd $(ROOT_DIR)/upac-cli && \
