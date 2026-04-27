@@ -15,38 +15,26 @@ const CCommitEntry = list_module.ffi.CCommitEntry;
 const ErrorCode = list_module.ffi.ErrorCode;
 const Operation = list_module.ffi.Operation;
 
-const check = list_module.check();
-
 const fromError = list_module.ffi.fromError;
-
-const onCancelSignal = list_module.onCancelSignal;
-const signalLoopThread = list_module.signalLoopThread;
 
 const PackageListInner = struct {
     packages: []PackageMeta,
     allocator: std.mem.Allocator,
 };
 
-const SignalHandle = struct {
-    cancellable: *c_libs.GCancellable,
-    signal_ctx: *c_libs.GMainContext,
-    signal_loop: *c_libs.GMainLoop,
-    thread: std.Thread,
-};
-
-pub fn upac_list_packages(repo_path: CSlice, branch: CSlice, db_path_c: CSlice, out_c: **anyopaque) callconv(.c) i32 {
+pub fn list_packages(repo_path: CSlice, branch: CSlice, db_path_c: CSlice, out_c: **anyopaque) callconv(.c) i32 {
     validateListPackagesRequest(repo_path, branch, db_path_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
 
     var arena_allocator = std.heap.ArenaAllocator.init(list_module.ffi.allocator());
     defer arena_allocator.deinit();
 
-    const signals = setupCancellable() catch return @intFromEnum(fromError(error.DiffFailed, Operation.list));
-    defer teardownCancellable(signals);
-
     const repo_path_c = arena_allocator.allocator().dupeZ(u8, repo_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
     const branch_c = arena_allocator.allocator().dupeZ(u8, branch.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
 
-    const packages = list_module.listPackages(repo_path_c, branch_c, db_path_c.toSlice(), signals.cancellable, list_module.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.list));
+    const packages = list_module.listPackages(repo_path_c, branch_c, db_path_c.toSlice(), list_module.ffi.allocator()) catch |err| {
+        if (err == error.Cancelled) list_module.ffi.global_cancel.store(true, .release);
+        return @intFromEnum(fromError(err, Operation.list));
+    };
 
     const package_list_inner = list_module.ffi.allocator().create(PackageListInner) catch {
         for (packages) |pkg| data.freePackageMeta(pkg, list_module.ffi.allocator());
@@ -60,9 +48,9 @@ pub fn upac_list_packages(repo_path: CSlice, branch: CSlice, db_path_c: CSlice, 
 }
 
 fn validateListPackagesRequest(repo_path: CSlice, branch: CSlice, db_path: CSlice) !void {
-    if (repo_path.isEmpty()) return error.InvalidEntry;
-    if (branch.isEmpty()) return error.InvalidEntry;
-    if (db_path.isEmpty()) return error.InvalidEntry;
+    if (!repo_path.validate()) return error.InvalidEntry;
+    if (!branch.validate()) return error.InvalidEntry;
+    if (!db_path.validate()) return error.InvalidEntry;
 }
 
 fn freeCPackageMeta(meta: *CPackageMeta, allocator: std.mem.Allocator) void {
@@ -135,13 +123,13 @@ pub fn list_commits(repo_path: CSlice, branch: CSlice, out_c: *CCommitArray) cal
     var arena_allocator = std.heap.ArenaAllocator.init(list_module.ffi.allocator());
     defer arena_allocator.deinit();
 
-    const signals = setupCancellable() catch return @intFromEnum(fromError(error.DiffFailed, Operation.list));
-    defer teardownCancellable(signals);
-
     const repo_path_c = arena_allocator.allocator().dupeZ(u8, repo_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
     const branch_c = arena_allocator.allocator().dupeZ(u8, branch.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
 
-    const commit_entries = list_module.listCommits(repo_path_c, branch_c, signals.cancellable, list_module.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.list));
+    const commit_entries = list_module.listCommits(repo_path_c, branch_c, list_module.ffi.allocator()) catch |err| {
+        if (err == error.Cancelled) list_module.ffi.global_cancel.store(true, .release);
+        return @intFromEnum(fromError(err, Operation.list));
+    };
 
     const commit_entries_c = list_module.ffi.allocator().alloc(CCommitEntry, commit_entries.len) catch {
         for (commit_entries) |entry| {
@@ -165,8 +153,8 @@ pub fn list_commits(repo_path: CSlice, branch: CSlice, out_c: *CCommitArray) cal
 }
 
 fn validateListCommitsRequest(repo_path: CSlice, branch: CSlice) !void {
-    if (repo_path.isEmpty()) return error.InvalidEntry;
-    if (branch.isEmpty()) return error.InvalidEntry;
+    if (!repo_path.validate()) return error.InvalidEntry;
+    if (!branch.validate()) return error.InvalidEntry;
 }
 
 pub fn commits_free(out_c: *CCommitArray) callconv(.c) void {
@@ -177,32 +165,4 @@ pub fn commits_free(out_c: *CCommitArray) callconv(.c) void {
         allocator.free(entry.subject.toSlice());
     }
     allocator.free(entries);
-}
-
-fn setupCancellable() !SignalHandle {
-    const cancellable = c_libs.g_cancellable_new();
-    const signal_ctx = c_libs.g_main_context_new() orelse return error.DiffFailed;
-
-    const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
-    const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
-
-    c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), cancellable, null);
-    c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), cancellable, null);
-    _ = c_libs.g_source_attach(sigint_src, signal_ctx);
-    _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
-    c_libs.g_source_unref(sigint_src);
-    c_libs.g_source_unref(sigterm_src);
-
-    const signal_loop = c_libs.g_main_loop_new(signal_ctx, 0) orelse return error.DiffFailed;
-    const thread = try std.Thread.spawn(.{}, signalLoopThread, .{signal_loop});
-
-    return .{ .cancellable = cancellable, .signal_ctx = signal_ctx, .signal_loop = signal_loop, .thread = thread };
-}
-
-fn teardownCancellable(h: SignalHandle) void {
-    c_libs.g_main_loop_quit(h.signal_loop);
-    h.thread.join();
-    c_libs.g_main_loop_unref(h.signal_loop);
-    c_libs.g_main_context_unref(h.signal_ctx);
-    c_libs.g_object_unref(h.cancellable);
 }

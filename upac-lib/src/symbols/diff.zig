@@ -75,9 +75,9 @@ pub fn diff_packages(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, out_c:
 }
 
 fn validateDiffPackagesRequest(repo_path_c: CSlice, from_ref_c: CSlice, to_ref_c: CSlice, out_c: *CPackageDiffArray) !void {
-    if (repo_path_c.isEmpty()) return error.InvalidEntry;
-    if (from_ref_c.isEmpty()) return error.InvalidEntry;
-    if (to_ref_c.isEmpty()) return error.InvalidEntry;
+    if (!repo_path_c.validate()) return error.InvalidEntry;
+    if (!from_ref_c.validate()) return error.InvalidEntry;
+    if (!to_ref_c.validate()) return error.InvalidEntry;
     if (std.mem.eql(u8, from_ref_c.toSlice(), to_ref_c.toSlice())) return error.InvalidEntry;
 
     _ = out_c;
@@ -135,8 +135,8 @@ pub fn diff_files_attributed(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice
 }
 
 fn validateListCommitsRequest(repo_path: CSlice, branch: CSlice) !void {
-    if (repo_path.isEmpty()) return error.InvalidEntry;
-    if (branch.isEmpty()) return error.InvalidEntry;
+    if (!repo_path.validate()) return error.InvalidEntry;
+    if (!branch.validate()) return error.InvalidEntry;
 }
 
 pub fn diff_files_attributed_free(out_c: *CAttributedDiffArray) callconv(.c) void {
@@ -149,13 +149,13 @@ pub fn diff_files_attributed_free(out_c: *CAttributedDiffArray) callconv(.c) voi
 }
 
 fn validateDiffFilesAttributedRequest(repo_path: CSlice, from_ref: CSlice, to_ref: CSlice, root_path: CSlice, db_path: CSlice) !void {
-    if (root_path.isEmpty()) return error.InvalidEntry;
-    if (repo_path.isEmpty()) return error.InvalidEntry;
+    if (!root_path.validate()) return error.InvalidEntry;
+    if (!repo_path.validate()) return error.InvalidEntry;
 
-    if (from_ref.isEmpty()) return error.InvalidEntry;
-    if (to_ref.isEmpty()) return error.InvalidEntry;
+    if (!from_ref.validate()) return error.InvalidEntry;
+    if (!to_ref.validate()) return error.InvalidEntry;
 
-    if (db_path.isEmpty()) return error.InvalidEntry;
+    if (!db_path.validate()) return error.InvalidEntry;
 
     if (std.mem.eql(u8, from_ref.toSlice(), to_ref.toSlice())) return error.InvalidEntry;
 }

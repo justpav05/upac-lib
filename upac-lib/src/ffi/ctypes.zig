@@ -59,8 +59,11 @@ pub const CSlice = extern struct {
     }
 
     // A simple check to determine whether a passed string or data array is empty (i.e., has zero length)
-    pub fn isEmpty(self: CSlice) bool {
-        return self.len == 0 or self.ptr == null;
+    pub fn validate(self: CSlice) bool {
+        const ptr = self.ptr orelse return false;
+        if (self.len == 0) return false;
+
+        return ptr[self.len] == 0;
     }
 };
 
@@ -81,15 +84,18 @@ pub const CPackageDiffKind = enum(u8) {
 };
 
 pub const CPackageEntry = extern struct {
+    struct_size: usize = @sizeOf(CPackageEntry),
+
     meta: *anyopaque,
     temp_path: CSlice,
     checksum: CSlice,
 
     pub fn validate(self: CPackageEntry) !void {
-        if (@intFromPtr(self.meta) == 0) return error.InvalidEntry;
+        if (self.struct_size != @sizeOf(CPackageEntry)) return error.AbiMismatch;
 
-        if (self.temp_path.isEmpty()) return error.InvalidEntry;
-        if (self.checksum.isEmpty()) return error.InvalidEntry;
+        if (@intFromPtr(self.meta) == 0) return error.InvalidEntry;
+        if (!self.temp_path.validate()) return error.InvalidEntry;
+        if (!self.checksum.validate()) return error.InvalidEntry;
     }
 };
 
@@ -113,19 +119,21 @@ pub const CPackageMeta = extern struct {
     pub fn validate(self: CPackageMeta) !void {
         if (self.struct_size != @sizeOf(CPackageMeta)) return error.AbiMismatch;
 
-        if (self.name.isEmpty()) return error.InvalidEntry;
-        if (self.version.isEmpty()) return error.InvalidEntry;
-        if (self.architecture.isEmpty()) return error.InvalidEntry;
-        if (self.author.isEmpty()) return error.InvalidEntry;
-        if (self.description.isEmpty()) return error.InvalidEntry;
-        if (self.license.isEmpty()) return error.InvalidEntry;
-        if (self.url.isEmpty()) return error.InvalidEntry;
-        if (self.packager.isEmpty()) return error.InvalidEntry;
-        if (self.checksum.isEmpty()) return error.InvalidEntry;
+        if (!self.name.validate()) return error.InvalidEntry;
+        if (!self.version.validate()) return error.InvalidEntry;
+        if (!self.architecture.validate()) return error.InvalidEntry;
+        if (!self.author.validate()) return error.InvalidEntry;
+        if (!self.description.validate()) return error.InvalidEntry;
+        if (!self.license.validate()) return error.InvalidEntry;
+        if (!self.url.validate()) return error.InvalidEntry;
+        if (!self.packager.validate()) return error.InvalidEntry;
+        if (!self.checksum.validate()) return error.InvalidEntry;
     }
 };
 
 pub const CPackageMetaArray = extern struct {
+    struct_size: usize = @sizeOf(CPackageMetaArray),
+
     ptr: [*]CPackageMeta,
     len: usize,
 
@@ -158,11 +166,11 @@ pub const CInstallRequest = extern struct {
 
         if (self.packages_count > 0 and self.packages == null) return error.InvalidEntry;
 
-        if (self.repo_path.isEmpty()) return error.InvalidEntry;
-        if (self.root_path.isEmpty()) return error.InvalidEntry;
-        if (self.db_path.isEmpty()) return error.InvalidEntry;
-        if (self.branch.isEmpty()) return error.InvalidEntry;
-        if (self.prefix_directory.isEmpty()) return error.InvalidEntry;
+        if (!self.repo_path.validate()) return error.InvalidEntry;
+        if (!self.root_path.validate()) return error.InvalidEntry;
+        if (!self.db_path.validate()) return error.InvalidEntry;
+        if (!self.branch.validate()) return error.InvalidEntry;
+        if (!self.prefix_directory.validate()) return error.InvalidEntry;
 
         if (self.packages) |pkgs| {
             for (pkgs[0..self.packages_count]) |pkg| try pkg.validate();
@@ -206,15 +214,15 @@ pub const CUninstallRequest = extern struct {
 
         if (self.package_names_len > 0 and self.package_names == null) return error.InvalidEntry;
 
-        if (self.repo_path.isEmpty()) return error.InvalidEntry;
-        if (self.root_path.isEmpty()) return error.InvalidEntry;
-        if (self.db_path.isEmpty()) return error.InvalidEntry;
-        if (self.branch.isEmpty()) return error.InvalidEntry;
-        if (self.prefix_directory.isEmpty()) return error.InvalidEntry;
+        if (!self.repo_path.validate()) return error.InvalidEntry;
+        if (!self.root_path.validate()) return error.InvalidEntry;
+        if (!self.db_path.validate()) return error.InvalidEntry;
+        if (!self.branch.validate()) return error.InvalidEntry;
+        if (!self.prefix_directory.validate()) return error.InvalidEntry;
 
         if (self.package_names) |names| {
             for (names[0..self.package_names_len]) |name| {
-                if (name.isEmpty()) return error.InvalidEntry;
+                if (!name.validate()) return error.InvalidEntry;
             }
         }
     }
@@ -241,8 +249,16 @@ pub const CDiffKind = enum(u8) {
 
 //
 pub const CDiffEntry = extern struct {
+    struct_size: usize = @sizeOf(CDiffEntry),
+
     path: CSlice,
     kind: CDiffKind,
+
+    pub fn validate(self: CDiffEntry) !void {
+        if (self.struct_size != @sizeOf(CDiffEntry)) return error.AbiMismatch;
+        _ = std.meta.intToEnum(CDiffKind, @intFromEnum(self.kind)) catch return error.InvalidEntry;
+        if (!self.path.validate()) return error.InvalidEntry;
+    }
 };
 
 // A wrapper over pointers to arrays of structures used to pass dynamic lists across the C boundary
@@ -256,8 +272,16 @@ pub const CDiffArray = extern struct {
 };
 
 pub const CPackageDiffEntry = extern struct {
+    struct_size: usize = @sizeOf(CPackageDiffEntry),
+
     name: CSlice,
     kind: CPackageDiffKind,
+
+    pub fn validate(self: CPackageDiffEntry) !void {
+        if (self.struct_size != @sizeOf(CPackageDiffEntry)) return error.AbiMismatch;
+        _ = std.meta.intToEnum(CPackageDiffKind, @intFromEnum(self.kind)) catch return error.InvalidEntry;
+        if (!self.name.validate()) return error.InvalidEntry;
+    }
 };
 
 pub const CPackageDiffArray = extern struct {
@@ -270,9 +294,18 @@ pub const CPackageDiffArray = extern struct {
 };
 
 pub const CAttributedDiffEntry = extern struct {
+    struct_size: usize = @sizeOf(CAttributedDiffEntry),
+
     path: CSlice,
     kind: CDiffKind,
     package_name: CSlice,
+
+    pub fn validate(self: CAttributedDiffEntry) !void {
+        if (self.struct_size != @sizeOf(CAttributedDiffEntry)) return error.AbiMismatch;
+        _ = std.meta.intToEnum(CPackageDiffKind, @intFromEnum(self.kind)) catch return error.InvalidEntry;
+        if (!self.path.validate()) return error.InvalidEntry;
+        if (!self.package_name.validate()) return error.InvalidEntry;
+    }
 };
 
 pub const CAttributedDiffArray = extern struct {
@@ -286,8 +319,17 @@ pub const CAttributedDiffArray = extern struct {
 
 //
 pub const CCommitEntry = extern struct {
+    struct_size: usize = @sizeOf(CCommitEntry),
+
     checksum: CSlice,
     subject: CSlice,
+
+    pub fn validate(self: CCommitEntry) !void {
+        if (self.struct_size != @sizeOf(CCommitEntry)) return error.AbiMismatch;
+
+        if (!self.checksum.validate()) return error.InvalidEntry;
+        if (!self.subject.validate()) return error.InvalidEntry;
+    }
 };
 
 // A wrapper over pointers to arrays of structures used to pass dynamic lists across the C boundary
@@ -315,11 +357,11 @@ pub const CRollbackRequest = extern struct {
     pub fn validate(self: CRollbackRequest) !void {
         if (self.struct_size != @sizeOf(CRollbackRequest)) return error.AbiMismatch;
 
-        if (self.root_path.isEmpty()) return error.InvalidEntry;
-        if (self.repo_path.isEmpty()) return error.InvalidEntry;
+        if (!self.root_path.validate()) return error.InvalidEntry;
+        if (!self.repo_path.validate()) return error.InvalidEntry;
 
-        if (self.branch.isEmpty()) return error.InvalidEntry;
-        if (self.commit_hash.isEmpty()) return error.InvalidEntry;
+        if (!self.branch.validate()) return error.InvalidEntry;
+        if (!self.commit_hash.validate()) return error.InvalidEntry;
     }
 };
 
@@ -351,15 +393,15 @@ pub const CInitRequest = extern struct {
     pub fn validate(self: CInitRequest) !void {
         if (self.struct_size != @sizeOf(CInitRequest)) return error.AbiMismatch;
 
-        if (self.repo_path.isEmpty()) return error.InvalidEntry;
-        if (self.root_path.isEmpty()) return error.InvalidEntry;
-        if (self.prefix.isEmpty()) return error.InvalidEntry;
-        if (self.branch.isEmpty()) return error.InvalidEntry;
+        if (!self.repo_path.validate()) return error.InvalidEntry;
+        if (!self.root_path.validate()) return error.InvalidEntry;
+        if (!self.prefix.validate()) return error.InvalidEntry;
+        if (!self.branch.validate()) return error.InvalidEntry;
 
         _ = std.meta.intToEnum(CRepoMode, @intFromEnum(self.repo_mode)) catch return error.InvalidEntry;
 
-        for (self.addition_prefixes.toSlice()) |p| {
-            if (p.isEmpty()) return error.InvalidEntry;
+        for (self.addition_prefixes.toSlice()) |prefix| {
+            if (!prefix.validate()) return error.InvalidEntry;
         }
     }
 };
@@ -371,7 +413,7 @@ pub const CRepoMode = enum(u8) {
     bare_user = 2,
 };
 
-var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true, .thread_safe = false }){};
+var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true, .thread_safe = true }){};
 
 pub fn allocator() std.mem.Allocator {
     return gpa.allocator();

@@ -37,8 +37,10 @@ pub fn install(install_request_c: CInstallRequest) callconv(.c) i32 {
         .max_retries = install_request_c.max_retries,
     };
 
-    installer_module.InstallerMachine.run(install_data, installer_module.ffi.allocator()) catch |err|
-        return @intFromEnum(fromError(err, Operation.install));
+    installer_module.InstallerMachine.run(install_data, installer_module.ffi.allocator()) catch |err| {
+        if (err == error.Cancelled) installer_module.ffi.global_cancel.store(true, .release);
+        return @intFromEnum(fromError(err, Operation.list));
+    };
 
     return @intFromEnum(ErrorCode.ok);
 }

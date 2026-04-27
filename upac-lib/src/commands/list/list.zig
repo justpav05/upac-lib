@@ -22,18 +22,21 @@ pub const DiffError = error{
 };
 
 // Returns the installed package metadata list from the latest commit on a branch
-pub fn listPackages(repo_path_c: [*:0]u8, branch_c: [*:0]u8, db_path: []const u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]PackageMeta {
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
+pub fn listPackages(repo_path_c: [*:0]u8, branch_c: [*:0]u8, db_path: []const u8, allocator: std.mem.Allocator) DiffError![]PackageMeta {
+    var gerror: [*c]c_libs.GError = null;
+    defer if (gerror != null) c_libs.g_error_free(gerror);
+
+    const cancellable = c_libs.g_cancellable_new() orelse return DiffError.Cancelled;
+    defer c_libs.g_object_unref(cancellable);
 
     const repo = try openRepo(repo_path_c, cancellable, &gerror);
     defer c_libs.g_object_unref(repo);
 
     var head_checksum: [*c]u8 = null;
-    if (c_libs.ostree_repo_resolve_rev(repo, branch_c, 1, &head_checksum, null) == 0 or head_checksum == null) return &.{};
-    defer if (head_checksum != null) c_libs.g_free(@ptrCast(head_checksum));
+    if (c_libs.ostree_repo_resolve_rev(repo, branch_c, 1, &head_checksum, &gerror) == 0 or head_checksum == null) return &.{};
+    defer if (head_checksum != null) c_libs.g_free(head_checksum);
 
-    const body = try check(getRefBody(repo, branch_c, cancellable, allocator), DiffError.CommitNotFound) orelse return &.{};
+    const body = try check(getRefBody(repo, branch_c, &gerror, allocator), DiffError.CommitNotFound) orelse return &.{};
     defer allocator.free(body);
 
     var package_map = parsePackageBody(body, allocator) catch return &.{};
@@ -55,9 +58,12 @@ pub fn listPackages(repo_path_c: [*:0]u8, branch_c: [*:0]u8, db_path: []const u8
 }
 
 // Walks the commit chain of a branch and returns all commits as a slice
-pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]CommitEntry {
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
+pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, allocator: std.mem.Allocator) DiffError![]CommitEntry {
+    var gerror: [*c]c_libs.GError = null;
+    defer if (gerror != null) c_libs.g_error_free(gerror);
+
+    const cancellable = c_libs.g_cancellable_new() orelse return DiffError.Cancelled;
+    defer c_libs.g_object_unref(cancellable);
 
     const repo = try openRepo(repo_path_c, cancellable, &gerror);
     defer c_libs.g_object_unref(repo);
@@ -79,6 +85,8 @@ pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, cancellable: ?*c_lib
     var is_first = true;
 
     while (checksum != null) {
+        try checkCancel(cancellable, gerror);
+
         var commit_variant: ?*c_libs.GVariant = null;
         if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, checksum, &commit_variant, &gerror) == 0) {
             if (!is_first) c_libs.g_free(checksum);
@@ -108,21 +116,16 @@ pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, cancellable: ?*c_lib
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
-pub fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError!?[]const u8 {
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
-
-    _ = cancellable;
-
+pub fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref_c: [*:0]u8, gerror: *[*c]c_libs.GError, allocator: std.mem.Allocator) DiffError!?[]const u8 {
     var checksum: [*c]u8 = null;
     defer if (checksum != null) c_libs.g_free(checksum);
 
-    if (c_libs.ostree_repo_resolve_rev(repo, ostree_ref_c, 1, &checksum, &gerror) == 0 or checksum == null) return null;
+    if (c_libs.ostree_repo_resolve_rev(repo, ostree_ref_c, 1, &checksum, gerror) == 0 or checksum == null) return null;
 
     var commit_variant: ?*c_libs.GVariant = null;
     defer if (commit_variant) |variant| c_libs.g_variant_unref(variant);
 
-    if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, checksum, &commit_variant, &gerror) == 0) return null;
+    if (c_libs.ostree_repo_load_variant(repo, c_libs.OSTREE_OBJECT_TYPE_COMMIT, checksum, &commit_variant, gerror) == 0) return null;
 
     const body_variant = c_libs.g_variant_get_child_value(commit_variant, 4);
     defer if (body_variant) |variant| c_libs.g_variant_unref(variant);
@@ -165,7 +168,7 @@ pub fn freeStringMap(map: *std.StringHashMap([]const u8), allocator: std.mem.All
     map.deinit();
 }
 
-fn openRepo(repo_path_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, gerror: *?*c_libs.GError) DiffError!*c_libs.OstreeRepo {
+fn openRepo(repo_path_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, gerror: *[*c]c_libs.GError) DiffError!*c_libs.OstreeRepo {
     const gfile = c_libs.g_file_new_for_path(repo_path_c);
     defer c_libs.g_object_unref(gfile);
 
@@ -177,20 +180,17 @@ fn openRepo(repo_path_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, gerror: *?
     return try unwrap(repo, DiffError.RepoOpenFailed);
 }
 
+fn checkCancel(cancellable: *c_libs.GCancellable, gerror: [*c]c_libs.GError) DiffError!void {
+    if (!ffi.isCancelRequested()) return;
+    if (gerror == null) return;
+    c_libs.g_cancellable_cancel(cancellable);
+    return DiffError.Cancelled;
+}
+
 pub inline fn unwrap(value: anytype, comptime err: DiffError) DiffError!@typeInfo(@TypeOf(value)).optional.child {
     return value orelse err;
 }
 
 pub inline fn check(value: anytype, comptime err: DiffError) DiffError!@typeInfo(@TypeOf(value)).error_union.payload {
     return value catch err;
-}
-
-pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.c) c_libs.gboolean {
-    const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
-    c_libs.g_cancellable_cancel(cancellable);
-    return c_libs.G_SOURCE_REMOVE;
-}
-
-pub fn signalLoopThread(loop: *c_libs.GMainLoop) void {
-    c_libs.g_main_loop_run(loop);
 }

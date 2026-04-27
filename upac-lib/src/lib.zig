@@ -22,7 +22,7 @@ pub export const diff_files_attributed = diff_symbols.diff_files_attributed;
 pub export const diff_files_attributed_free = diff_symbols.diff_files_attributed_free;
 
 const list_symbols = @import("symbols/list.zig");
-pub export const list_packages = list_symbols.upac_list_packages;
+pub export const list_packages = list_symbols.list_packages;
 
 pub export const packages_count = list_symbols.packages_count;
 pub export const packages_free = list_symbols.packages_free;

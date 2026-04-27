@@ -4,8 +4,6 @@ const data = @import("upac-data");
 const UninstallStateId = ffi.UninstallStateId;
 const UninstallProgressFn = ffi.UninstallProgressFn;
 
-const file = @import("upac-file");
-
 const states = @import("states.zig");
 const utils = @import("utils.zig");
 
