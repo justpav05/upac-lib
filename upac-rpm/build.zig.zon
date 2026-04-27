@@ -1,6 +1,7 @@
 .{
-    .name = "upac-rpm",
+    .name = .upac_rpm,
     .version = "0.1.3",
+    .fingerprint = 0xa8e7860db0e12a85,
     .minimum_zig_version = "0.13.0",
 
     .dependencies = .{},

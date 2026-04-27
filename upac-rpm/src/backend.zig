@@ -1,8 +1,12 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const std = @import("std");
-
 const states = @import("states.zig");
 const stateFailed = states.stateFailed;
+
+pub const std = @import("std");
+pub const c_libs = @cImport({
+    @cInclude("archive.h");
+    @cInclude("archive_entry.h");
+});
 
 // ── Public types ────────────────────────────────────────────────────────────
 // Main structure containing package metadata
@@ -47,13 +51,6 @@ pub const BackendError = error{
     Cancelled,
 };
 
-var cancel_requested = std.atomic.Value(bool).init(false);
-
-fn backendSignalHandler(sig: c_int) callconv(.C) void {
-    _ = sig;
-    cancel_requested.store(true, .release);
-}
-
 // ── Internal FSM types ───────────────────────────────────────────────────────
 // State Identifiers for the preparation process Finite State Machine (FSM)
 pub const StateId = enum(u8) {
@@ -80,12 +77,7 @@ pub const BackendMachine = struct {
 
     // Method for transitioning to a new state with history addition
     pub fn enter(self: *BackendMachine, state_id: StateId) !void {
-        if (cancel_requested.load(.acquire)) {
-            stateFailed(self);
-            return BackendError.Cancelled;
-        }
-
-        try self.stack.append(state_id);
+        try self.stack.append(self.allocator, state_id);
         self.report(state_id);
     }
 
@@ -94,7 +86,7 @@ pub const BackendMachine = struct {
         if (self.temp_path) |path| self.allocator.free(path);
         if (self.file) |file| file.close();
 
-        self.stack.deinit();
+        self.stack.deinit(self.allocator);
     }
 
     // Reports an installation progress event to the progress callback, if one is set
@@ -108,14 +100,14 @@ pub const BackendMachine = struct {
         cb(.special_step, CSlice.fromSlice(message), self.request.progress_ctx);
     }
 
-    pub inline fn unwrap(self: *BackendMachine, value: anytype, comptime err: BackendError) BackendError!@typeInfo(@TypeOf(value)).Optional.child {
+    pub inline fn unwrap(self: *BackendMachine, value: anytype, comptime err: BackendError) BackendError!@typeInfo(@TypeOf(value)).optional.child {
         return value orelse {
             stateFailed(self);
             return err;
         };
     }
 
-    pub inline fn check(self: *BackendMachine, value: anytype, comptime err: BackendError) BackendError!@typeInfo(@TypeOf(value)).ErrorUnion.payload {
+    pub inline fn check(self: *BackendMachine, value: anytype, comptime err: BackendError) BackendError!@typeInfo(@TypeOf(value)).error_union.payload {
         return value catch {
             stateFailed(self);
             return err;
@@ -124,15 +116,9 @@ pub const BackendMachine = struct {
 
     // The entry and launch point of the machine, responsible for returning the correct result
     pub fn run(request: PrepareRequest, allocator: std.mem.Allocator) !PrepareResult {
-        cancel_requested.store(false, .release);
-
-        const sigaction = std.posix.Sigaction{ .handler = .{ .handler = backendSignalHandler }, .mask = std.posix.empty_sigset, .flags = 0 };
-        std.posix.sigaction(std.posix.SIG.INT, &sigaction, null) catch {};
-        std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null) catch {};
-
         var machine = BackendMachine{
             .request = request,
-            .stack = std.ArrayList(StateId).init(allocator),
+            .stack = std.ArrayList(StateId).empty,
             .allocator = allocator,
             .meta = null,
         };
@@ -222,20 +208,20 @@ pub const BackendProgressFn = *const fn (
     event: StateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 pub const CBackendProgressFn = *const fn (
     event: StateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 // The main allocator for the entire library
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 // ── FFI экспорты ──────────────────────────────────────────────────────────────
 // An exported C function (FFI) for initiating the preparation process from external code
-pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: *?*anyopaque, out_temp_path: *CSlice) callconv(.C) i32 {
+pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: *?*anyopaque, out_temp_path: *CSlice) callconv(.c) i32 {
     request_c.validate() catch |err| return @intFromEnum(fromError(err));
 
     var arena_allocator = std.heap.ArenaAllocator.init(gpa.allocator());
@@ -277,7 +263,7 @@ pub export fn upac_backend_prepare(request_c: *const CPrepareRequest, out_meta: 
     return @intFromEnum(BackendErrorCode.ok);
 }
 
-fn on_backend_progress(event: StateId, detail_c: CSlice, ctx: ?*anyopaque) callconv(.C) void {
+fn on_backend_progress(event: StateId, detail_c: CSlice, ctx: ?*anyopaque) callconv(.c) void {
     if (ctx != null) {
         return;
     }
@@ -290,7 +276,7 @@ fn dupeToCSlice(allocator: std.mem.Allocator, slice: []const u8) BackendError!CS
     return CSlice.fromSlice(dupe_slice);
 }
 
-pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.C) void {
+pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.c) void {
     const path = path_c.toSlice();
 
     std.fs.deleteTreeAbsolute(path) catch {};
@@ -298,7 +284,7 @@ pub export fn upac_backend_cleanup(path_c: CSlice) callconv(.C) void {
 }
 
 // A function for safely clearing metadata memory allocated on the Zig side
-pub export fn upac_backend_meta_free(package_meta_c: *CPackageMeta) callconv(.C) void {
+pub export fn upac_backend_meta_free(package_meta_c: *CPackageMeta) callconv(.c) void {
     gpa.allocator().free(package_meta_c.name.toSlice());
     gpa.allocator().free(package_meta_c.version.toSlice());
     gpa.allocator().free(package_meta_c.arch.toSlice());
@@ -312,11 +298,11 @@ pub export fn upac_backend_meta_free(package_meta_c: *CPackageMeta) callconv(.C)
     gpa.allocator().destroy(package_meta_c);
 }
 
-pub export fn upac_backend_meta_get_name(meta: *const CPackageMeta) callconv(.C) CSlice {
+pub export fn upac_backend_meta_get_name(meta: *const CPackageMeta) callconv(.c) CSlice {
     return meta.name;
 }
 
-pub export fn upac_backend_meta_get_version(meta: *const CPackageMeta) callconv(.C) CSlice {
+pub export fn upac_backend_meta_get_version(meta: *const CPackageMeta) callconv(.c) CSlice {
     return meta.version;
 }
 

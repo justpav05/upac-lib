@@ -1,17 +1,13 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const std = @import("std");
-
 const backend = @import("backend.zig");
+const std = backend.std;
+const c_libs = backend.c_libs;
+
 const Machine = backend.BackendMachine;
 const PackageMeta = backend.PackageMeta;
 const BackendError = backend.BackendError;
 
 const rpm_parser = @import("parser.zig");
-
-const c_libs = @cImport({
-    @cInclude("archive.h");
-    @cInclude("archive_entry.h");
-});
 
 // ── States ─────────────────────────────────────────────────────────────────
 // Archive integrity check status: calculating SHA256 and comparing against expected value
@@ -19,37 +15,33 @@ pub fn stateVerifying(machine: *Machine) BackendError!void {
     try machine.check(machine.enter(.verifying), BackendError.OutOfMemory);
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    var read_buffer: [4096]u8 = undefined;
+    var hasher_buf: [65536]u8 = undefined;
 
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    var expected_bytes: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
 
-    const package_file = std.fs.openFileAbsoluteZ(machine.request.package_path, .{}) catch {
-        stateFailed(machine);
-        return BackendError.ReadFailed;
-    };
+    const package_file = try machine.check(std.fs.openFileAbsoluteZ(machine.request.package_path, .{}), BackendError.ReadFailed);
     machine.file = package_file;
 
     while (true) {
-        const bytes_read = package_file.read(&read_buffer) catch {
-            stateFailed(machine);
-            return BackendError.ReadFailed;
-        };
-        if (bytes_read == 0) break;
-        hasher.update(read_buffer[0..bytes_read]);
+        const index = try machine.check(package_file.read(&hasher_buf), BackendError.ReadFailed);
+
+        if (index == 0) break;
+        hasher.update(hasher_buf[0..index]);
     }
     hasher.final(&digest);
 
-    var actual_checksum: [std.crypto.hash.sha2.Sha256.digest_length * 2]u8 = undefined;
-    _ = try machine.check(std.fmt.bufPrint(&actual_checksum, "{}", .{std.fmt.fmtSliceHexLower(&digest)}), BackendError.ReadFailed);
+    _ = try machine.check(std.fmt.hexToBytes(&expected_bytes, machine.request.checksum.ptr[0..machine.request.checksum.len]), BackendError.InvalidPackage);
 
-    if (!std.mem.eql(u8, &actual_checksum, machine.request.checksum)) {
+    if (!std.mem.eql(u8, &digest, &expected_bytes)) {
         stateFailed(machine);
         return BackendError.ChecksumMismatch;
     }
 
-    try machine.check(package_file.seekTo(0), BackendError.ReadFailed);
+    const file_descriptor = try machine.unwrap(machine.file, BackendError.ArchiveOpenFailed);
+    try machine.check(file_descriptor.seekTo(0), BackendError.ArchiveOpenFailed);
 
-    return stateReadingMeta(machine);
+    return stateExtracting(machine);
 }
 
 // Parses the RPM header to extract package information into the machine metadata
@@ -58,16 +50,17 @@ fn stateReadingMeta(machine: *Machine) BackendError!void {
 
     const package_file = try machine.unwrap(machine.file, BackendError.InvalidPackage);
 
-    var rpm_header = rpm_parser.parseHeader(machine.allocator, package_file) catch {
-        stateFailed(machine);
-        return BackendError.InvalidPackage;
-    };
+    var rpm_header = try machine.check(rpm_parser.parseHeader(machine.allocator, package_file), BackendError.InvalidPackage);
     defer rpm_header.deinit(machine.allocator);
 
+    const name = try machine.unwrap(rpm_header.name, BackendError.MetadataNotFound);
+    const version = try machine.unwrap(rpm_header.name, BackendError.MetadataNotFound);
+    const arch = try machine.unwrap(rpm_header.name, BackendError.MetadataNotFound);
+
     machine.meta = PackageMeta{
-        .name = try machine.check(machine.allocator.dupe(u8, rpm_header.name.?), BackendError.MetadataNotFound),
-        .version = try machine.check(machine.allocator.dupe(u8, rpm_header.version.?), BackendError.MetadataNotFound),
-        .arch = try machine.check(machine.allocator.dupe(u8, rpm_header.arch.?), BackendError.MetadataNotFound),
+        .name = try machine.check(machine.allocator.dupe(u8, name), BackendError.MetadataNotFound),
+        .version = try machine.check(machine.allocator.dupe(u8, version), BackendError.MetadataNotFound),
+        .arch = try machine.check(machine.allocator.dupe(u8, arch), BackendError.MetadataNotFound),
         .author = try machine.check(machine.allocator.dupe(u8, rpm_header.packager orelse ""), BackendError.MetadataNotFound),
         .description = try machine.check(machine.allocator.dupe(u8, rpm_header.summary orelse ""), BackendError.MetadataNotFound),
         .license = try machine.check(machine.allocator.dupe(u8, rpm_header.license orelse ""), BackendError.MetadataNotFound),
@@ -100,10 +93,7 @@ fn stateExtracting(machine: *Machine) BackendError!void {
     };
     machine.temp_path = temp_dir_path_c;
 
-    const archive_reader = c_libs.archive_read_new() orelse {
-        stateFailed(machine);
-        return BackendError.ArchiveOpenFailed;
-    };
+    const archive_reader = try machine.unwrap(c_libs.archive_read_new(), BackendError.ArchiveOpenFailed);
     defer _ = c_libs.archive_read_free(archive_reader);
 
     _ = c_libs.archive_read_support_format_all(archive_reader);
@@ -114,10 +104,7 @@ fn stateExtracting(machine: *Machine) BackendError!void {
         return BackendError.ArchiveOpenFailed;
     }
 
-    const archive_writer = c_libs.archive_write_disk_new() orelse {
-        stateFailed(machine);
-        return BackendError.ArchiveOpenFailed;
-    };
+    const archive_writer = try machine.unwrap(c_libs.archive_write_disk_new(), BackendError.ArchiveOpenFailed);
     defer _ = c_libs.archive_write_free(archive_writer);
 
     _ = c_libs.archive_write_disk_set_options(
@@ -128,22 +115,13 @@ fn stateExtracting(machine: *Machine) BackendError!void {
     );
     _ = c_libs.archive_write_disk_set_standard_lookup(archive_writer);
 
-    var current_directory_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const current_directory_path = std.posix.getcwd(&current_directory_buffer) catch {
-        stateFailed(machine);
-        return BackendError.OutOfMemory;
-    };
+    var current_directory_buffer: [std.os.linux.PATH_MAX]u8 = undefined;
+    const current_directory_path = try machine.check(std.posix.getcwd(&current_directory_buffer), BackendError.OutOfMemory);
 
-    var original_directory = std.fs.openDirAbsolute(current_directory_path, .{}) catch {
-        stateFailed(machine);
-        return BackendError.ReadFailed;
-    };
+    var original_directory = try machine.check(std.fs.openDirAbsolute(current_directory_path, .{}), BackendError.ReadFailed);
     defer original_directory.close();
 
-    std.posix.chdir(temp_dir_path_c) catch {
-        stateFailed(machine);
-        return BackendError.TempDirFailed;
-    };
+    try machine.check(std.posix.chdir(temp_dir_path_c), BackendError.TempDirFailed);
     defer original_directory.setAsCwd() catch {};
 
     while (true) {
@@ -189,10 +167,7 @@ fn stateExtracting(machine: *Machine) BackendError!void {
 
 // The final state representing the successful completion of all processing stages
 fn stateDone(machine: *Machine) BackendError!void {
-    machine.enter(.done) catch {
-        stateFailed(machine);
-        return BackendError.OutOfMemory;
-    };
+    try machine.check(machine.enter(.done), BackendError.OutOfMemory);
 }
 
 // An error state signaling that the machine failed to reach the required state at a certain stage
