@@ -48,7 +48,6 @@ pub struct ListArgs {
 // ── FSM states ────────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
 enum State {
-    FetchingMode,
     GetPackages,
     GetCommits,
     PrintCommits,
