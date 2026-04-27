@@ -7,7 +7,7 @@ use std::path::Path;
 
 use super::{Colorize, InitMachine, Result, State, UpacLib};
 
-use crate::ffi::{CInitRequest, CSlice, CSliceArray};
+use crate::ffi::{CInitRequest, CSliceArray};
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_validating(machine: &mut InitMachine) -> Result<()> {
@@ -40,20 +40,14 @@ fn state_initializing(machine: &mut InitMachine) -> Result<()> {
     machine.enter(State::Initializing);
     spinner(&machine.progress_bar, "Initializing system directories...");
 
-    let branch_c = CSlice::from_str(&machine.config.ostree.branch);
-
-    let init_request_c = CInitRequest {
-        struct_size: size_of::<CInitRequest>(),
-
-        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
-        root_path: CSlice::from_str(&machine.config.paths.root_path),
-
-        prefix_directory: CSlice::from_str(&machine.config.ostree.prefix_directory),
-        addition_prefixes: CSliceArray::empty(),
-
-        repo_mode: machine.repo_mode_c,
-        branch: branch_c,
-    };
+    let init_request_c = CInitRequest::new(
+        &machine.config.paths.repo_path.to_str()?,
+        &machine.config.paths.root_path.to_str()?,
+        &machine.config.ostree.prefix_directory.to_str()?,
+        CSliceArray::empty(),
+        machine.repo_mode_c,
+        &machine.config.ostree.branch.to_str()?,
+    );
 
     UpacLib::check(
         unsafe { (machine.upac_lib.as_ref().init)(init_request_c) },

@@ -63,13 +63,13 @@ impl InitMachine {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 pub fn run(config: Config, args: InitArgs) -> Result<()> {
-    let repo_mode_c = match config.ostree.mode.as_str() {
+    let repo_mode_c = match config.ostree.mode.to_str()? {
         "archive" => CRepoMode::Archive,
         "bare" => CRepoMode::Bare,
         "bare-user" => CRepoMode::BareUser,
         _ => anyhow::bail!(
             "unknown mode '{}'. Available: archive, bare, bare-user",
-            config.ostree.mode
+            config.ostree.mode.to_str()?
         ),
     };
 

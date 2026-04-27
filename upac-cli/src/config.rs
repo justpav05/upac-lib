@@ -5,6 +5,7 @@ use smart_default::SmartDefault;
 
 use serde::Deserialize;
 
+use std::ffi::CString;
 use std::fs;
 use std::path::Path;
 
@@ -25,23 +26,23 @@ pub struct Config {
 #[derive(Debug, Deserialize, Clone, SmartDefault)]
 pub struct Paths {
     #[serde(alias = "db_path")]
-    #[default = "/usr/share/upac/db"]
-    pub database_path: String,
-    #[default = "/var/share/upac/repo"]
-    pub repo_path: String,
-    #[default = "/"]
-    pub root_path: String,
+    #[default(CString::new("/usr/share/upac/db").unwrap())]
+    pub database_path: CString,
+    #[default(CString::new("/var/share/upac/repo").unwrap())]
+    pub repo_path: CString,
+    #[default(CString::new("/").unwrap())]
+    pub root_path: CString,
 }
 
 // OSTree-specific settings, such as the branch name for commits
 #[derive(Debug, Deserialize, Clone, SmartDefault)]
 pub struct OstreeConfig {
-    #[default = "archive"]
-    pub mode: String,
-    #[default = "packages"]
-    pub branch: String,
-    #[default = "usr"]
-    pub prefix_directory: String,
+    #[default(CString::new("archive").unwrap())]
+    pub mode: CString,
+    #[default(CString::new("packages").unwrap())]
+    pub branch: CString,
+    #[default(CString::new("usr").unwrap())]
+    pub prefix_directory: CString,
 }
 
 // ── Validation ─────────────────────────────────────────────────────────────────

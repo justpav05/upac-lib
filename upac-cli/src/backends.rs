@@ -96,7 +96,7 @@ impl Backend {
             pkg_path,
             temp_dir,
             checksum,
-            Some(Backend::on_backend_progress),
+            Backend::on_backend_progress,
             progress_ctx,
         );
 

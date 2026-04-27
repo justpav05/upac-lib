@@ -14,7 +14,7 @@ use super::{
 };
 
 use crate::backends::Backend;
-use crate::ffi::{CInstallRequest, CPackageEntry, CSlice};
+use crate::ffi::{CInstallRequest, CPackageEntry};
 use crate::types::BackendKind;
 
 // ── States ─────────────────────────────────────────────────────────────────
@@ -57,9 +57,8 @@ pub fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("invalid temp dir path"))?
             .to_owned();
 
-        let abs_file = fs::canonicalize(file)
-            .map_err(|err| anyhow::anyhow!("cannot resolve path '{file}': {err}"))?;
-        let abs_file_str = abs_file
+        let abs_file_str = fs::canonicalize(file)
+            .map_err(|err| anyhow::anyhow!("cannot resolve path '{file}': {err}"))?
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("invalid path encoding"))?
             .to_owned();
@@ -101,24 +100,17 @@ fn state_installing(machine: &mut InstallMachine) -> Result<()> {
         .map(|prepared_package| prepared_package.as_c_entry())
         .collect();
 
-    let install_request_c = CInstallRequest {
-        struct_size: size_of::<CInstallRequest>(),
-
-        packages: packages_c.as_ptr(),
-        packages_count: packages_c.len(),
-
-        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
-        root_path: CSlice::from_str(&machine.config.paths.root_path),
-        db_path: CSlice::from_str(&machine.config.paths.database_path),
-
-        branch: CSlice::from_str(&machine.config.ostree.branch),
-        prefix_directory: CSlice::from_str(&machine.config.ostree.prefix_directory),
-
-        on_progress: Some(on_install_progress),
-        progress_ctx: progress_bar_ptr,
-
-        max_retries: machine.config.step_retries,
-    };
+    let install_request_c = CInstallRequest::new(
+        packages_c.as_slice(),
+        machine.config.paths.repo_path.to_str()?,
+        machine.config.paths.root_path.to_str()?,
+        machine.config.paths.database_path.to_str()?,
+        machine.config.ostree.branch.to_str()?,
+        machine.config.ostree.prefix_directory.to_str()?,
+        machine.config.step_retries,
+        Some(on_install_progress),
+        progress_bar_ptr,
+    );
 
     UpacLib::check(
         unsafe { (machine.upac_lib.as_ref().install)(install_request_c) },
@@ -134,11 +126,16 @@ fn state_done(machine: &mut InstallMachine) -> Result<()> {
 
     for package in &machine.prepared_packages {
         let backend = &package.backend;
-        let name_slice_c = unsafe { (backend.backend_meta_get_name)(package.meta_handle) };
-        let version_slice_c = unsafe { (backend.backend_meta_get_version)(package.meta_handle) };
-
-        let name = unsafe { name_slice_c.as_str() }.to_owned();
-        let version = unsafe { version_slice_c.as_str() }.to_owned();
+        let name = unsafe {
+            (backend.backend_meta_get_name)(package.meta_handle)
+                .as_str()
+                .to_owned()
+        };
+        let version = unsafe {
+            (backend.backend_meta_get_version)(package.meta_handle)
+                .as_str()
+                .to_owned()
+        };
 
         println!("Installed: {} {}", name, version);
     }

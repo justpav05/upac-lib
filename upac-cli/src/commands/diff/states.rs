@@ -13,200 +13,231 @@ use super::{
 
 use crate::ffi::{
     CAttributedDiffArray, CCommitArray, CDiffKind, CPackageDiffArray, CPackageDiffKind, CSlice,
+    Validate,
 };
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_validating(machine: &mut DiffMachine) -> Result<()> {
     machine.enter(State::Validating);
-    spinner(&machine.progress_bar, "Fetching diff...");
+    spinner(&machine.progress_bar, "Checking diff set up...");
 
-    match (&machine.from.clone(), &machine.to.clone()) {
-        (Some(from), Some(to)) => {
-            machine.resolved_from = from.clone();
-            machine.resolved_to = to.clone();
+    let has_valid_args = match (&machine.from_commit, &machine.to_commit) {
+        (Some(f), Some(t)) => !f.is_empty() && !t.is_empty(),
+        _ => false,
+    };
+
+    if !has_valid_args {
+        let mut checksums = fetch_commit_checksums(machine)?;
+        if checksums.len() < 2 {
+            anyhow::bail!("need at least two commits for diff");
         }
-        _ => {
-            let mut commits_c = CCommitArray {
-                ptr: std::ptr::null_mut(),
-                len: 0,
-            };
 
-            let return_code = unsafe {
-                (machine.upac_lib.as_ref().list_commits)(
-                    CSlice::from_str(&machine.config.paths.repo_path),
-                    CSlice::from_str(&machine.config.ostree.branch),
-                    &mut commits_c,
-                )
-            };
-            UpacLib::check(return_code, "list commits")?;
-
-            let entries = unsafe { slice::from_raw_parts(commits_c.ptr, commits_c.len) };
-            let checksums: Vec<String> = entries
-                .iter()
-                .map(|entry| unsafe { entry.checksum.as_str().to_owned() })
-                .collect();
-
-            unsafe { (machine.upac_lib.as_ref().commits_free)(&mut commits_c) };
-
-            if checksums.is_empty() {
-                anyhow::bail!("no commits found");
-            }
-
-            match &machine.from.clone() {
-                Some(from) => {
-                    machine.resolved_from = from.clone();
-                    machine.resolved_to = checksums[0].clone();
-                }
-                None => {
-                    if checksums.len() < 2 {
-                        anyhow::bail!("need at least two commits for diff");
-                    }
-                    machine.resolved_from = checksums[1].clone();
-                    machine.resolved_to = checksums[0].clone();
-                }
-            }
-        }
+        machine.from_commit = Some(checksums.remove(1));
+        machine.to_commit = Some(checksums.remove(0));
     }
 
-    state_fetching_diff(machine)
+    match machine.files_mode {
+        true => state_fetching_files_diff(machine),
+        false => state_fetching_packages_diff(machine),
+    }
 }
 
-fn state_fetching_diff(machine: &mut DiffMachine) -> Result<()> {
-    machine.enter(State::FetchingDiff);
+fn fetch_commit_checksums(machine: &mut DiffMachine) -> Result<Vec<String>> {
+    machine.enter(State::Validating);
+    spinner(&machine.progress_bar, "Fetching commit checksums...");
 
-    if machine.files_mode {
-        let mut attributed_diff_array_c = CAttributedDiffArray {
-            ptr: null_mut(),
-            len: 0,
-        };
+    let mut commit_array_c = CCommitArray {
+        ptr: null_mut(),
+        len: 0,
+    };
 
-        UpacLib::check(
-            unsafe {
-                (machine.upac_lib.as_ref().diff_files_attributed)(
-                    CSlice::from_str(&machine.config.paths.repo_path),
-                    CSlice::from_str(&machine.resolved_from),
-                    CSlice::from_str(&machine.resolved_to),
-                    CSlice::from_str(&machine.config.paths.root_path),
-                    CSlice::from_str(&machine.config.paths.database_path),
-                    &mut attributed_diff_array_c,
-                )
-            },
-            "diff files attributed",
-        )?;
+    UpacLib::check(
+        unsafe {
+            (machine.upac_lib.as_ref().list_commits)(
+                CSlice::from_str(&machine.config.paths.repo_path.to_str()?),
+                CSlice::from_str(&machine.config.ostree.branch.to_str()?),
+                &mut commit_array_c,
+            )
+        },
+        "list commits",
+    )?;
+    let commit_array = unsafe { slice::from_raw_parts(commit_array_c.ptr, commit_array_c.len) };
 
-        let entries = unsafe {
-            slice::from_raw_parts(attributed_diff_array_c.ptr, attributed_diff_array_c.len)
-        };
-        machine.file_rows = entries
-            .iter()
-            .map(|attributed_diff_array_c| unsafe {
+    let checksums = commit_array
+        .iter()
+        .map(|commit_entry| {
+            commit_entry.validate()?;
+            Ok(unsafe { commit_entry.checksum.as_str().to_owned() })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    unsafe { (machine.upac_lib.as_ref().commits_free)(&mut commit_array_c) };
+
+    Ok(checksums)
+}
+
+fn state_fetching_files_diff(machine: &mut DiffMachine) -> Result<()> {
+    machine.enter(State::FetchingFilesDiff);
+    spinner(&machine.progress_bar, "Fetching file diff...");
+
+    let mut attributed_diff_array_c = CAttributedDiffArray {
+        ptr: null_mut(),
+        len: 0,
+    };
+
+    UpacLib::check(
+        unsafe {
+            (machine.upac_lib.as_ref().diff_files_attributed)(
+                CSlice::from_str(&machine.config.paths.repo_path.to_str()?),
+                CSlice::from_str(&machine.from_commit.as_ref().unwrap()),
+                CSlice::from_str(&machine.to_commit.as_ref().unwrap()),
+                CSlice::from_str(&machine.config.paths.root_path.to_str()?),
+                CSlice::from_str(&machine.config.paths.database_path.to_str()?),
+                &mut attributed_diff_array_c,
+            )
+        },
+        "diff files attributed",
+    )?;
+
+    let entries =
+        unsafe { slice::from_raw_parts(attributed_diff_array_c.ptr, attributed_diff_array_c.len) };
+
+    machine.file_rows = entries
+        .iter()
+        .map(|entry| {
+            entry.validate()?;
+            Ok(unsafe {
                 FileDiffRow {
-                    path: attributed_diff_array_c.path.as_str().to_owned(),
-                    kind: match attributed_diff_array_c.kind {
+                    path: entry.path.as_str().to_owned(),
+                    kind: match entry.kind {
                         CDiffKind::Added => FileDiffKind::Added,
                         CDiffKind::Removed => FileDiffKind::Removed,
                         CDiffKind::Modified => FileDiffKind::Modified,
                     },
-                    package_name: attributed_diff_array_c.package_name.as_str().to_owned(),
+                    package_name: entry.package_name.as_str().to_owned(),
                 }
             })
-            .collect();
+        })
+        .collect::<Result<Vec<_>>>()?;
 
+    unsafe { (machine.upac_lib.as_ref().diff_files_attributed_free)(&mut attributed_diff_array_c) };
+
+    state_printing_files_diff(machine)
+}
+
+fn state_fetching_packages_diff(machine: &mut DiffMachine) -> Result<()> {
+    machine.enter(State::FetchingPackagesDiff);
+    spinner(&machine.progress_bar, "Fetching package diff...");
+
+    let mut package_array_c = CPackageDiffArray {
+        ptr: null_mut(),
+        len: 0,
+    };
+
+    UpacLib::check(
         unsafe {
-            (machine.upac_lib.as_ref().diff_files_attributed_free)(&mut attributed_diff_array_c)
-        };
-    } else {
-        let mut c_out = CPackageDiffArray {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-        };
+            (machine.upac_lib.as_ref().diff_packages)(
+                CSlice::from_str(&machine.config.paths.repo_path.to_str()?),
+                CSlice::from_str(&machine.from_commit.as_ref().unwrap()),
+                CSlice::from_str(&machine.to_commit.as_ref().unwrap()),
+                &mut package_array_c,
+            )
+        },
+        "diff packages",
+    )?;
 
-        UpacLib::check(
-            unsafe {
-                (machine.upac_lib.as_ref().diff_packages)(
-                    CSlice::from_str(&machine.config.paths.repo_path),
-                    CSlice::from_str(&machine.resolved_from),
-                    CSlice::from_str(&machine.resolved_to),
-                    &mut c_out,
-                )
-            },
-            "diff packages",
-        )?;
+    let entries = unsafe { slice::from_raw_parts(package_array_c.ptr, package_array_c.len) };
 
-        let entries = unsafe { slice::from_raw_parts(c_out.ptr, c_out.len) };
-        machine.package_rows = entries
-            .iter()
-            .map(|package_diff_entry_c| unsafe {
+    machine.package_rows = entries
+        .iter()
+        .map(|entry| {
+            entry.validate()?;
+            Ok(unsafe {
                 PackageDiffRow {
-                    name: package_diff_entry_c.name.as_str().to_owned(),
-                    kind: match package_diff_entry_c.kind {
+                    name: entry.name.as_str().to_owned(),
+                    kind: match entry.kind {
                         CPackageDiffKind::Added => PkgDiffKind::Added,
                         CPackageDiffKind::Removed => PkgDiffKind::Removed,
                         CPackageDiffKind::Updated => PkgDiffKind::Updated,
                     },
                 }
             })
-            .collect();
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-        unsafe { (machine.upac_lib.as_ref().diff_packages_free)(&mut c_out) };
-    }
+    unsafe { (machine.upac_lib.as_ref().diff_packages_free)(&mut package_array_c) };
 
-    state_printing(machine)
+    state_printing_packages_diff(machine)
 }
 
-fn state_printing(machine: &mut DiffMachine) -> Result<()> {
-    machine.enter(State::Printing);
+fn state_printing_files_diff(machine: &mut DiffMachine) -> Result<()> {
+    machine.enter(State::PrintingFilesDiff);
+    spinner(&machine.progress_bar, "Print files diff...");
 
-    let from_short = &machine.resolved_from[..machine.resolved_from.len().min(12)];
-    let to_short = &machine.resolved_to[..machine.resolved_to.len().min(12)];
+    let from_commit_unwraped_short = &machine.from_commit.as_ref().unwrap()
+        [..machine.from_commit.as_ref().unwrap().len().min(12)];
+    let to_commit_unwraped_short =
+        &machine.to_commit.as_ref().unwrap()[..machine.to_commit.as_ref().unwrap().len().min(12)];
 
-    if machine.files_mode {
-        if machine.file_rows.is_empty() {
-            println!("{}", "No file changes.".dimmed());
-        } else {
-            println!(
-                "{} {} → {}",
-                "diff --files:".dimmed(),
-                from_short.cyan(),
-                to_short.cyan(),
-            );
-            println!();
-            for row in &machine.file_rows {
-                let (symbol, path_colored) = match row.kind {
-                    FileDiffKind::Added => ("+".green().bold(), row.path.as_str().normal()),
-                    FileDiffKind::Removed => ("-".red().bold(), row.path.as_str().normal()),
-                    FileDiffKind::Modified => ("~".yellow().bold(), row.path.as_str().normal()),
-                };
-                if row.package_name.is_empty() {
-                    println!("{} {}", symbol, path_colored);
-                } else {
-                    println!(
-                        "{} {} ({})",
-                        symbol,
-                        path_colored,
-                        row.package_name.dimmed()
-                    );
-                }
-            }
+    println!(
+        "{} {} → {}",
+        "diff --files:\n".dimmed(),
+        from_commit_unwraped_short.cyan(),
+        to_commit_unwraped_short.cyan(),
+    );
+
+    if machine.file_rows.is_empty() {
+        println!("{}", "No file changes.".dimmed());
+        return state_done(machine);
+    }
+
+    for row in &machine.file_rows {
+        let (symbol, path_colored) = match row.kind {
+            FileDiffKind::Added => ("+".green().bold(), row.path.as_str().normal()),
+            FileDiffKind::Removed => ("-".red().bold(), row.path.as_str().normal()),
+            FileDiffKind::Modified => ("~".yellow().bold(), row.path.as_str().normal()),
+        };
+        match row.package_name.is_empty() {
+            true => println!("{} {}", symbol, path_colored),
+            false => println!(
+                "{} {} ({})",
+                symbol,
+                path_colored,
+                row.package_name.dimmed()
+            ),
         }
-    } else {
-        if machine.package_rows.is_empty() {
-            println!("{}", "No package changes.".dimmed());
-        } else {
-            println!(
-                "{} {} → {}",
-                "diff:".dimmed(),
-                from_short.cyan(),
-                to_short.cyan(),
-            );
-            println!();
-            for row in &machine.package_rows {
-                match row.kind {
-                    PkgDiffKind::Added => println!("{} {}", "+".green().bold(), row.name.bold()),
-                    PkgDiffKind::Removed => println!("{} {}", "-".red().bold(), row.name.bold()),
-                    PkgDiffKind::Updated => println!("{} {}", "~".yellow().bold(), row.name.bold()),
-                }
-            }
+    }
+
+    state_done(machine)
+}
+
+fn state_printing_packages_diff(machine: &mut DiffMachine) -> Result<()> {
+    machine.enter(State::PrintingPackagesDiff);
+    spinner(&machine.progress_bar, "Print package diff...");
+
+    let from_commit_unwraped_short = &machine.from_commit.as_ref().unwrap()
+        [..machine.from_commit.as_ref().unwrap().len().min(12)];
+    let to_commit_unwraped_short =
+        &machine.to_commit.as_ref().unwrap()[..machine.to_commit.as_ref().unwrap().len().min(12)];
+
+    println!(
+        "{} {} → {}",
+        "diff:\n".dimmed(),
+        from_commit_unwraped_short.cyan(),
+        to_commit_unwraped_short.cyan(),
+    );
+
+    if machine.package_rows.is_empty() {
+        println!("{}", "No package changes.".dimmed());
+        return state_done(machine);
+    }
+
+    println!();
+    for row in &machine.package_rows {
+        match row.kind {
+            PkgDiffKind::Added => println!("{} {}", "+".green().bold(), row.name.bold()),
+            PkgDiffKind::Removed => println!("{} {}", "-".red().bold(), row.name.bold()),
+            PkgDiffKind::Updated => println!("{} {}", "~".yellow().bold(), row.name.bold()),
         }
     }
 

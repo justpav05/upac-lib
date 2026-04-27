@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::{Colorize, Result, RollbackMachine, State, UpacLib};
 
-use crate::ffi::{CRollbackRequest, CSlice};
+use crate::ffi::CRollbackRequest;
 
 // ── States ─────────────────────────────────────────────────────────────────
 pub fn state_validating(machine: &mut RollbackMachine) -> Result<()> {
@@ -37,17 +37,13 @@ fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
     machine.enter(State::RollingBack);
     spinner(&machine.progress_bar, "Rolling back...");
 
-    let rollback_request_c = CRollbackRequest {
-        struct_size: std::mem::size_of::<CRollbackRequest>(),
-
-        root_path: CSlice::from_str(&machine.config.paths.root_path),
-        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
-
-        branch: CSlice::from_str(&machine.config.ostree.branch),
-        prefix_directory: CSlice::from_str(&machine.config.ostree.prefix_directory),
-
-        commit_hash: CSlice::from_str(&machine.commit_hash),
-    };
+    let rollback_request_c = CRollbackRequest::new(
+        &machine.config.paths.root_path.to_str()?,
+        &machine.config.paths.repo_path.to_str()?,
+        &machine.config.ostree.branch.to_str()?,
+        &machine.config.ostree.prefix_directory.to_str()?,
+        &machine.commit_hash,
+    );
 
     UpacLib::check(
         unsafe { (machine.upac_lib.as_ref().rollback)(rollback_request_c) },

@@ -5,7 +5,7 @@ use colored::Colorize;
 
 use std::sync::Arc;
 
-use self::states::state_fetching_mode;
+use self::states::{state_get_commits_info, state_get_packages_list};
 
 use crate::config::Config;
 use crate::types::BackendKind;
@@ -28,6 +28,12 @@ struct PackageRow {
 struct CommitRow {
     checksum: String,
     subject: String,
+}
+
+impl CommitRow {
+    pub fn new(checksum: String, subject: String) -> Self {
+        Self { checksum, subject }
+    }
 }
 
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
@@ -90,20 +96,36 @@ impl ListMachine {
 pub fn run(config: Config, args: ListArgs) -> Result<()> {
     let mut list_machine = ListMachine::new(config, args.commit, args.full)?;
 
-    state_fetching_mode(&mut list_machine).map_err(|err| {
-        if !matches!(list_machine.stack.last(), Some(State::Failed(_))) {
-            list_machine.enter(State::Failed(err.to_string()));
-            unsafe { (list_machine.upac_lib.as_ref().deinit)() };
-        }
-        if list_machine.config.verbose {
-            eprintln!(
-                "{} failed at state {:?}",
-                "✗".red().bold(),
-                list_machine.stack.last()
-            );
-        }
-        err
-    })
+    match list_machine.commits_mode {
+        true => state_get_commits_info(&mut list_machine).map_err(|err| {
+            if !matches!(list_machine.stack.last(), Some(State::Failed(_))) {
+                list_machine.enter(State::Failed(err.to_string()));
+                unsafe { (list_machine.upac_lib.as_ref().deinit)() };
+            }
+            if list_machine.config.verbose {
+                eprintln!(
+                    "{} failed at state {:?}",
+                    "✗".red().bold(),
+                    list_machine.stack.last()
+                );
+            }
+            err
+        }),
+        false => state_get_packages_list(&mut list_machine).map_err(|err| {
+            if !matches!(list_machine.stack.last(), Some(State::Failed(_))) {
+                list_machine.enter(State::Failed(err.to_string()));
+                unsafe { (list_machine.upac_lib.as_ref().deinit)() };
+            }
+            if list_machine.config.verbose {
+                eprintln!(
+                    "{} failed at state {:?}",
+                    "✗".red().bold(),
+                    list_machine.stack.last()
+                );
+            }
+            err
+        }),
+    }
 }
 
 pub fn format_size(bytes: u32) -> String {

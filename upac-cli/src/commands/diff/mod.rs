@@ -28,8 +28,12 @@ pub struct DiffArgs {
 #[derive(Debug, Clone, PartialEq)]
 enum State {
     Validating,
-    FetchingDiff,
-    Printing,
+
+    FetchingFilesDiff,
+    FetchingPackagesDiff,
+
+    PrintingFilesDiff,
+    PrintingPackagesDiff,
 
     Done,
     Failed(String),
@@ -64,20 +68,16 @@ struct FileDiffRow {
 
 // ── DiffFSM machine ───────────────────────────────────────────────────────────────────────
 struct DiffMachine {
-    from: Option<String>,
-    to: Option<String>,
-
-    resolved_from: String,
-    resolved_to: String,
+    from_commit: Option<String>,
+    to_commit: Option<String>,
 
     package_rows: Vec<PackageDiffRow>,
     file_rows: Vec<FileDiffRow>,
 
     files_mode: bool,
 
-    progress_bar: ProgressBar,
-
     upac_lib: Arc<UpacLib>,
+    progress_bar: ProgressBar,
     config: Config,
     stack: Vec<State>,
 }
@@ -85,15 +85,13 @@ struct DiffMachine {
 impl DiffMachine {
     fn new(
         config: Config,
-        from: Option<String>,
-        to: Option<String>,
+        from_commit: Option<String>,
+        to_commit: Option<String>,
         files_mode: bool,
     ) -> Result<Self> {
         Ok(Self {
-            from,
-            to,
-            resolved_from: String::new(),
-            resolved_to: String::new(),
+            from_commit,
+            to_commit,
             package_rows: Vec::new(),
             file_rows: Vec::new(),
             files_mode,

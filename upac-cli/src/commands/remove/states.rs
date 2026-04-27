@@ -35,23 +35,17 @@ fn state_uninstalling(machine: &mut RemoveMachine) -> Result<()> {
 
     let progress_bar_ptr = &machine.progress_bar as *const ProgressBar as *mut c_void;
 
-    let remove_request_c = CUninstallRequest {
-        struct_size: size_of::<CUninstallRequest>(),
-
-        package_names: package_names_c.as_ptr(),
-        package_names_len: package_names_c.len(),
-        repo_path: CSlice::from_str(&machine.config.paths.repo_path),
-        root_path: CSlice::from_str(&machine.config.paths.root_path),
-        db_path: CSlice::from_str(&machine.config.paths.database_path),
-
-        branch: CSlice::from_str(&machine.config.ostree.branch),
-        prefix_directory: CSlice::from_str(&machine.config.ostree.prefix_directory),
-
-        on_progress: Some(on_remove_progress),
-        progress_ctx: progress_bar_ptr,
-
-        max_retries: machine.config.step_retries,
-    };
+    let remove_request_c = CUninstallRequest::new(
+        package_names_c.as_slice(),
+        &machine.config.paths.repo_path.to_str()?,
+        &machine.config.paths.root_path.to_str()?,
+        &machine.config.paths.database_path.to_str()?,
+        &machine.config.ostree.branch.to_str()?,
+        &machine.config.ostree.prefix_directory.to_str()?,
+        machine.config.step_retries,
+        Some(on_remove_progress),
+        progress_bar_ptr,
+    );
 
     UpacLib::check(
         unsafe { (machine.upac_lib.as_ref().uninstall)(remove_request_c) },

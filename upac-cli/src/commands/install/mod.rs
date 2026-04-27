@@ -50,11 +50,11 @@ pub struct PreparedPackage {
 
 impl PreparedPackage {
     pub fn as_c_entry(&self) -> CPackageEntry {
-        CPackageEntry {
-            meta: self.meta_handle,
-            temp_path: self.temp_path_c,
-            checksum: CSlice::from_str(&self.checksum),
-        }
+        CPackageEntry::new(
+            self.meta_handle,
+            unsafe { self.temp_path_c.as_str() },
+            &self.checksum,
+        )
     }
 }
 
