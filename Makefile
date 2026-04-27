@@ -45,25 +45,27 @@ prepare-dirs:
 
 
 # ── Build ─────────────────────────────────────────────────────────────────────
-build: prepare-dirs build-lib build-backends build-cli
+build: prepare-dirs build-lib build-alpm-backend build-rpm-backend build-deb-backends build-cli
 
 build-lib:
 	@echo "--- Building upac-lib in $(MODE) mode ---"
 	@cd $(ROOT_DIR)/upac-lib && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
-build-backends:
+build-alpm-backend:
 	@echo "--- Building upac-alpm in $(MODE) mode ---"
 	@cd $(ROOT_DIR)/upac-alpm && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
+build-rpm-backend:
 	@echo "--- Building upac-rpm in $(MODE) mode ---"
 	@cd $(ROOT_DIR)/upac-rpm && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
+build-deb-backends:
 	@echo "--- Building upac-deb in $(MODE) mode ---"
 	@cd $(ROOT_DIR)/upac-deb && zig build --prefix $(OUT_BUILD_DIR) $(ZIG_BUILD_FLAGS)
 
 build-cli:
 	@cd $(ROOT_DIR)/upac-cli && \
-		RUSTFLAGS="$(RUSTFLAGS)" cargo-zigbuild build \
+		RUSTFLAGS="$(RUSTFLAGS)" cargo build \
 			$(CARGO_BUILD_FLAG) \
 			--target $(CARGO_TARGET) \
 			--target-dir $(OUT_BUILD_DIR) \
