@@ -5,20 +5,23 @@ use colored::Colorize;
 
 use indicatif::ProgressBar;
 
+use sha2::{Digest, Sha256};
+
 use std::collections::HashMap;
+use std::env;
 use std::ffi::c_void;
+use std::ffi::CString;
+use std::fs;
+use std::io::Read;
 use std::ptr::{null, null_mut};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::backends::Backend;
 use crate::config::Config;
-use crate::ffi::{CPackageEntry, CSlice, PackageMetaHandle};
-use crate::types::BackendKind;
+use crate::ffi::{CInstallRequest, CPackageEntry, CSlice, PackageMetaHandle};
 use crate::upac::UpacLib;
-
-use self::states::state_preparing_package;
-
-mod states;
+use crate::utils::{spinner, BackendKind};
 
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
 #[derive(clap::Args)]
@@ -34,11 +37,10 @@ pub struct InstallArgs {
 // ── FSM states ───────────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq)]
 enum State {
-    DetectingBackend(String),
+    DetectingBackend,
     PreparingPackage,
     Installing,
     Done,
-    Failed(String),
 }
 
 pub struct PreparedPackage {
@@ -88,7 +90,7 @@ struct InstallMachine {
     loaded_backends: HashMap<BackendKind, Arc<Backend>>,
     progress_bar: ProgressBar,
     config: Config,
-    stack: Vec<State>,
+    state: State,
 }
 
 impl InstallMachine {
@@ -107,12 +109,8 @@ impl InstallMachine {
             upac_lib: Arc::new(UpacLib::load(&BackendKind::UpacLib)?),
             loaded_backends: HashMap::new(),
             config,
-            stack: Vec::new(),
+            state: State::PreparingPackage,
         })
-    }
-
-    fn enter(&mut self, state: State) {
-        self.stack.push(state);
     }
 }
 
@@ -130,18 +128,151 @@ pub fn run(config: Config, args: InstallArgs) -> Result<()> {
         InstallMachine::new(config, args.files, args.backend, args.checksums)?;
 
     state_preparing_package(&mut install_machine).map_err(|err| {
-        if !matches!(install_machine.stack.last(), Some(State::Failed(_))) {
-            install_machine.enter(State::Failed(err.to_string()));
-        }
         if install_machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
                 "✗".red().bold(),
-                install_machine.stack.last()
+                install_machine.state
             );
         }
         err
     })
+}
+
+// ── States ─────────────────────────────────────────────────────────────────
+fn state_preparing_package(machine: &mut InstallMachine) -> Result<()> {
+    machine.state = State::PreparingPackage;
+    spinner(&machine.progress_bar, "Verifying and extracting package...");
+
+    let files: Vec<String> = machine.files.clone();
+
+    let progress_bar_ptr = &machine.progress_bar as *const ProgressBar as *mut c_void;
+
+    for (index, file) in files.iter().enumerate() {
+        machine.state = State::DetectingBackend;
+
+        let kind = if let Some(flag) = &machine.backend {
+            BackendKind::from_flag(flag)?
+        } else {
+            BackendKind::detect(file).ok_or_else(|| {
+                anyhow::anyhow!("Cannot detect backend for '{file}'. Use --backend to specify one")
+            })?
+        };
+
+        let backend = machine
+            .loaded_backends
+            .entry(kind.clone())
+            .or_insert_with(|| {
+                Arc::new(
+                    Backend::load(&kind)
+                        .expect(format!("Failed to load backend lib for {}", kind).as_str()),
+                )
+            })
+            .clone();
+
+        machine
+            .progress_bar
+            .println(format!("{} Backend: {}", "→".cyan(), kind));
+
+        let tmp_string_path = CString::from_str(
+            env::temp_dir()
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid temp dir path"))?,
+        )?;
+
+        let abs_file_str = CString::from_str(
+            fs::canonicalize(file)
+                .map_err(|err| anyhow::anyhow!("cannot resolve path '{file}': {err}"))?
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid path encoding"))?,
+        )?;
+
+        let checksum = if machine.checksums.is_empty() {
+            CString::from_str(&compute_checksum(&abs_file_str.to_str()?)?)?
+        } else {
+            CString::from_str(&machine.checksums[index])?
+        };
+
+        let (meta_handle, temp_path_c) = backend
+            .meta_prepare(
+                &abs_file_str.to_str()?,
+                &tmp_string_path.to_str()?,
+                &checksum.to_str()?,
+                progress_bar_ptr,
+            )
+            .map_err(|err| {
+                machine.progress_bar.finish_and_clear();
+                err
+            })?;
+
+        let prepared_packege = PreparedPackage {
+            meta_handle,
+            temp_path_c,
+            checksum: checksum.to_str()?.to_owned(),
+            backend,
+        };
+
+        machine.prepared_packages.push(prepared_packege);
+    }
+
+    state_installing(machine)
+}
+
+fn state_installing(machine: &mut InstallMachine) -> Result<()> {
+    machine.state = State::Installing;
+
+    let progress_bar_ptr = &machine.progress_bar as *const ProgressBar as *mut c_void;
+
+    let packages_c: Vec<CPackageEntry> = machine
+        .prepared_packages
+        .iter()
+        .map(|prepared_package| prepared_package.as_c_entry())
+        .collect();
+
+    let install_request_c = CInstallRequest::new(
+        packages_c.as_slice(),
+        machine.config.paths.repo_path.to_str()?,
+        machine.config.paths.root_path.to_str()?,
+        machine.config.paths.database_path.to_str()?,
+        machine.config.ostree.branch.to_str()?,
+        machine.config.ostree.prefix_directory.to_str()?,
+        machine.config.step_retries,
+        Some(on_install_progress),
+        progress_bar_ptr,
+    );
+
+    UpacLib::check(
+        unsafe { (machine.upac_lib.as_ref().install)(install_request_c) },
+        "install",
+    )?;
+
+    state_done(machine)
+}
+
+fn state_done(machine: &mut InstallMachine) -> Result<()> {
+    machine.state = State::Done;
+    machine.progress_bar.finish_and_clear();
+
+    for package in &machine.prepared_packages {
+        let backend = &package.backend;
+        let name = unsafe {
+            (backend.meta_get_name)(package.meta_handle)
+                .as_str()
+                .to_owned()
+        };
+        let version = unsafe {
+            (backend.meta_get_version)(package.meta_handle)
+                .as_str()
+                .to_owned()
+        };
+
+        println!("Installed: {} {}", name, version);
+    }
+
+    machine.prepared_packages.clear();
+    machine.loaded_backends.clear();
+
+    Ok(())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -169,4 +300,22 @@ pub unsafe extern "C" fn on_install_progress(event: u8, package_name_c: CSlice, 
             return;
         }
     }
+}
+
+fn compute_checksum(file_path: &str) -> Result<String> {
+    let mut file =
+        fs::File::open(file_path).map_err(|err| anyhow::anyhow!("failed to open file: {err}"))?;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 4096];
+
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    Ok(hex::encode(hasher.finalize()))
 }

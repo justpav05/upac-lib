@@ -1,8 +1,6 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::{Context, Result};
 
-use smart_default::SmartDefault;
-
 use serde::Deserialize;
 
 use std::ffi::CString;
@@ -11,38 +9,63 @@ use std::path::Path;
 
 // ── Main config ─────────────────────────────────────────────────────────────────
 // The main application configuration structure, combining settings for logging, paths, and OSTree.
-#[derive(Debug, Deserialize, Clone, SmartDefault)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub verbose: bool,
-    #[default = 3]
     pub step_retries: u8,
     #[serde(alias = "paths")]
     pub paths: Paths,
     pub ostree: OstreeConfig,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            verbose: false,
+            step_retries: 3,
+            paths: Paths::default(),
+            ostree: OstreeConfig::default(),
+        }
+    }
+}
+
 // Set of paths to key system components: database, repository, and OS root
-#[derive(Debug, Deserialize, Clone, SmartDefault)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Paths {
     #[serde(alias = "db_path")]
-    #[default(CString::new("/usr/share/upac/db").unwrap())]
     pub database_path: CString,
-    #[default(CString::new("/var/share/upac/repo").unwrap())]
     pub repo_path: CString,
-    #[default(CString::new("/").unwrap())]
     pub root_path: CString,
 }
 
+impl Default for Paths {
+    fn default() -> Self {
+        Self {
+            database_path: CString::new("/usr/share/upac/db").unwrap(),
+            repo_path: CString::new("/var/share/upac/repo").unwrap(),
+            root_path: CString::new("/").unwrap(),
+        }
+    }
+}
+
 // OSTree-specific settings, such as the branch name for commits
-#[derive(Debug, Deserialize, Clone, SmartDefault)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct OstreeConfig {
-    #[default(CString::new("archive").unwrap())]
     pub mode: CString,
-    #[default(CString::new("packages").unwrap())]
     pub branch: CString,
-    #[default(CString::new("usr").unwrap())]
+
     pub prefix_directory: CString,
+}
+
+impl Default for OstreeConfig {
+    fn default() -> Self {
+        Self {
+            mode: CString::new("archive").unwrap(),
+            branch: CString::new("packages").unwrap(),
+            prefix_directory: CString::new("usr").unwrap(),
+        }
+    }
 }
 
 // ── Validation ─────────────────────────────────────────────────────────────────

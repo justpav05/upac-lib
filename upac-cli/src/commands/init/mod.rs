@@ -1,18 +1,17 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
-use colored::Colorize;
+
 use indicatif::ProgressBar;
 
+use colored::Colorize;
+
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::ffi::CRepoMode;
-use crate::types::BackendKind;
+use crate::ffi::{CInitRequest, CRepoMode, CSliceArray};
 use crate::upac::UpacLib;
-
-use self::states::state_validating;
-
-mod states;
+use crate::utils::{spinner, BackendKind};
 
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
 #[derive(clap::Args)]
@@ -26,8 +25,8 @@ pub struct InitArgs {
 enum State {
     Validating,
     Initializing,
+
     Done,
-    Failed(String),
 }
 
 // ── FSM machine ───────────────────────────────────────────────────────────────────────
@@ -39,7 +38,7 @@ struct InitMachine {
     config: Config,
     progress_bar: ProgressBar,
     upac_lib: Arc<UpacLib>,
-    stack: Vec<State>,
+    state: State,
 }
 
 impl InitMachine {
@@ -52,12 +51,8 @@ impl InitMachine {
             config,
             progress_bar: ProgressBar::new_spinner(),
             upac_lib: Arc::new(UpacLib::load(&BackendKind::UpacLib)?),
-            stack: Vec::new(),
+            state: State::Validating,
         })
-    }
-
-    fn enter(&mut self, state: State) {
-        self.stack.push(state);
     }
 }
 
@@ -76,17 +71,74 @@ pub fn run(config: Config, args: InitArgs) -> Result<()> {
     let mut init_machine = InitMachine::new(repo_mode_c, args.config_path, config)?;
 
     state_validating(&mut init_machine).map_err(|err| {
-        if !matches!(init_machine.stack.last(), Some(State::Failed(_))) {
-            init_machine.enter(State::Failed(err.to_string()));
-            unsafe { (init_machine.upac_lib.as_ref().deinit)() };
-        }
         if init_machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
                 "✗".red().bold(),
-                init_machine.stack.last()
+                init_machine.state
             );
         }
         err
     })
+}
+
+// ── States ─────────────────────────────────────────────────────────────────
+fn state_validating(machine: &mut InitMachine) -> Result<()> {
+    machine.state = State::Validating;
+    spinner(&machine.progress_bar, "Checking config...");
+
+    let config_path = Path::new(&machine.config_path);
+
+    if !config_path.exists() {
+        anyhow::bail!(
+            "config file not found: {}\n\
+             Create it before running init. Example:\n\
+             \n\
+             verbose = false\n\
+             \n\
+             [paths]\n\
+             repo_path   = \"/var/repo\"\n\
+             root_path   = \"/\"\n\
+             \n\
+             [ostree]\n\
+             branch  = \"packages\"",
+            machine.config_path
+        );
+    }
+
+    state_initializing(machine)
+}
+
+fn state_initializing(machine: &mut InitMachine) -> Result<()> {
+    machine.state = State::Initializing;
+    spinner(&machine.progress_bar, "Initializing system directories...");
+
+    let init_request_c = CInitRequest::new(
+        &machine.config.paths.repo_path.to_str()?,
+        &machine.config.paths.root_path.to_str()?,
+        &machine.config.ostree.prefix_directory.to_str()?,
+        CSliceArray::empty(),
+        machine.repo_mode_c,
+        &machine.config.ostree.branch.to_str()?,
+    );
+
+    UpacLib::check(
+        unsafe { (machine.upac_lib.as_ref().init)(init_request_c) },
+        "init",
+    )?;
+
+    state_done(machine)
+}
+
+fn state_done(machine: &mut InitMachine) -> Result<()> {
+    machine.state = State::Done;
+    machine.progress_bar.finish_and_clear();
+
+    println!("{} system initialized", "✓".green().bold());
+    println!(
+        "  {}",
+        "Run 'upac list' to verify the installation.".dimmed()
+    );
+
+    Ok(())
 }

@@ -1,6 +1,8 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
 
+use libloading::Library;
+
 use std::ffi::c_void;
 use std::ptr::null;
 use std::slice;
@@ -501,4 +503,10 @@ pub enum CRepoMode {
     Archive = 0,
     Bare = 1,
     BareUser = 2,
+}
+
+pub unsafe fn load_symbol<T: Copy>(lib: &Library, name: &str) -> Result<T> {
+    lib.get(name.as_bytes())
+        .map(|symbol| *symbol)
+        .map_err(|err| anyhow::anyhow!("Symbol {name} not found: {err}"))
 }

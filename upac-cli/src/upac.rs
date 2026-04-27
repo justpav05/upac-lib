@@ -7,10 +7,10 @@ use std::ffi::c_void;
 use std::str;
 
 use crate::ffi::{
-    CAttributedDiffArray, CCommitArray, CInitRequest, CInstallRequest, CPackageDiffArray,
-    CRollbackRequest, CSlice, CUninstallRequest,
+    load_symbol, CAttributedDiffArray, CCommitArray, CInitRequest, CInstallRequest,
+    CPackageDiffArray, CRollbackRequest, CSlice, CUninstallRequest,
 };
-use crate::types::BackendKind;
+use crate::utils::BackendKind;
 
 // ── Wrapper around libupac.so ────────────────────────────────────────────────────
 // A wrapper for dynamically loading libupac.so and mapping its C functions to Rust types
@@ -50,51 +50,41 @@ pub struct UpacLib {
 
 impl UpacLib {
     // Loads the library from a file and initializes pointers to symbols
-    unsafe fn load_symbol<T: Copy>(library: &Library, symbol_name: &str) -> Result<T> {
-        library
-            .get(symbol_name.as_bytes())
-            .map(|symbol| *symbol)
-            .map_err(|error| anyhow::anyhow!("Symbol {symbol_name} not found: {error}"))
-    }
-
-    // Loads the library from a file and initializes pointers to symbols
     pub fn load(backend_kind: &BackendKind) -> Result<Self> {
         let loaded_library = unsafe { Library::new(backend_kind.so_name()) }.map_err(|error| {
             anyhow::anyhow!("Failed to load {}: {error}", backend_kind.so_name())
         })?;
 
         Ok(Self {
-            install: unsafe { Self::load_symbol(&loaded_library, "install")? },
-            uninstall: unsafe { Self::load_symbol(&loaded_library, "uninstall")? },
-            rollback: unsafe { Self::load_symbol(&loaded_library, "rollback")? },
+            install: unsafe { load_symbol(&loaded_library, "install")? },
+            uninstall: unsafe { load_symbol(&loaded_library, "uninstall")? },
+            rollback: unsafe { load_symbol(&loaded_library, "rollback")? },
 
-            diff_packages: unsafe { Self::load_symbol(&loaded_library, "diff_packages")? },
-            diff_packages_free: unsafe {
-                Self::load_symbol(&loaded_library, "diff_packages_free")?
-            },
+            diff_packages: unsafe { load_symbol(&loaded_library, "diff_packages")? },
+            diff_packages_free: unsafe { load_symbol(&loaded_library, "diff_packages_free")? },
             diff_files_attributed: unsafe {
-                Self::load_symbol(&loaded_library, "diff_files_attributed")?
+                load_symbol(&loaded_library, "diff_files_attributed")?
             },
             diff_files_attributed_free: unsafe {
-                Self::load_symbol(&loaded_library, "diff_files_attributed_free")?
+                load_symbol(&loaded_library, "diff_files_attributed_free")?
             },
 
-            list_packages: unsafe { Self::load_symbol(&loaded_library, "list_packages")? },
-            packages_free: unsafe { Self::load_symbol(&loaded_library, "packages_free")? },
-            packages_count: unsafe { Self::load_symbol(&loaded_library, "packages_count")? },
+            list_packages: unsafe { load_symbol(&loaded_library, "list_packages")? },
+            packages_free: unsafe { load_symbol(&loaded_library, "packages_free")? },
+            packages_count: unsafe { load_symbol(&loaded_library, "packages_count")? },
 
             package_get_slice_field: unsafe {
-                Self::load_symbol(&loaded_library, "package_get_slice_field")?
+                load_symbol(&loaded_library, "package_get_slice_field")?
             },
             package_get_int_field: unsafe {
-                Self::load_symbol(&loaded_library, "package_get_int_field")?
+                load_symbol(&loaded_library, "package_get_int_field")?
             },
 
-            list_commits: unsafe { Self::load_symbol(&loaded_library, "list_commits")? },
-            commits_free: unsafe { Self::load_symbol(&loaded_library, "commits_free")? },
+            list_commits: unsafe { load_symbol(&loaded_library, "list_commits")? },
+            commits_free: unsafe { load_symbol(&loaded_library, "commits_free")? },
 
-            init: unsafe { Self::load_symbol(&loaded_library, "init")? },
-            deinit: unsafe { Self::load_symbol(&loaded_library, "deinit")? },
+            init: unsafe { load_symbol(&loaded_library, "init")? },
+            deinit: unsafe { load_symbol(&loaded_library, "deinit")? },
 
             _lib: loaded_library,
         })
@@ -171,5 +161,11 @@ impl UpacLib {
             _ => "unknown error",
         };
         bail!("{context}: {message} (code {code})");
+    }
+}
+
+impl Drop for UpacLib {
+    fn drop(&mut self) {
+        unsafe { (self.deinit)() }
     }
 }

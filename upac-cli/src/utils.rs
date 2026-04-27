@@ -1,6 +1,14 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
+
+use indicatif::{ProgressBar, ProgressStyle};
+
+use colored::Colorize;
+
 use strum::{Display, EnumProperty, EnumString};
+
+use std::fmt::Debug;
+use std::time::Duration;
 
 // ── Backend Definition ────────────────────────────────────────
 // Represents the type of backend (ALPM, RPM, DEB) for a package
@@ -41,4 +49,15 @@ impl BackendKind {
     pub fn so_name(&self) -> &'static str {
         self.get_str("so").expect("so property not defined")
     }
+}
+
+pub fn spinner(pb: &ProgressBar, msg: &str) {
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+            .template("{spinner:.cyan} {msg}")
+            .unwrap(),
+    );
+    pb.set_message(msg.to_owned());
+    pb.enable_steady_tick(Duration::from_millis(80));
 }

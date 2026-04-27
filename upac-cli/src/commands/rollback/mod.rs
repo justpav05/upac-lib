@@ -1,17 +1,16 @@
 // ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
-use colored::Colorize;
+
 use indicatif::ProgressBar;
+
+use colored::Colorize;
 
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::types::BackendKind;
+use crate::ffi::CRollbackRequest;
 use crate::upac::UpacLib;
-
-use self::states::state_validating;
-
-mod states;
+use crate::utils::{spinner, BackendKind};
 
 // ── Arguments for command ───────────────────────────────────────────────────────────────────────
 #[derive(clap::Args)]
@@ -25,7 +24,6 @@ enum State {
     Validating,
     RollingBack,
     Done,
-    Failed(String),
 }
 
 // ── FSM machine ───────────────────────────────────────────────────────────────────────
@@ -35,7 +33,7 @@ struct RollbackMachine {
     upac_lib: Arc<UpacLib>,
     progress_bar: ProgressBar,
     config: Config,
-    stack: Vec<State>,
+    state: State,
 }
 
 impl RollbackMachine {
@@ -45,12 +43,8 @@ impl RollbackMachine {
             progress_bar: ProgressBar::new_spinner(),
             upac_lib: Arc::new(UpacLib::load(&BackendKind::UpacLib)?),
             config,
-            stack: Vec::new(),
+            state: State::Validating,
         })
-    }
-
-    fn enter(&mut self, state: State) {
-        self.stack.push(state);
     }
 }
 
@@ -59,17 +53,72 @@ pub fn run(config: Config, args: RollbackArgs) -> Result<()> {
     let mut rolling_machine = RollbackMachine::new(config, args.commit)?;
 
     state_validating(&mut rolling_machine).map_err(|err| {
-        if !matches!(rolling_machine.stack.last(), Some(State::Failed(_))) {
-            rolling_machine.enter(State::Failed(err.to_string()));
-        }
-
         if rolling_machine.config.verbose {
             eprintln!(
                 "{} failed at state {:?}",
                 "✗".red().bold(),
-                rolling_machine.stack.last()
+                rolling_machine.state
             );
         }
         err
     })
+}
+
+// ── States ─────────────────────────────────────────────────────────────────
+fn state_validating(machine: &mut RollbackMachine) -> Result<()> {
+    machine.state = State::Validating;
+    spinner(&machine.progress_bar, "Validating rolling data...");
+
+    if machine.commit_hash.len() != 64
+        || !machine
+            .commit_hash
+            .chars()
+            .all(|char| char.is_ascii_hexdigit())
+    {
+        anyhow::bail!(
+            "invalid commit hash '{}'. Expected 64 hex characters",
+            machine.commit_hash
+        );
+    }
+
+    machine.progress_bar.println(format!(
+        "{} rolling back to {}",
+        "→".cyan(),
+        &machine.commit_hash[..12].dimmed()
+    ));
+
+    state_rolling_back(machine)
+}
+
+fn state_rolling_back(machine: &mut RollbackMachine) -> Result<()> {
+    machine.state = State::RollingBack;
+    spinner(&machine.progress_bar, "Rolling back...");
+
+    let rollback_request_c = CRollbackRequest::new(
+        &machine.config.paths.root_path.to_str()?,
+        &machine.config.paths.repo_path.to_str()?,
+        &machine.config.ostree.branch.to_str()?,
+        &machine.config.ostree.prefix_directory.to_str()?,
+        &machine.commit_hash,
+    );
+
+    UpacLib::check(
+        unsafe { (machine.upac_lib.as_ref().rollback)(rollback_request_c) },
+        "rollback",
+    )?;
+
+    state_done(machine)
+}
+
+fn state_done(machine: &mut RollbackMachine) -> Result<()> {
+    machine.state = State::Done;
+    machine.progress_bar.finish_and_clear();
+
+    println!(
+        "{} rolled back to {}",
+        "✓".green().bold(),
+        &machine.commit_hash[..12].bold()
+    );
+
+    Ok(())
 }

@@ -10,8 +10,8 @@ use std::ptr::null_mut;
 
 use libloading::Library;
 
-use crate::ffi::{CPrepareRequest, CSlice, PackageMetaHandle};
-use crate::types::BackendKind;
+use crate::ffi::{load_symbol, CPrepareRequest, CSlice, PackageMetaHandle};
+use crate::utils::BackendKind;
 
 // ── Backend Definition ────────────────────────────────────────
 #[derive(FromRepr)]
@@ -55,25 +55,17 @@ pub struct Backend {
 
 impl Backend {
     // Loads the library from a file and initializes pointers to symbols
-    unsafe fn load_symbol<T: Copy>(library: &Library, symbol_name: &str) -> Result<T> {
-        library
-            .get(symbol_name.as_bytes())
-            .map(|symbol| *symbol)
-            .map_err(|error| anyhow::anyhow!("Symbol {symbol_name} not found: {error}"))
-    }
-
-    // Loads the library from a file and initializes pointers to symbols
     pub fn load(backend_kind: &BackendKind) -> Result<Self> {
         let loaded_library = unsafe { Library::new(backend_kind.so_name()) }.map_err(|error| {
             anyhow::anyhow!("Failed to load {}: {error}", backend_kind.so_name())
         })?;
 
         Ok(Self {
-            prepare: unsafe { Self::load_symbol(&loaded_library, "prepare")? },
-            meta_free: unsafe { Self::load_symbol(&loaded_library, "meta_free")? },
-            meta_get_name: unsafe { Self::load_symbol(&loaded_library, "meta_get_name")? },
-            meta_get_version: unsafe { Self::load_symbol(&loaded_library, "meta_get_version")? },
-            cleanup: unsafe { Self::load_symbol(&loaded_library, "cleanup")? },
+            prepare: unsafe { load_symbol(&loaded_library, "prepare")? },
+            meta_free: unsafe { load_symbol(&loaded_library, "meta_free")? },
+            meta_get_name: unsafe { load_symbol(&loaded_library, "meta_get_name")? },
+            meta_get_version: unsafe { load_symbol(&loaded_library, "meta_get_version")? },
+            cleanup: unsafe { load_symbol(&loaded_library, "cleanup")? },
             _lib: loaded_library,
         })
     }

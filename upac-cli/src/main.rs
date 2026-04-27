@@ -23,7 +23,7 @@ mod config;
 mod upac;
 
 pub mod ffi;
-pub mod types;
+pub mod utils;
 
 mod commands {
     pub mod install;
