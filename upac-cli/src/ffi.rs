@@ -23,10 +23,11 @@ pub struct CSlice {
 
 impl CSlice {
     // Constructs a CSlice from a Rust string slice
-    pub fn from_str(string: &str) -> Self {
+    pub fn from_cstr(s: &CStr) -> Self {
+        let bytes = s.to_bytes(); // без нуля, но ptr[len] == 0 гарантирован
         Self {
-            ptr: string.as_ptr(),
-            len: string.len(),
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
         }
     }
 
