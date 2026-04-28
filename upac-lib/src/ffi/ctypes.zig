@@ -41,29 +41,17 @@ pub const fromError = errors.fromError;
 
 // A C-compatible slice analogue. It stores a pointer to the data and its length. It allows for easy conversion of data between Zig and an external interface
 pub const CSlice = extern struct {
-    ptr: ?[*]const u8,
+    ptr: [*:0]const u8,
     len: usize,
 
     // Converts a native Zig slice into a C-compatible CSlice struct, packaging the pointer and length
     pub fn fromSlice(slice: []const u8) CSlice {
-        return .{ .ptr = slice.ptr, .len = slice.len };
+        return .{ .ptr = @ptrCast(slice.ptr), .len = slice.len };
     }
 
     // It performs the inverse operation—reconstructing a safe Zig slice from data received via a C interface—so that it can be manipulated using standard language constructs
     pub fn toSlice(self: CSlice) []const u8 {
-        const ptr = self.ptr orelse return "";
-
-        if (self.len > std.posix.PATH_MAX) return "";
-
-        return ptr[0..self.len];
-    }
-
-    // A simple check to determine whether a passed string or data array is empty (i.e., has zero length)
-    pub fn validate(self: CSlice) bool {
-        const ptr = self.ptr orelse return false;
-        if (self.len == 0) return false;
-
-        return ptr[self.len] == 0;
+        return self.ptr[0..self.len :0];
     }
 };
 
@@ -94,8 +82,6 @@ pub const CPackageEntry = extern struct {
         if (self.struct_size != @sizeOf(CPackageEntry)) return error.AbiMismatch;
 
         if (@intFromPtr(self.meta) == 0) return error.InvalidEntry;
-        if (!self.temp_path.validate()) return error.InvalidEntry;
-        if (!self.checksum.validate()) return error.InvalidEntry;
     }
 };
 
@@ -118,16 +104,6 @@ pub const CPackageMeta = extern struct {
 
     pub fn validate(self: CPackageMeta) !void {
         if (self.struct_size != @sizeOf(CPackageMeta)) return error.AbiMismatch;
-
-        if (!self.name.validate()) return error.InvalidEntry;
-        if (!self.version.validate()) return error.InvalidEntry;
-        if (!self.architecture.validate()) return error.InvalidEntry;
-        if (!self.author.validate()) return error.InvalidEntry;
-        if (!self.description.validate()) return error.InvalidEntry;
-        if (!self.license.validate()) return error.InvalidEntry;
-        if (!self.url.validate()) return error.InvalidEntry;
-        if (!self.packager.validate()) return error.InvalidEntry;
-        if (!self.checksum.validate()) return error.InvalidEntry;
     }
 };
 
@@ -165,16 +141,6 @@ pub const CInstallRequest = extern struct {
         if (self.struct_size != @sizeOf(CInstallRequest)) return error.AbiMismatch;
 
         if (self.packages_count > 0 and self.packages == null) return error.InvalidEntry;
-
-        if (!self.repo_path.validate()) return error.InvalidEntry;
-        if (!self.root_path.validate()) return error.InvalidEntry;
-        if (!self.db_path.validate()) return error.InvalidEntry;
-        if (!self.branch.validate()) return error.InvalidEntry;
-        if (!self.prefix_directory.validate()) return error.InvalidEntry;
-
-        if (self.packages) |pkgs| {
-            for (pkgs[0..self.packages_count]) |pkg| try pkg.validate();
-        }
     }
 };
 
@@ -213,18 +179,6 @@ pub const CUninstallRequest = extern struct {
         if (self.struct_size != @sizeOf(CUninstallRequest)) return error.AbiMismatch;
 
         if (self.package_names_len > 0 and self.package_names == null) return error.InvalidEntry;
-
-        if (!self.repo_path.validate()) return error.InvalidEntry;
-        if (!self.root_path.validate()) return error.InvalidEntry;
-        if (!self.db_path.validate()) return error.InvalidEntry;
-        if (!self.branch.validate()) return error.InvalidEntry;
-        if (!self.prefix_directory.validate()) return error.InvalidEntry;
-
-        if (self.package_names) |names| {
-            for (names[0..self.package_names_len]) |name| {
-                if (!name.validate()) return error.InvalidEntry;
-            }
-        }
     }
 };
 
@@ -257,7 +211,6 @@ pub const CDiffEntry = extern struct {
     pub fn validate(self: CDiffEntry) !void {
         if (self.struct_size != @sizeOf(CDiffEntry)) return error.AbiMismatch;
         _ = std.meta.intToEnum(CDiffKind, @intFromEnum(self.kind)) catch return error.InvalidEntry;
-        if (!self.path.validate()) return error.InvalidEntry;
     }
 };
 
@@ -280,7 +233,6 @@ pub const CPackageDiffEntry = extern struct {
     pub fn validate(self: CPackageDiffEntry) !void {
         if (self.struct_size != @sizeOf(CPackageDiffEntry)) return error.AbiMismatch;
         _ = std.meta.intToEnum(CPackageDiffKind, @intFromEnum(self.kind)) catch return error.InvalidEntry;
-        if (!self.name.validate()) return error.InvalidEntry;
     }
 };
 
@@ -303,8 +255,6 @@ pub const CAttributedDiffEntry = extern struct {
     pub fn validate(self: CAttributedDiffEntry) !void {
         if (self.struct_size != @sizeOf(CAttributedDiffEntry)) return error.AbiMismatch;
         _ = std.meta.intToEnum(CPackageDiffKind, @intFromEnum(self.kind)) catch return error.InvalidEntry;
-        if (!self.path.validate()) return error.InvalidEntry;
-        if (!self.package_name.validate()) return error.InvalidEntry;
     }
 };
 
@@ -326,9 +276,6 @@ pub const CCommitEntry = extern struct {
 
     pub fn validate(self: CCommitEntry) !void {
         if (self.struct_size != @sizeOf(CCommitEntry)) return error.AbiMismatch;
-
-        if (!self.checksum.validate()) return error.InvalidEntry;
-        if (!self.subject.validate()) return error.InvalidEntry;
     }
 };
 
@@ -356,12 +303,6 @@ pub const CRollbackRequest = extern struct {
 
     pub fn validate(self: CRollbackRequest) !void {
         if (self.struct_size != @sizeOf(CRollbackRequest)) return error.AbiMismatch;
-
-        if (!self.root_path.validate()) return error.InvalidEntry;
-        if (!self.repo_path.validate()) return error.InvalidEntry;
-
-        if (!self.branch.validate()) return error.InvalidEntry;
-        if (!self.commit_hash.validate()) return error.InvalidEntry;
     }
 };
 
@@ -392,17 +333,7 @@ pub const CInitRequest = extern struct {
 
     pub fn validate(self: CInitRequest) !void {
         if (self.struct_size != @sizeOf(CInitRequest)) return error.AbiMismatch;
-
-        if (!self.repo_path.validate()) return error.InvalidEntry;
-        if (!self.root_path.validate()) return error.InvalidEntry;
-        if (!self.prefix.validate()) return error.InvalidEntry;
-        if (!self.branch.validate()) return error.InvalidEntry;
-
         _ = std.meta.intToEnum(CRepoMode, @intFromEnum(self.repo_mode)) catch return error.InvalidEntry;
-
-        for (self.addition_prefixes.toSlice()) |prefix| {
-            if (!prefix.validate()) return error.InvalidEntry;
-        }
     }
 };
 

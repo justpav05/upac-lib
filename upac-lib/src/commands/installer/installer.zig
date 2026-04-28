@@ -13,9 +13,6 @@ const states = @import("states.zig");
 const stateFailed = states.stateFailed;
 
 const utils = @import("utils.zig");
-const onCancelSignal = utils.onCancelSignal;
-const signalLoopThread = utils.signalLoopThread;
-
 // ── Public imports ─────────────────────────────────────────────────────────────────────
 pub const std = @import("std");
 

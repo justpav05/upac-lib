@@ -14,8 +14,6 @@ const fromError = installer_module.ffi.fromError;
 
 // The main entry point for package installation. It gathers installation data from the request, initializes the installation engine, and returns an error code as an i32
 pub fn install(install_request_c: CInstallRequest) callconv(.c) i32 {
-    install_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.install));
-
     var arena_allocator = std.heap.ArenaAllocator.init(installer_module.ffi.allocator());
     defer arena_allocator.deinit();
 
@@ -43,12 +41,6 @@ pub fn install(install_request_c: CInstallRequest) callconv(.c) i32 {
     };
 
     return @intFromEnum(ErrorCode.ok);
-}
-
-fn onInstallProgress(event: InstallProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.c) void {
-    _ = ctx;
-    _ = event;
-    _ = pkg;
 }
 
 // An internal helper function that converts the C struct CPackageMeta to native PackageMeta, translating CSlices into regular slices ([]const u8)

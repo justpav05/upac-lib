@@ -18,10 +18,7 @@ const check = diff.check;
 const unwrap = diff.unwrap;
 
 // Checks out two refs and compares their file trees using ostree_diff_dirs
-pub fn diffFiles(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, root_path_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]DiffEntry {
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
-
+pub fn diffFiles(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, root_path_c: [*:0]u8, gerror: *[*c]c_libs.GError, cancellable: [*c]c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]DiffEntry {
     var from_checkout_buf: [256]u8 = undefined;
     var to_checkout_buf: [256]u8 = undefined;
     const timestamp = std.time.milliTimestamp();
@@ -91,7 +88,7 @@ pub fn diffFiles(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, r
 }
 
 // Enriches a file diff with package attribution by mapping each changed path to its owning package
-pub fn diffFilesAttributed(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, root_path: [*:0]u8, db_path: []const u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]AttributedDiffEntry {
+pub fn diffFilesAttributed(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, root_path: [*:0]u8, db_path: []const u8, cancellable: [*c]c_libs.GCancellable, allocator: std.mem.Allocator) DiffError![]AttributedDiffEntry {
     const raw_diff = diffFiles(repo_path_c, from_ref_c, to_ref_c, root_path, cancellable, allocator) catch return error.DiffFailed;
     defer {
         for (raw_diff) |entry| allocator.free(entry.path);
@@ -127,9 +124,7 @@ pub fn diffFilesAttributed(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: 
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
-fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [*:0]u8, destination_path: [*:0]u8, cancellable: ?*c_libs.GCancellable) DiffError!void {
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
+fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [*:0]u8, destination_path: [*:0]u8, cancellable: [*c]c_libs.GCancellable, gerror: *[*c]c_libs.GError) DiffError!void {
     var resolved_checksum: [*c]u8 = null;
     defer if (resolved_checksum != null) c_libs.g_free(resolved_checksum);
 
@@ -154,10 +149,7 @@ fn checkoutRef(repo: *c_libs.OstreeRepo, ref_c: [*:0]u8, destination_path: [*:0]
     if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, destination_path, resolved_checksum, cancellable, &gerror) == 0) return DiffError.DiffFailed;
 }
 
-fn buildFilePkgMap(repo_path_c: [*:0]u8, ref_c: [*:0]u8, db_path: []const u8, out: *std.StringHashMap([]const u8), cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError!void {
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
-
+fn buildFilePkgMap(repo_path_c: [*:0]u8, ref_c: [*:0]u8, db_path: []const u8, out: *std.StringHashMap([]const u8), cancellable: [*c]c_libs.GCancellable, gerror: *[*c]c_libs.GError, allocator: std.mem.Allocator) DiffError!void {
     const repo = try openRepo(repo_path_c, cancellable, &gerror);
     defer c_libs.g_object_unref(repo);
 

@@ -80,10 +80,7 @@ fn checkFileExists(path: [*:0]u8) !bool {
     return stat.kind == .file;
 }
 
-fn initOstreeRepo(repo_path_c: [*:0]u8, repo_mode: RepoMode, branch_c: [*:0]u8) !void {
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
-
+fn initOstreeRepo(repo_path_c: [*:0]u8, repo_mode: RepoMode, branch_c: [*:0]u8, gerror: [*c]c_libs.GError) !void {
     const struct_g_file = c_libs.g_file_new_for_path(repo_path_c);
     defer c_libs.g_object_unref(struct_g_file);
 

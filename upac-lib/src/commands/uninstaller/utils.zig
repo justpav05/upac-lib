@@ -10,8 +10,9 @@ const UninstallerError = uninstaller.UninstallerError;
 const stateFailed = uninstaller.stateFailed;
 
 // ── Helpers functions ─────────────────────────────────────────────────────────────────────
-// Removes the file entry from the file table of the corresponding directory
 pub fn removeFromMtree(repo: *c_libs.OstreeRepo, root_mtree: *c_libs.OstreeMutableTree, relative_path: []const u8, allocator: std.mem.Allocator) UninstallerError!void {
+    _ = repo;
+
     var gerror: ?*c_libs.GError = null;
     defer if (gerror) |err| c_libs.g_error_free(@ptrCast(err));
 
@@ -24,36 +25,34 @@ pub fn removeFromMtree(repo: *c_libs.OstreeRepo, root_mtree: *c_libs.OstreeMutab
     }
     if (path_components.items.len == 0) return;
 
-    var current_subtree = root_mtree;
-    for (path_components.items[0 .. path_components.items.len - 1]) |directory_component| {
-        const contents_checksum = c_libs.ostree_mutable_tree_get_contents_checksum(current_subtree);
-        const metadata_checksum = c_libs.ostree_mutable_tree_get_metadata_checksum(current_subtree);
-        if (contents_checksum != null and metadata_checksum != null) {
-            _ = c_libs.ostree_mutable_tree_fill_empty_from_dirtree(current_subtree, repo, contents_checksum, metadata_checksum);
-        }
+    var current_subtree: *c_libs.OstreeMutableTree = @ptrCast(@alignCast(c_libs.g_object_ref(root_mtree)));
+    defer c_libs.g_object_unref(current_subtree);
 
+    for (path_components.items[0 .. path_components.items.len - 1]) |directory_component| {
         const directory_component_c = allocator.dupeZ(u8, directory_component) catch return error.AllocZFailed;
         defer allocator.free(directory_component_c);
 
         var out_file_checksum: [*c]u8 = null;
         var out_subdir: ?*c_libs.OstreeMutableTree = null;
 
-        if (c_libs.ostree_mutable_tree_lookup(current_subtree, directory_component_c.ptr, &out_file_checksum, &out_subdir, &gerror) == 0) return error.FileNotFound;
+        // `ostree_mutable_tree_lookup` lazily materialises the subtree from the
+        // underlying commit, so it is the right primitive to use here.
+        if (c_libs.ostree_mutable_tree_lookup(current_subtree, directory_component_c.ptr, &out_file_checksum, &out_subdir, &gerror) == 0) {
+            if (out_file_checksum != null) c_libs.g_free(out_file_checksum);
+            return error.FileNotFound;
+        }
 
-        if (out_subdir == null) return;
-        current_subtree = out_subdir.?;
-    }
+        if (out_file_checksum != null) c_libs.g_free(out_file_checksum);
 
-    const contents_checksum = c_libs.ostree_mutable_tree_get_contents_checksum(current_subtree);
-    const metadata_checksum = c_libs.ostree_mutable_tree_get_metadata_checksum(current_subtree);
-    if (contents_checksum != null and metadata_checksum != null) {
-        _ = c_libs.ostree_mutable_tree_fill_empty_from_dirtree(current_subtree, repo, contents_checksum, metadata_checksum);
+        const next = out_subdir orelse return error.FileNotFound;
+        c_libs.g_object_unref(current_subtree);
+        current_subtree = next;
     }
 
     const file_name_c = allocator.dupeZ(u8, path_components.items[path_components.items.len - 1]) catch return error.AllocZFailed;
     defer allocator.free(file_name_c);
 
-    if (c_libs.ostree_mutable_tree_remove(current_subtree, file_name_c.ptr, 0, &gerror) == 0) return error.FileNotFound;
+    if (c_libs.ostree_mutable_tree_remove(current_subtree, file_name_c.ptr, 1, &gerror) == 0) return error.FileNotFound;
 }
 
 pub fn resolveMtree(machine: *UninstallerMachine, repo: *c_libs.OstreeRepo) ?*c_libs.OstreeMutableTree {
@@ -114,14 +113,4 @@ pub fn buildCommitSubject(machine: *UninstallerMachine) UninstallerError![:0]u8 
     for (machine.data.package_names, 0..) |name, index| try machine.check(writer.print("{s}{s}", .{ if (index == 0) " " else ", ", name }), UninstallerError.AllocZFailed);
 
     return machine.check(machine.allocator.dupeZ(u8, buf.written()), UninstallerError.AllocZFailed);
-}
-
-pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.c) c_libs.gboolean {
-    const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
-    c_libs.g_cancellable_cancel(cancellable);
-    return c_libs.G_SOURCE_REMOVE;
-}
-
-pub fn signalLoopThread(loop: *c_libs.GMainLoop) void {
-    c_libs.g_main_loop_run(loop);
 }

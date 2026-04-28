@@ -22,13 +22,7 @@ pub const DiffError = error{
 };
 
 // Returns the installed package metadata list from the latest commit on a branch
-pub fn listPackages(repo_path_c: [*:0]u8, branch_c: [*:0]u8, db_path: []const u8, allocator: std.mem.Allocator) DiffError![]PackageMeta {
-    var gerror: [*c]c_libs.GError = null;
-    defer if (gerror != null) c_libs.g_error_free(gerror);
-
-    const cancellable = c_libs.g_cancellable_new() orelse return DiffError.Cancelled;
-    defer c_libs.g_object_unref(cancellable);
-
+pub fn listPackages(repo_path_c: [*:0]u8, branch_c: [*:0]u8, db_path: []const u8, cancellable: [*c]c_libs.GCancellable, gerror: [*c]c_libs.GError, allocator: std.mem.Allocator) DiffError![]PackageMeta {
     const repo = try openRepo(repo_path_c, cancellable, &gerror);
     defer c_libs.g_object_unref(repo);
 
@@ -58,10 +52,7 @@ pub fn listPackages(repo_path_c: [*:0]u8, branch_c: [*:0]u8, db_path: []const u8
 }
 
 // Walks the commit chain of a branch and returns all commits as a slice
-pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, allocator: std.mem.Allocator) DiffError![]CommitEntry {
-    var gerror: [*c]c_libs.GError = null;
-    defer if (gerror != null) c_libs.g_error_free(gerror);
-
+pub fn listCommits(repo_path_c: [*:0]u8, branch_c: [*:0]u8, gerror: [*c]c_libs.GError, allocator: std.mem.Allocator) DiffError![]CommitEntry {
     const cancellable = c_libs.g_cancellable_new() orelse return DiffError.Cancelled;
     defer c_libs.g_object_unref(cancellable);
 
@@ -180,7 +171,7 @@ fn openRepo(repo_path_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, gerror: *[
     return try unwrap(repo, DiffError.RepoOpenFailed);
 }
 
-fn checkCancel(cancellable: *c_libs.GCancellable, gerror: [*c]c_libs.GError) DiffError!void {
+fn checkCancel(cancellable: *[*c]c_libs.GCancellable, gerror: [*c]c_libs.GError) DiffError!void {
     if (!ffi.isCancelRequested()) return;
     if (gerror == null) return;
     c_libs.g_cancellable_cancel(cancellable);

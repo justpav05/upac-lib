@@ -23,8 +23,6 @@ const PackageListInner = struct {
 };
 
 pub fn list_packages(repo_path: CSlice, branch: CSlice, db_path_c: CSlice, out_c: **anyopaque) callconv(.c) i32 {
-    validateListPackagesRequest(repo_path, branch, db_path_c) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
-
     var arena_allocator = std.heap.ArenaAllocator.init(list_module.ffi.allocator());
     defer arena_allocator.deinit();
 
@@ -45,12 +43,6 @@ pub fn list_packages(repo_path: CSlice, branch: CSlice, db_path_c: CSlice, out_c
 
     out_c.* = package_list_inner;
     return @intFromEnum(ErrorCode.ok);
-}
-
-fn validateListPackagesRequest(repo_path: CSlice, branch: CSlice, db_path: CSlice) !void {
-    if (!repo_path.validate()) return error.InvalidEntry;
-    if (!branch.validate()) return error.InvalidEntry;
-    if (!db_path.validate()) return error.InvalidEntry;
 }
 
 fn freeCPackageMeta(meta: *CPackageMeta, allocator: std.mem.Allocator) void {
@@ -118,8 +110,6 @@ pub fn packages_free(handle: *anyopaque) callconv(.c) void {
 }
 
 pub fn list_commits(repo_path: CSlice, branch: CSlice, out_c: *CCommitArray) callconv(.c) i32 {
-    validateListCommitsRequest(repo_path, branch) catch return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
-
     var arena_allocator = std.heap.ArenaAllocator.init(list_module.ffi.allocator());
     defer arena_allocator.deinit();
 
@@ -150,11 +140,6 @@ pub fn list_commits(repo_path: CSlice, branch: CSlice, out_c: *CCommitArray) cal
 
     out_c.* = .{ .ptr = commit_entries_c.ptr, .len = commit_entries_c.len };
     return @intFromEnum(ErrorCode.ok);
-}
-
-fn validateListCommitsRequest(repo_path: CSlice, branch: CSlice) !void {
-    if (!repo_path.validate()) return error.InvalidEntry;
-    if (!branch.validate()) return error.InvalidEntry;
 }
 
 pub fn commits_free(out_c: *CCommitArray) callconv(.c) void {

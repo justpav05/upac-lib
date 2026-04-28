@@ -10,8 +10,6 @@ const fromError = rollback_module.ffi.fromError;
 
 // Reverts the system state to a specific commit hash in the OSTree repository
 pub fn rollback(rollback_request_c: CRollbackRequest) callconv(.c) i32 {
-    rollback_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.rollback));
-
     var arena_allocator = std.heap.ArenaAllocator.init(rollback_module.ffi.allocator());
     defer arena_allocator.deinit();
 

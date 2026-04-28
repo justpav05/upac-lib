@@ -14,10 +14,7 @@ const check = diff.check;
 const unwrap = diff.unwrap;
 
 // Compares the package sets of two commits and returns a list of added, removed, and updated packages
-pub fn diffPackages(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) ![]PackageDiffEntry {
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
-
+pub fn diffPackages(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8, cancellable: [*c]c_libs.GCancellable, gerror: *[*c]c_libs.GError, allocator: std.mem.Allocator) ![]PackageDiffEntry {
     const repo = try openRepo(repo_path_c, cancellable, &gerror);
     defer c_libs.g_object_unref(repo);
 
@@ -64,10 +61,7 @@ pub fn diffPackages(repo_path_c: [*:0]u8, from_ref_c: [*:0]u8, to_ref_c: [*:0]u8
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
-pub fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref_c: [*:0]u8, cancellable: ?*c_libs.GCancellable, allocator: std.mem.Allocator) DiffError!?[]const u8 {
-    _ = cancellable;
-    var gerror: ?*c_libs.GError = null;
-    defer if (gerror) |err| c_libs.g_error_free(err);
+pub fn getRefBody(repo: *c_libs.OstreeRepo, ostree_ref_c: [*:0]u8, gerror: *[*c]c_libs.GError, allocator: std.mem.Allocator) DiffError!?[]const u8 {
     var checksum: [*c]u8 = null;
     defer if (checksum) |checksum_unwraped| c_libs.g_free(@ptrCast(checksum_unwraped));
 

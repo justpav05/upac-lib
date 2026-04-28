@@ -11,8 +11,6 @@ const fromError = init_module.ffi.fromError;
 
 // Initializes system paths and the OSTree repository in the selected mode (archive, bare, etc.)
 pub fn init(init_request_c: CInitRequest) callconv(.c) i32 {
-    init_request_c.validate() catch return @intFromEnum(fromError(error.InvalidEntry, Operation.init));
-
     var arena_allocator = std.heap.ArenaAllocator.init(init_module.ffi.allocator());
     defer arena_allocator.deinit();
 

@@ -180,14 +180,11 @@ fn stateCommit(machine: *UninstallerMachine) UninstallerError!void {
     const repo = try machine.unwrap(machine.repo, error.RepoOpenFailed);
     const mtree = try machine.unwrap(machine.mtree, error.PackageNotFound);
 
-    var body_buf = std.ArrayList(u8).empty;
-    defer body_buf.deinit(machine.allocator);
-
     var body_alloc = std.Io.Writer.Allocating.init(machine.allocator);
     defer body_alloc.deinit();
     try buildCommitBody(machine, repo, machine.previous_commit_checksum, &body_alloc.writer);
 
-    const body_c = try machine.check(machine.allocator.dupeZ(u8, body_buf.items), UninstallerError.AllocZFailed);
+    const body_c = try machine.check(machine.allocator.dupeZ(u8, body_alloc.written()), UninstallerError.AllocZFailed);
     defer machine.allocator.free(body_c);
 
     var out_g_file: ?*c_libs.GFile = null;
@@ -222,7 +219,7 @@ fn stateCheckoutStaging(machine: *UninstallerMachine) UninstallerError!void {
 
     var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
-    options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_NONE;
+    options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
 
     if (c_libs.ostree_repo_checkout_at(repo, &options, std.c.AT.FDCWD, machine.staging_path_c.?, machine.commit_checksum.?, machine.cancellable, &machine.gerror) == 0) {
         const staging_path_c = try machine.unwrap(machine.staging_path_c, UninstallerError.CheckoutFailed);

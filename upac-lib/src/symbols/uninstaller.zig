@@ -12,8 +12,6 @@ const fromError = uninstaller_module.ffi.fromError;
 
 // An exported function for deleting a package. It extracts the parameters (paths, package name, retry limits) and initiates the deletion process
 pub fn uninstall(uninstall_request_c: CUninstallRequest) callconv(.c) i32 {
-    uninstall_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.uninstall));
-
     var arena_allocator = std.heap.ArenaAllocator.init(uninstaller_module.ffi.allocator());
     defer arena_allocator.deinit();
 
@@ -48,10 +46,4 @@ pub fn uninstall(uninstall_request_c: CUninstallRequest) callconv(.c) i32 {
         return @intFromEnum(fromError(err, Operation.uninstall));
 
     return @intFromEnum(ErrorCode.ok);
-}
-
-fn onUninstallProgress(event: UninstallProgressEvent, pkg: CSlice, ctx: ?*anyopaque) callconv(.c) void {
-    _ = ctx;
-    _ = event;
-    _ = pkg;
 }

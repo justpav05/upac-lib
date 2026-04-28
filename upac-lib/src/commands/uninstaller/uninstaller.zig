@@ -5,10 +5,6 @@ const UninstallStateId = ffi.UninstallStateId;
 const UninstallProgressFn = ffi.UninstallProgressFn;
 
 const states = @import("states.zig");
-const utils = @import("utils.zig");
-
-const onCancelSignal = utils.onCancelSignal;
-const signalLoopThread = utils.signalLoopThread;
 
 // ── Public imports ─────────────────────────────────────────────────────────────────────
 pub const std = @import("std");
@@ -206,12 +202,6 @@ pub const UninstallerMachine = struct {
 
     // Entry point: initializes the uninstallation engine and launches the package removal process
     pub fn run(uninstall_data: UninstallData, allocator: std.mem.Allocator) !void {
-        const sigint_src = c_libs.g_unix_signal_source_new(std.posix.SIG.INT);
-        const sigterm_src = c_libs.g_unix_signal_source_new(std.posix.SIG.TERM);
-
-        const signal_ctx = c_libs.g_main_context_new();
-        defer c_libs.g_main_context_unref(signal_ctx);
-
         var machine = UninstallerMachine{
             .data = uninstall_data,
 
@@ -230,17 +220,6 @@ pub const UninstallerMachine = struct {
             .allocator = allocator,
         };
         defer machine.deinit();
-
-        c_libs.g_source_set_callback(sigint_src, @ptrCast(&onCancelSignal), machine.cancellable, null);
-        _ = c_libs.g_source_attach(sigint_src, signal_ctx);
-        c_libs.g_source_unref(sigint_src);
-
-        c_libs.g_source_set_callback(sigterm_src, @ptrCast(&onCancelSignal), machine.cancellable, null);
-        _ = c_libs.g_source_attach(sigterm_src, signal_ctx);
-        c_libs.g_source_unref(sigterm_src);
-
-        machine.signal_loop = c_libs.g_main_loop_new(signal_ctx, 0);
-        machine.signal_thread = std.Thread.spawn(.{}, signalLoopThread, .{machine.signal_loop.?}) catch null;
 
         try states.stateVerifying(&machine);
     }
