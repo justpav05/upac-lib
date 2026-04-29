@@ -1,18 +1,17 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const CSlice = ffi.CSlice;
 
-const InstallStateId = ffi.InstallStateId;
-const InstallProgressFn = ffi.InstallProgressFn;
-
 const Package = ffi.Package;
 const PackageMeta = ffi.PackageMeta;
+
+const InstallStateId = ffi.InstallStateId;
+const InstallProgressFn = ffi.InstallProgressFn;
 
 const isCancelRequested = ffi.isCancelRequested;
 
 const states = @import("states.zig");
 const stateFailed = states.stateFailed;
 
-const utils = @import("utils.zig");
 // ── Public imports ─────────────────────────────────────────────────────────────────────
 pub const std = @import("std");
 

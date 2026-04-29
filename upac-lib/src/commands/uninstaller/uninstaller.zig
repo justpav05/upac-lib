@@ -1,21 +1,22 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
-const data = @import("upac-data");
 
 const UninstallStateId = ffi.UninstallStateId;
 const UninstallProgressFn = ffi.UninstallProgressFn;
 
+const isCancelRequested = ffi.isCancelRequested;
+
+const data = @import("upac-data");
+
 const states = @import("states.zig");
+const stateFailed = states.stateFailed;
 
 // ── Public imports ─────────────────────────────────────────────────────────────────────
-pub const std = @import("std");
 pub const ffi = @import("upac-ffi");
 pub const c_libs = ffi.c_libs;
 
 pub const CSlice = ffi.CSlice;
 
-const isCancelRequested = ffi.isCancelRequested;
-
-pub const stateFailed = states.stateFailed;
+pub const std = @import("std");
 
 // ── Errors ─────────────────────────────────────────────────────────────────────
 // Errors specific to the removal process

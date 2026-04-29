@@ -1,6 +1,5 @@
 // ── Imports ─────────────────────────────────────────────────────────────────────
 const CSlice = ffi.CSlice;
-const CommitEntry = ffi.CommitEntry;
 
 const RollbackStateId = ffi.RollbackStateId;
 const RollbackProgressFn = ffi.RollbackProgressFn;
@@ -9,13 +8,11 @@ const states = @import("states.zig");
 const stateFailed = states.stateFailed;
 const stateVerifying = states.stateVerifying;
 
-const utils = @import("utils.zig");
-
-// ──Public imports ─────────────────────────────────────────────────────────────────────
-pub const std = @import("std");
-pub const ffi = @import("upac-ffi");
 const isCancelRequested = ffi.isCancelRequested;
 
+// ──Public imports ─────────────────────────────────────────────────────────────────────
+pub const ffi = @import("upac-ffi");
+pub const std = @import("std");
 pub const c_libs = ffi.c_libs;
 
 // ── Errors ─────────────────────────────────────────────────────────────────────

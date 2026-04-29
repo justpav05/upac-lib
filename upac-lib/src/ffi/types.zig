@@ -66,12 +66,6 @@ pub const AttributedDiffEntry = struct {
     package_name: []const u8,
 };
 
-// A structure for storing information about a specific "restore point"
-pub const CommitEntry = struct {
-    checksum: []const u8,
-    subject: []const u8,
-};
-
 // Listing of file change types: added, removed, modified
 pub const DiffKind = enum { added, removed, modified };
 
@@ -124,4 +118,12 @@ pub const RollbackStateId = enum(u8) {
 
     done = 7,
     failed = 8,
+};
+
+pub const ListStateId = enum(u8) {
+    open_repo = 0,
+    list_packages = 1,
+    list_commits = 2,
+    done = 3,
+    failed = 4,
 };

@@ -4,145 +4,114 @@ const std = list_module.std;
 const c_libs = list_module.c_libs;
 const data = list_module.data;
 
-const PackageMeta = list_module.ffi.PackageMeta;
-
 const CSlice = list_module.ffi.CSlice;
+const CArray = list_module.ffi.CArray;
 const CPackageMeta = list_module.ffi.CPackageMeta;
 
-const CCommitArray = list_module.ffi.CCommitArray;
 const CCommitEntry = list_module.ffi.CCommitEntry;
+
+const CListRequest = list_module.ffi.CUnmutatedRequest;
 
 const ErrorCode = list_module.ffi.ErrorCode;
 const Operation = list_module.ffi.Operation;
 
 const fromError = list_module.ffi.fromError;
 
-const PackageListInner = struct {
-    packages: []PackageMeta,
-    allocator: std.mem.Allocator,
-};
-
-pub fn list_packages(repo_path: CSlice, branch: CSlice, db_path_c: CSlice, out_c: **anyopaque) callconv(.c) i32 {
-    var arena_allocator = std.heap.ArenaAllocator.init(list_module.ffi.allocator());
-    defer arena_allocator.deinit();
-
-    const repo_path_c = arena_allocator.allocator().dupeZ(u8, repo_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
-    const branch_c = arena_allocator.allocator().dupeZ(u8, branch.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
-
-    const packages = list_module.listPackages(repo_path_c, branch_c, db_path_c.toSlice(), list_module.ffi.allocator()) catch |err| {
-        if (err == error.Cancelled) list_module.ffi.global_cancel.store(true, .release);
-        return @intFromEnum(fromError(err, Operation.list));
-    };
-
-    const package_list_inner = list_module.ffi.allocator().create(PackageListInner) catch {
-        for (packages) |pkg| data.freePackageMeta(pkg, list_module.ffi.allocator());
-        list_module.ffi.allocator().free(packages);
-        return @intFromEnum(ErrorCode.out_of_memory);
-    };
-    package_list_inner.* = .{ .packages = packages, .allocator = list_module.ffi.allocator() };
-
-    out_c.* = package_list_inner;
-    return @intFromEnum(ErrorCode.ok);
-}
-
-fn freeCPackageMeta(meta: *CPackageMeta, allocator: std.mem.Allocator) void {
-    allocator.free(meta.name.toSlice());
-    allocator.free(meta.version.toSlice());
-    allocator.free(meta.architecture.toSlice());
-    allocator.free(meta.author.toSlice());
-    allocator.free(meta.description.toSlice());
-    allocator.free(meta.license.toSlice());
-    allocator.free(meta.url.toSlice());
-    allocator.free(meta.packager.toSlice());
-    allocator.free(meta.checksum.toSlice());
-}
-
-pub fn packages_count(handle: *anyopaque) callconv(.c) usize {
-    const package_list_inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    return package_list_inner.packages.len;
-}
-
-pub fn package_get_slice_field(handle: ?*anyopaque, index: usize, field: u8, out: ?*CSlice) callconv(.c) i32 {
-    const out_ptr = out orelse return @intFromEnum(fromError(error.db_invalid_entry, Operation.list));
-    const package_list_inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= package_list_inner.packages.len) return @intFromEnum(fromError(error.db_invalid_entry, Operation.list));
-
-    const package_meta = package_list_inner.packages[index];
-    const result_field = switch (field) {
-        0 => package_meta.name,
-        1 => package_meta.version,
-        2 => package_meta.architecture,
-        3 => package_meta.author,
-        4 => package_meta.description,
-        5 => package_meta.license,
-        6 => package_meta.url,
-        7 => package_meta.packager,
-        8 => package_meta.checksum,
-        else => return @intFromEnum(fromError(error.db_invalid_entry, Operation.list)),
-    };
-
-    out_ptr.* = CSlice.fromSlice(result_field);
-    return @intFromEnum(ErrorCode.ok);
-}
-
-pub fn package_get_int_field(handle: ?*anyopaque, index: usize, field: u8, out: ?*u32) callconv(.c) i32 {
-    const out_ptr = out orelse return @intFromEnum(fromError(error.db_invalid_entry, Operation.list));
-    const package_list_inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    if (index >= package_list_inner.packages.len) return @intFromEnum(fromError(error.db_invalid_entry, Operation.list));
-
-    const package_meta = package_list_inner.packages[index];
-    const result_field: u32 = switch (field) {
-        9 => @intCast(package_meta.size),
-        11 => @intCast(package_meta.installed_at),
-        else => return @intFromEnum(fromError(error.db_invalid_entry, Operation.list)),
-    };
-
-    out_ptr.* = result_field;
-    return @intFromEnum(ErrorCode.ok);
-}
-
-pub fn packages_free(handle: *anyopaque) callconv(.c) void {
-    const package_list_inner = @as(*PackageListInner, @ptrCast(@alignCast(handle)));
-    for (package_list_inner.packages) |package_meta| data.freePackageMeta(package_meta, package_list_inner.allocator);
-
-    package_list_inner.allocator.free(package_list_inner.packages);
-    package_list_inner.allocator.destroy(package_list_inner);
-}
-
-pub fn list_commits(repo_path: CSlice, branch: CSlice, out_c: *CCommitArray) callconv(.c) i32 {
-    var arena_allocator = std.heap.ArenaAllocator.init(list_module.ffi.allocator());
-    defer arena_allocator.deinit();
-
-    const repo_path_c = arena_allocator.allocator().dupeZ(u8, repo_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
-    const branch_c = arena_allocator.allocator().dupeZ(u8, branch.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall));
-
-    const commit_entries = list_module.listCommits(repo_path_c, branch_c, list_module.ffi.allocator()) catch |err| {
-        if (err == error.Cancelled) list_module.ffi.global_cancel.store(true, .release);
-        return @intFromEnum(fromError(err, Operation.list));
-    };
-
-    const commit_entries_c = list_module.ffi.allocator().alloc(CCommitEntry, commit_entries.len) catch {
-        for (commit_entries) |entry| {
-            list_module.ffi.allocator().free(entry.checksum);
-            list_module.ffi.allocator().free(entry.subject);
-        }
-        list_module.ffi.allocator().free(commit_entries);
-        return @intFromEnum(ErrorCode.out_of_memory);
-    };
-
-    for (commit_entries, 0..) |commit_entry, index| {
-        commit_entries_c[index] = .{
-            .checksum = CSlice.fromSlice(commit_entry.checksum),
-            .subject = CSlice.fromSlice(commit_entry.subject),
-        };
+pub fn list_packages(list_request_c: CListRequest, out_c: *CArray(CPackageMeta)) callconv(.c) i32 {
+    const required = [_]CSlice{ list_request_c.repo_path, list_request_c.branch, list_request_c.db_path };
+    for (required) |field| {
+        if (field.len == 0 or field.ptr[field.len] != 0)
+            return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
     }
-    list_module.ffi.allocator().free(commit_entries);
 
-    out_c.* = .{ .ptr = commit_entries_c.ptr, .len = commit_entries_c.len };
+    const packages = list_module.ListMachine.runPackages(.{
+        .repo_path = list_request_c.repo_path.asZ(),
+        .branch = list_request_c.branch.asZ(),
+        .db_path = list_request_c.db_path.toSlice(),
+    }, list_module.ffi.allocator()) catch |err| {
+        if (err == error.Cancelled) list_module.ffi.global_cancel.store(true, .release);
+        return @intFromEnum(fromError(err, Operation.list));
+    };
+
+    out_c.* = .{ .ptr = packages.ptr, .len = packages.len };
     return @intFromEnum(ErrorCode.ok);
 }
 
-pub fn commits_free(out_c: *CCommitArray) callconv(.c) void {
+pub fn packages_count(out_c: *CArray(CPackageMeta)) callconv(.c) usize {
+    return out_c.len;
+}
+
+pub fn package_get_slice_field(out_c: *CArray(CPackageMeta), index: usize, field: u8, out: ?*CSlice) callconv(.c) i32 {
+    const out_ptr = out orelse return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
+    if (index >= out_c.len) return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
+
+    const pkg = out_c.ptr[index];
+    const result = switch (field) {
+        0 => pkg.name,
+        1 => pkg.version,
+        2 => pkg.architecture,
+        3 => pkg.author,
+        4 => pkg.description,
+        5 => pkg.license,
+        6 => pkg.url,
+        7 => pkg.packager,
+        8 => pkg.checksum,
+        else => return @intFromEnum(fromError(error.InvalidEntry, Operation.list)),
+    };
+
+    out_ptr.* = result; // уже CSlice, fromSlice не нужен
+    return @intFromEnum(ErrorCode.ok);
+}
+
+pub fn package_get_int_field(out_c: *CArray(CPackageMeta), index: usize, field: u8, out: ?*u64) callconv(.c) i32 {
+    const out_ptr = out orelse return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
+    if (index >= out_c.len) return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
+
+    const pkg = out_c.ptr[index];
+    out_ptr.* = switch (field) {
+        9 => @intCast(pkg.size),
+        10 => @intCast(pkg.installed_at),
+        else => return @intFromEnum(fromError(error.InvalidEntry, Operation.list)),
+    };
+
+    return @intFromEnum(ErrorCode.ok);
+}
+
+pub fn packages_free(package_meta_array_c: *CArray(CPackageMeta)) callconv(.c) void {
+    const allocator = list_module.ffi.allocator();
+    for (package_meta_array_c.toSlice()) |package_meta_c| {
+        allocator.free(package_meta_c.name.toSlice());
+        allocator.free(package_meta_c.version.toSlice());
+        allocator.free(package_meta_c.architecture.toSlice());
+        allocator.free(package_meta_c.author.toSlice());
+        allocator.free(package_meta_c.description.toSlice());
+        allocator.free(package_meta_c.license.toSlice());
+        allocator.free(package_meta_c.url.toSlice());
+        allocator.free(package_meta_c.packager.toSlice());
+        allocator.free(package_meta_c.checksum.toSlice());
+    }
+    allocator.free(package_meta_array_c.toSlice());
+}
+
+pub fn list_commits(repo_path: CSlice, branch: CSlice, out_c: *CArray(CCommitEntry)) callconv(.c) i32 {
+    const required = [_]CSlice{ repo_path, branch };
+    for (required) |field| {
+        if (field.len == 0 or field.ptr[field.len] != 0) return @intFromEnum(fromError(error.InvalidEntry, Operation.list));
+    }
+
+    const commit_entries = list_module.ListMachine.runCommits(.{
+        .repo_path = repo_path.asZ(),
+        .branch = branch.asZ(),
+    }, list_module.ffi.allocator()) catch |err| {
+        if (err == error.Cancelled) list_module.ffi.global_cancel.store(true, .release);
+        return @intFromEnum(fromError(err, Operation.list));
+    };
+
+    out_c.* = .{ .ptr = commit_entries.ptr, .len = commit_entries.len };
+    return @intFromEnum(ErrorCode.ok);
+}
+
+pub fn commits_free(out_c: *CArray(CCommitEntry)) callconv(.c) void {
     const allocator = list_module.ffi.allocator();
     const entries = out_c.toSlice();
     for (entries) |entry| {

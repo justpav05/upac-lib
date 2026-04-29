@@ -28,18 +28,20 @@ pub fn uninstall(uninstall_request_c: CUninstallRequest) callconv(.c) i32 {
         if (name.len == 0 or name.ptr[name.len] != 0) return @intFromEnum(fromError(error.InvalidEntry, Operation.uninstall));
     }
 
-    const uninstall_data = uninstaller_module.UninstallData{
-        .package_names = packages_names_c,
-        .branch = uninstall_request_c.branch.asZ(),
+    const package_names = uninstaller_module.ffi.allocator().alloc([]const u8, packages_names_c.len) catch return @intFromEnum(ErrorCode.out_of_memory);
+    defer uninstaller_module.ffi.allocator().free(package_names);
 
+    for (packages_names_c, 0..) |name, i| package_names[i] = name.toSlice();
+
+    const uninstall_data = uninstaller_module.UninstallData{
+        .package_names = package_names,
+        .branch = uninstall_request_c.branch.asZ(),
         .repo_path = uninstall_request_c.repo_path.asZ(),
         .root_path = uninstall_request_c.root_path.asZ(),
         .database_path = uninstall_request_c.db_path.asZ(),
         .prefix_path = uninstall_request_c.prefix_directory.asZ(),
-
         .on_progress = if (uninstall_request_c.on_progress) |cb| @as(UninstallProgressFn, @ptrCast(cb)) else null,
         .progress_ctx = uninstall_request_c.progress_ctx,
-
         .max_retries = uninstall_request_c.max_retries,
     };
 

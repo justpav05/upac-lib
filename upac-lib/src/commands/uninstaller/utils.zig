@@ -7,8 +7,6 @@ const c_libs = uninstaller.c_libs;
 const UninstallerMachine = uninstaller.UninstallerMachine;
 const UninstallerError = uninstaller.UninstallerError;
 
-const stateFailed = uninstaller.stateFailed;
-
 // ── Helpers functions ─────────────────────────────────────────────────────────────────────
 pub fn removeFromMtree(repo: *c_libs.OstreeRepo, root_mtree: *c_libs.OstreeMutableTree, relative_path: []const u8, allocator: std.mem.Allocator) UninstallerError!void {
     _ = repo;

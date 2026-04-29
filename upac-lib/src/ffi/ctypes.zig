@@ -24,14 +24,14 @@ pub const PackageDiffEntry = types.PackageDiffEntry;
 
 pub const AttributedDiffEntry = types.AttributedDiffEntry;
 
-pub const CommitEntry = types.CommitEntry;
-
 pub const DiffKind = types.DiffKind;
 pub const DiffEntry = types.DiffEntry;
 
 pub const InstallStateId = types.InstallStateId;
 pub const UninstallStateId = types.UninstallStateId;
 pub const RollbackStateId = types.RollbackStateId;
+
+pub const ListStateId = types.ListStateId;
 
 // ── Reimports errors ─────────────────────────────────────────────────────────────────────
 const errors = @import("errors.zig");
@@ -70,6 +70,17 @@ pub const CSliceArray = extern struct {
         return self.ptr[0..self.len];
     }
 };
+
+pub fn CArray(comptime T: type) type {
+    return extern struct {
+        ptr: [*]T,
+        len: usize,
+
+        pub fn toSlice(self: @This()) []T {
+            return self.ptr[0..self.len];
+        }
+    };
+}
 
 pub const CPackageDiffKind = enum(u8) {
     added = 0,
@@ -113,17 +124,6 @@ pub const CPackageMeta = extern struct {
     }
 };
 
-pub const CPackageMetaArray = extern struct {
-    struct_size: usize = @sizeOf(CPackageMetaArray),
-
-    ptr: [*]CPackageMeta,
-    len: usize,
-
-    pub fn toSlice(self: CPackageMetaArray) []CPackageMeta {
-        return self.ptr[0..self.len];
-    }
-};
-
 pub const CMutatedRequest = extern struct {
     struct_size: usize = @sizeOf(CMutatedRequest),
 
@@ -156,6 +156,25 @@ pub const CMutatedRequest = extern struct {
         try self.db_path.validate();
         try self.branch.validate();
         try self.prefix_directory.validate();
+    }
+};
+
+// Request structure for initializing the system with branch specification
+pub const CUnmutatedRequest = extern struct {
+    struct_size: usize = @sizeOf(CUnmutatedRequest),
+
+    repo_path: CSlice,
+    root_path: CSlice,
+    db_path: CSlice,
+    branch: CSlice,
+    prefix: CSlice,
+
+    repo_mode: CRepoMode,
+
+    pub fn validate(self: CUnmutatedRequest) !void {
+        if (self.struct_size != @sizeOf(CUnmutatedRequest)) return error.AbiMismatch;
+        _ = std.meta.intToEnum(CRepoMode, @intFromEnum(self.repo_mode)) catch return error.InvalidEntry;
+        try self.repo_path.validate();
     }
 };
 
@@ -215,16 +234,6 @@ pub const CDiffEntry = extern struct {
     }
 };
 
-// A wrapper over pointers to arrays of structures used to pass dynamic lists across the C boundary
-pub const CDiffArray = extern struct {
-    ptr: [*]CDiffEntry,
-    len: usize,
-
-    pub fn toSlice(self: CDiffArray) []CDiffEntry {
-        return self.ptr[0..self.len];
-    }
-};
-
 pub const CPackageDiffEntry = extern struct {
     struct_size: usize = @sizeOf(CPackageDiffEntry),
 
@@ -234,15 +243,6 @@ pub const CPackageDiffEntry = extern struct {
     pub fn validate(self: CPackageDiffEntry) !void {
         if (self.struct_size != @sizeOf(CPackageDiffEntry)) return error.AbiMismatch;
         _ = std.meta.intToEnum(CPackageDiffKind, @intFromEnum(self.kind)) catch return error.InvalidEntry;
-    }
-};
-
-pub const CPackageDiffArray = extern struct {
-    ptr: [*]CPackageDiffEntry,
-    len: usize,
-
-    pub fn toSlice(self: CPackageDiffArray) []CPackageDiffEntry {
-        return self.ptr[0..self.len];
     }
 };
 
@@ -259,15 +259,6 @@ pub const CAttributedDiffEntry = extern struct {
     }
 };
 
-pub const CAttributedDiffArray = extern struct {
-    ptr: [*]CAttributedDiffEntry,
-    len: usize,
-
-    pub fn toSlice(self: CAttributedDiffArray) []CAttributedDiffEntry {
-        return self.ptr[0..self.len];
-    }
-};
-
 //
 pub const CCommitEntry = extern struct {
     struct_size: usize = @sizeOf(CCommitEntry),
@@ -277,35 +268,6 @@ pub const CCommitEntry = extern struct {
 
     pub fn validate(self: CCommitEntry) !void {
         if (self.struct_size != @sizeOf(CCommitEntry)) return error.AbiMismatch;
-    }
-};
-
-// A wrapper over pointers to arrays of structures used to pass dynamic lists across the C boundary
-pub const CCommitArray = extern struct {
-    ptr: [*]CCommitEntry,
-    len: usize,
-
-    pub fn toSlice(self: CCommitArray) []CCommitEntry {
-        return self.ptr[0..self.len];
-    }
-};
-
-// Request structure for initializing the system with branch specification
-pub const CInitRequest = extern struct {
-    struct_size: usize = @sizeOf(CInitRequest),
-
-    repo_path: CSlice,
-    root_path: CSlice,
-
-    prefix: CSlice,
-    addition_prefixes: CSliceArray,
-
-    repo_mode: CRepoMode,
-    branch: CSlice,
-
-    pub fn validate(self: CInitRequest) !void {
-        if (self.struct_size != @sizeOf(CInitRequest)) return error.AbiMismatch;
-        _ = std.meta.intToEnum(CRepoMode, @intFromEnum(self.repo_mode)) catch return error.InvalidEntry;
     }
 };
 

@@ -73,7 +73,7 @@ pub fn build(b: *std.Build) void {
 
     // ── Init ──────────────────────────────────────────────────────────────────
     const upac_init = b.createModule(.{
-        .root_source_file = b.path("src/commands/init/init.zig"),
+        .root_source_file = b.path("src/commands/init.zig"),
         .target = target,
         .optimize = optimize,
     });
