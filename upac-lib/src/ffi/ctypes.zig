@@ -32,6 +32,7 @@ pub const UninstallStateId = types.UninstallStateId;
 pub const RollbackStateId = types.RollbackStateId;
 
 pub const ListStateId = types.ListStateId;
+pub const DiffStateId = types.DiffStateId;
 
 // ── Reimports errors ─────────────────────────────────────────────────────────────────────
 const errors = @import("errors.zig");
@@ -59,15 +60,6 @@ pub const CSlice = extern struct {
     pub fn validate(self: CSlice) !void {
         if (self.ptr[self.len] != 0) return error.InvalidEntry;
         if (std.mem.len(self.ptr) != self.len) return error.InvalidEntry;
-    }
-};
-// A wrapper over pointers to arrays of structures used to pass dynamic lists across the C boundary
-pub const CSliceArray = extern struct {
-    ptr: [*]CSlice,
-    len: usize,
-
-    pub fn toSlice(self: CSliceArray) []CSlice {
-        return self.ptr[0..self.len];
     }
 };
 
@@ -169,11 +161,13 @@ pub const CUnmutatedRequest = extern struct {
     branch: CSlice,
     prefix: CSlice,
 
-    repo_mode: CRepoMode,
+    from_commit_hash: CSlice,
+    to_commit_hash: CSlice,
+
+    repo_mode: *anyopaque,
 
     pub fn validate(self: CUnmutatedRequest) !void {
         if (self.struct_size != @sizeOf(CUnmutatedRequest)) return error.AbiMismatch;
-        _ = std.meta.intToEnum(CRepoMode, @intFromEnum(self.repo_mode)) catch return error.InvalidEntry;
         try self.repo_path.validate();
     }
 };
@@ -219,19 +213,6 @@ pub const CDiffKind = enum(u8) {
     added = 0,
     removed = 1,
     modified = 2,
-};
-
-//
-pub const CDiffEntry = extern struct {
-    struct_size: usize = @sizeOf(CDiffEntry),
-
-    path: CSlice,
-    kind: CDiffKind,
-
-    pub fn validate(self: CDiffEntry) !void {
-        if (self.struct_size != @sizeOf(CDiffEntry)) return error.AbiMismatch;
-        _ = std.meta.intToEnum(CDiffKind, @intFromEnum(self.kind)) catch return error.InvalidEntry;
-    }
 };
 
 pub const CPackageDiffEntry = extern struct {

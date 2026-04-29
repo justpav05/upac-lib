@@ -67,7 +67,7 @@ pub fn initSystem(repo_path_c: [*:0]const u8, root_path_c: [*:0]const u8, repo_m
 }
 
 fn checkDirExists(path: [*:0]const u8) !bool {
-    const stat = std.fs.cwd().statFileZ(path) catch |err| switch (err) {
+    const stat = std.fs.cwd().statFile(std.mem.span(path)) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };
@@ -75,7 +75,7 @@ fn checkDirExists(path: [*:0]const u8) !bool {
 }
 
 fn checkFileExists(path: [*:0]const u8) !bool {
-    const stat = std.fs.cwd().statFileZ(path) catch |err| switch (err) {
+    const stat = std.fs.cwd().statFile(std.mem.span(path)) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };
@@ -95,13 +95,13 @@ fn initOstreeRepo(repo_path_c: [*:0]const u8, repo_mode: CRepoMode, branch_c: [*
         .bare_user => c_libs.OSTREE_REPO_MODE_BARE_USER,
     };
 
-    if (c_libs.ostree_repo_create(struct_ostree_repo, ostree_mode, cancellable, &gerror) == 0) return InitError.OstreeInitFailed;
+    if (c_libs.ostree_repo_create(struct_ostree_repo, ostree_mode, cancellable, gerror) == 0) return InitError.OstreeInitFailed;
 
-    if (c_libs.ostree_repo_prepare_transaction(struct_ostree_repo, null, cancellable, &gerror) == 0) return InitError.OstreeInitFailed;
+    if (c_libs.ostree_repo_prepare_transaction(struct_ostree_repo, null, cancellable, gerror) == 0) return InitError.OstreeInitFailed;
 
     c_libs.ostree_repo_transaction_set_ref(struct_ostree_repo, null, branch_c, null);
 
-    if (c_libs.ostree_repo_commit_transaction(struct_ostree_repo, null, cancellable, &gerror) == 0) {
+    if (c_libs.ostree_repo_commit_transaction(struct_ostree_repo, null, cancellable, gerror) == 0) {
         _ = c_libs.ostree_repo_abort_transaction(struct_ostree_repo, cancellable, null);
         return InitError.OstreeInitFailed;
     }

@@ -127,3 +127,11 @@ pub const ListStateId = enum(u8) {
     done = 3,
     failed = 4,
 };
+
+pub const DiffStateId = enum(u8) {
+    open_repo = 0,
+    diff_packages = 1,
+    diff_files = 2,
+    done = 3,
+    failed = 4,
+};

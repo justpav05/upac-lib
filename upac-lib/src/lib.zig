@@ -15,11 +15,11 @@ const rollback_symbols = @import("symbols/rollback.zig");
 pub export const rollback = rollback_symbols.rollback;
 
 const diff_symbols = @import("symbols/diff.zig");
-//pub export const diff_packages = diff_symbols.diff_packages;
-//pub export const diff_packages_free = diff_symbols.diff_packages_free;
+pub export const diff_packages = diff_symbols.diff_packages;
+pub export const diff_packages_free = diff_symbols.diff_packages_free;
 
-//pub export const diff_files_attributed = diff_symbols.diff_files_attributed;
-//pub export const diff_files_attributed_free = diff_symbols.diff_files_attributed_free;
+pub export const diff_files = diff_symbols.diff_files;
+pub export const diff_files_free = diff_symbols.diff_files_free;
 
 const list_symbols = @import("symbols/list.zig");
 pub export const list_packages = list_symbols.list_packages;
@@ -33,4 +33,4 @@ pub export const list_commits = list_symbols.list_commits;
 pub export const commits_free = list_symbols.commits_free;
 
 const init_symbols = @import("symbols/init.zig");
-//pub export const init = init_symbols.init;
+pub export const init = init_symbols.init;

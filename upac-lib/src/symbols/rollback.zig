@@ -10,7 +10,7 @@ const fromError = rollback_module.ffi.fromError;
 
 // Reverts the system state to a specific commit hash in the OSTree repository
 pub fn rollback(rollback_request_c: CRollbackRequest) callconv(.c) i32 {
-    rollback_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.install));
+    rollback_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.rollback));
 
     if (rollback_request_c.commit_hash.len == 0) return @intFromEnum(fromError(error.InvalidEntry, Operation.rollback));
     rollback_request_c.commit_hash.validate() catch return @intFromEnum(fromError(error.InvalidEntry, Operation.rollback));
