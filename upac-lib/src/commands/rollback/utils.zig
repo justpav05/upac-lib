@@ -66,13 +66,3 @@ fn updateBranchRef(repo: *c_libs.OstreeRepo, branch_c: [:0]const u8, resolved_ch
         return error.RollbackFailed;
     }
 }
-
-pub fn onCancelSignal(user_data: c_libs.gpointer) callconv(.c) c_libs.gboolean {
-    const cancellable = @as(*c_libs.GCancellable, @ptrCast(@alignCast(user_data)));
-    c_libs.g_cancellable_cancel(cancellable);
-    return c_libs.G_SOURCE_REMOVE;
-}
-
-pub fn signalLoopThread(loop: *c_libs.GMainLoop) void {
-    c_libs.g_main_loop_run(loop);
-}

@@ -7,6 +7,7 @@ const InstallProgressEvent = installer_module.ffi.InstallProgressEvent;
 const CSlice = installer_module.ffi.CSlice;
 const CPackageMeta = installer_module.ffi.CPackageMeta;
 const CInstallRequest = installer_module.ffi.CMutatedRequest;
+const InstallProgressFn = installer_module.ffi.InstallProgressFn;
 
 const ErrorCode = installer_module.ffi.ErrorCode;
 const Operation = installer_module.ffi.Operation;
@@ -16,52 +17,27 @@ const fromError = installer_module.ffi.fromError;
 pub fn install(install_request_c: CInstallRequest) callconv(.c) i32 {
     install_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.install));
 
-    const required_fields = [_]CSlice{ install_request_c.repo_path, install_request_c.root_path, install_request_c.db_path, install_request_c.branch, install_request_c.prefix_directory };
-    for (required_fields) |field| {
-        if (field.len == 0 or field.ptr[field.len] != 0) return @intFromEnum(fromError(error.InvalidEntry, Operation.install));
-    }
-
     const install_entries = collectInstallEntries(install_request_c, installer_module.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.install));
     defer installer_module.ffi.allocator().free(install_entries);
 
     const install_data = installer_module.InstallData{
         .packages = install_entries,
-        .branch = install_request_c.branch.toCSlice(),
-
-        .repo_path = install_request_c.repo_path.toCSlice(),
-        .root_path = install_request_c.root_path.toCSlice(),
-        .database_path = install_request_c.db_path.toCSlice(),
-        .prefix_path = install_request_c.prefix_directory.toCSlice(),
-
-        .on_progress = install_request_c.on_progress,
+        .branch = install_request_c.branch.asZ(),
+        .repo_path = install_request_c.repo_path.asZ(),
+        .root_path = install_request_c.root_path.asZ(),
+        .database_path = install_request_c.db_path.asZ(),
+        .prefix_path = install_request_c.prefix_directory.asZ(),
+        .on_progress = if (install_request_c.on_progress) |cb| @as(InstallProgressFn, @ptrCast(cb)) else null,
         .progress_ctx = install_request_c.progress_ctx,
-
         .max_retries = install_request_c.max_retries,
     };
 
     installer_module.InstallerMachine.run(install_data, installer_module.ffi.allocator()) catch |err| {
         if (err == error.Cancelled) installer_module.ffi.global_cancel.store(true, .release);
-        return @intFromEnum(fromError(err, Operation.list));
+        return @intFromEnum(fromError(err, Operation.install));
     };
 
     return @intFromEnum(ErrorCode.ok);
-}
-
-// An internal helper function that converts the C struct CPackageMeta to native PackageMeta, translating CSlices into regular slices ([]const u8)
-fn toMeta(c_package_meta: CPackageMeta) PackageMeta {
-    return .{
-        .name = c_package_meta.name.toSlice(),
-        .version = c_package_meta.version.toSlice(),
-        .size = @intCast(c_package_meta.size),
-        .architecture = c_package_meta.architecture.toSlice(),
-        .author = c_package_meta.author.toSlice(),
-        .description = c_package_meta.description.toSlice(),
-        .license = c_package_meta.license.toSlice(),
-        .url = c_package_meta.url.toSlice(),
-        .packager = c_package_meta.packager.toSlice(),
-        .installed_at = c_package_meta.installed_at,
-        .checksum = c_package_meta.checksum.toSlice(),
-    };
 }
 
 fn collectInstallEntries(c_install_request: CInstallRequest, allocator: std.mem.Allocator) ![]installer_module.InstallEntry {
@@ -77,15 +53,27 @@ fn collectInstallEntries(c_install_request: CInstallRequest, allocator: std.mem.
     errdefer allocator.free(install_entries);
 
     for (packages_entrys_c, 0..) |package_entry_c, index| {
-        const package_meta: *CPackageMeta = @ptrCast(@alignCast(package_entry_c.meta));
+        const package_meta_c: *CPackageMeta = @ptrCast(@alignCast(package_entry_c.meta));
 
         install_entries[index] = .{
             .package = .{
-                .meta = toMeta(package_meta.*),
+                .meta = .{
+                    .name = package_meta_c.name.toSlice(),
+                    .version = package_meta_c.version.toSlice(),
+                    .size = @intCast(package_meta_c.size),
+                    .architecture = package_meta_c.architecture.toSlice(),
+                    .author = package_meta_c.author.toSlice(),
+                    .description = package_meta_c.description.toSlice(),
+                    .license = package_meta_c.license.toSlice(),
+                    .url = package_meta_c.url.toSlice(),
+                    .packager = package_meta_c.packager.toSlice(),
+                    .installed_at = package_meta_c.installed_at,
+                    .checksum = package_meta_c.checksum.toSlice(),
+                },
                 .files = &.{},
             },
-            .temp_path = package_entry_c.temp_path.toCSlice(),
-            .checksum = package_entry_c.checksum.toCSlice(),
+            .temp_path = package_entry_c.temp_path.asZ(),
+            .checksum = package_entry_c.checksum.asZ(),
         };
     }
 

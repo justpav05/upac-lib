@@ -53,16 +53,15 @@ pub const InstallEntry = struct {
 // A container structure holding all installation parameters: package metadata, paths to the repository and database, as well as retry limits
 pub const InstallData = struct {
     packages: []const InstallEntry,
-    branch: [*:0]u8,
+    branch: [*:0]const u8,
 
-    repo_path: [*:0]u8,
-    root_path: [*:0]u8,
-    database_path: [*:0]u8,
-    prefix_path: [*:0]u8,
+    repo_path: [*:0]const u8,
+    root_path: [*:0]const u8,
+    database_path: [*:0]const u8,
+    prefix_path: [*:0]const u8,
 
     on_progress: ?InstallProgressFn = null,
     progress_ctx: ?*anyopaque = null,
-
     max_retries: u8 = 0,
 };
 
@@ -124,7 +123,7 @@ pub const InstallerMachine = struct {
             return InstallerError.MaxRetriesExceeded;
         }
 
-        const is_cancelled = ffi.isCancelRequested() or
+        const is_cancelled = isCancelRequested() or
             (if (self.cancellable) |cancellable| c_libs.g_cancellable_is_cancelled(cancellable) != 0 else false);
 
         if (is_cancelled) {

@@ -141,7 +141,7 @@ fn stateWriteDatabase(machine: *InstallerMachine) InstallerError!void {
 
     try machine.check(collectFileChecksums(machine, &file_map), InstallerError.CollectFileChecksumsFailed);
 
-    data.writePackage(staged_database_dir_path, current_install_entry.checksum, current_install_entry.package.meta, file_map, machine.allocator) catch return machine.retry(stateWriteDatabase);
+    data.writePackage(staged_database_dir_path, std.mem.span(current_install_entry.checksum), current_install_entry.package.meta, file_map, machine.allocator) catch return machine.retry(stateWriteDatabase);
 
     machine.resetRetries();
     return stateProcessDbFiles(machine);
@@ -179,7 +179,7 @@ fn stateCommit(machine: *InstallerMachine) InstallerError!void {
 
     var body = try loadCommitBody(machine, machine.previous_commit_checksum);
     for (machine.data.packages) |entry| {
-        const new_body = append(body, entry.package.meta.name, entry.checksum, machine.allocator) catch return InstallerError.AllocZFailed;
+        const new_body = append(body, entry.package.meta.name, std.mem.span(entry.checksum), machine.allocator) catch return InstallerError.AllocZFailed;
         machine.allocator.free(body);
         body = new_body;
     }

@@ -13,6 +13,8 @@ pub const c_libs = ffi.c_libs;
 
 pub const CSlice = ffi.CSlice;
 
+const isCancelRequested = ffi.isCancelRequested;
+
 pub const stateFailed = states.stateFailed;
 
 // ── Errors ─────────────────────────────────────────────────────────────────────
@@ -38,16 +40,15 @@ pub const UninstallerError = error{
 // Set of input parameters: package name, paths to the repository and database, as well as the target branch for the commit
 pub const UninstallData = struct {
     package_names: []const []const u8,
-    branch: [*:0]u8,
+    branch: [*:0]const u8,
 
-    repo_path: [*:0]u8,
-    root_path: [*:0]u8,
-    database_path: [*:0]u8,
-    prefix_path: [*:0]u8,
+    repo_path: [*:0]const u8,
+    root_path: [*:0]const u8,
+    database_path: [*:0]const u8,
+    prefix_path: [*:0]const u8,
 
     on_progress: ?UninstallProgressFn = null,
     progress_ctx: ?*anyopaque = null,
-
     max_retries: u8 = 0,
 };
 
@@ -73,20 +74,12 @@ pub const UninstallerMachine = struct {
     cancellable: ?*c_libs.GCancellable = null,
     gerror: ?*c_libs.GError = null,
 
-    signal_loop: ?*c_libs.GMainLoop = null,
-    signal_thread: ?std.Thread = null,
-
     stack: std.ArrayList(UninstallStateId),
     allocator: std.mem.Allocator,
 
     // Registers a transition to a new state, adding it to the stack for progress tracking and debugging
     pub fn enter(self: *UninstallerMachine, state_id: UninstallStateId) !void {
-        if (self.cancellable) |cancellable| {
-            if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) {
-                stateFailed(self);
-                return error.Cancelled;
-            }
-        }
+        isBroked(self) catch |err| return err;
 
         try self.stack.append(self.allocator, state_id);
         self.report(state_id);
@@ -100,6 +93,39 @@ pub const UninstallerMachine = struct {
     // Checks whether the attempt limit for the current uninstallation step has been exhausted
     pub fn exhausted(self: *UninstallerMachine) bool {
         return self.retries > self.data.max_retries;
+    }
+
+    fn isBroked(self: *UninstallerMachine) UninstallerError!void {
+        if (self.gerror) |err| {
+            const is_cancel_error = err.domain == c_libs.g_io_error_quark() and
+                err.code == c_libs.G_IO_ERROR_CANCELLED;
+
+            c_libs.g_error_free(err);
+            self.gerror = null;
+
+            if (is_cancel_error) {
+                if (self.cancellable) |cancellable| c_libs.g_cancellable_cancel(cancellable);
+                stateFailed(self);
+                return UninstallerError.Cancelled;
+            }
+
+            stateFailed(self);
+            return UninstallerError.MaxRetriesExceeded;
+        }
+
+        const is_cancelled = isCancelRequested() or
+            (if (self.cancellable) |cancellable| c_libs.g_cancellable_is_cancelled(cancellable) != 0 else false);
+
+        if (is_cancelled) {
+            if (self.cancellable) |cancellable| c_libs.g_cancellable_cancel(cancellable);
+            stateFailed(self);
+            return UninstallerError.Cancelled;
+        }
+
+        if (self.exhausted()) {
+            stateFailed(self);
+            return UninstallerError.MaxRetriesExceeded;
+        }
     }
 
     pub fn retry(self: *UninstallerMachine, comptime state_fn: anytype) UninstallerError!void {
@@ -174,18 +200,6 @@ pub const UninstallerMachine = struct {
 
         if (self.gerror) |err| c_libs.g_error_free(err);
         if (self.cancellable) |cancellable| c_libs.g_object_unref(cancellable);
-
-        if (self.signal_loop) |loop| {
-            c_libs.g_main_loop_quit(loop);
-        }
-        if (self.signal_thread) |tread| {
-            tread.join();
-            self.signal_thread = null;
-        }
-        if (self.signal_loop) |loop| {
-            c_libs.g_main_loop_unref(loop);
-            self.signal_loop = null;
-        }
 
         self.stack.deinit(self.allocator);
     }

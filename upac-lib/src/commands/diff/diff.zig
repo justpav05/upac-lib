@@ -54,26 +54,3 @@ pub inline fn unwrap(value: anytype, comptime err: DiffError) DiffError!@typeInf
 pub inline fn check(value: anytype, comptime err: DiffError) DiffError!@typeInfo(@TypeOf(value)).error_union.payload {
     return value catch err;
 }
-
-fn isBroked(gerror: *?*c_libs.GError, cancellable: [*c]c_libs.GCancellable) DiffError!void {
-    if (gerror != null) {
-        const is_cancel_error = gerror.domain == c_libs.g_io_error_quark() and
-            gerror.code == c_libs.G_IO_ERROR_CANCELLED;
-
-        c_libs.g_error_free(gerror);
-    }
-
-    const is_cancelled = ffi.isCancelRequested() or
-        (if (self.cancellable) |cancellable| c_libs.g_cancellable_is_cancelled(cancellable) != 0 else false);
-
-    if (is_cancelled) {
-        if (self.cancellable) |cancellable| c_libs.g_cancellable_cancel(cancellable);
-        stateFailed(self);
-        return InstallerError.Cancelled;
-    }
-
-    if (self.exhausted()) {
-        stateFailed(self);
-        return InstallerError.MaxRetriesExceeded;
-    }
-}

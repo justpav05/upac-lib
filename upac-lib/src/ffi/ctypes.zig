@@ -44,22 +44,23 @@ pub const CSlice = extern struct {
     ptr: [*:0]const u8,
     len: usize,
 
-    // Converts a native Zig slice into a C-compatible CSlice struct, packaging the pointer and length
-    pub fn fromSlice(slice: [*:0]const u8) CSlice {
+    pub fn toSlice(self: CSlice) []const u8 {
+        return self.ptr[0..self.len];
+    }
+
+    pub fn asZ(self: CSlice) [*:0]const u8 {
+        return self.ptr;
+    }
+
+    pub fn fromSlice(slice: []const u8) CSlice {
         return .{ .ptr = @ptrCast(slice.ptr), .len = slice.len };
     }
 
-    // It performs the inverse operation—reconstructing a safe Zig slice from data received via a C interface—so that it can be manipulated using standard language constructs
-    pub fn toSlice(self: CSlice) [*:0]const u8 {
-        return std.mem.span(self.ptr[0..self.len :0]);
-    }
-
-    // It performs the inverse operation—reconstructing a safe Zig slice from data received via a C interface—so that it can be manipulated using standard language constructs
-    pub fn toCSlice(self: CSlice) [*:0]const u8 {
-        return self.ptr[0..self.len :0];
+    pub fn validate(self: CSlice) !void {
+        if (self.ptr[self.len] != 0) return error.InvalidEntry;
+        if (std.mem.len(self.ptr) != self.len) return error.InvalidEntry;
     }
 };
-
 // A wrapper over pointers to arrays of structures used to pass dynamic lists across the C boundary
 pub const CSliceArray = extern struct {
     ptr: [*]CSlice,
@@ -150,6 +151,11 @@ pub const CMutatedRequest = extern struct {
 
     pub fn validate(self: CMutatedRequest) !void {
         if (self.struct_size != @sizeOf(CMutatedRequest)) return error.AbiMismatch;
+        try self.repo_path.validate();
+        try self.root_path.validate();
+        try self.db_path.validate();
+        try self.branch.validate();
+        try self.prefix_directory.validate();
     }
 };
 
