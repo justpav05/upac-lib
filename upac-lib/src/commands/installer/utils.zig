@@ -12,7 +12,7 @@ const InstallerError = installer.InstallerError;
 // A recursive assistant. It traverses the directory structure, calculates checksums for all files, and populates the FileMap. It is precisely this data that is subsequently written to the `.files` file within the database
 pub fn collectFileChecksums(machine: *InstallerMachine, file_map: *data.FileMap) !void {
     const current_entry = machine.data.packages[machine.current_package_index];
-    var dir = try machine.check(std.fs.openDirAbsolute(current_entry.temp_path, .{ .iterate = true }), InstallerError.CollectFileChecksumsFailed);
+    var dir = try machine.check(std.fs.openDirAbsolute(std.mem.span(current_entry.temp_path), .{ .iterate = true }), InstallerError.CollectFileChecksumsFailed);
     defer dir.close();
 
     var walker = try dir.walk(machine.allocator);
@@ -23,7 +23,7 @@ pub fn collectFileChecksums(machine: *InstallerMachine, file_map: *data.FileMap)
 
         if (machine.cancellable) |cancellable| if (c_libs.g_cancellable_is_cancelled(cancellable) != 0) return InstallerError.Cancelled;
 
-        const abs_path = try machine.check(std.fs.path.joinZ(machine.allocator, &.{ current_entry.temp_path, entry.path }), InstallerError.CollectFileChecksumsFailed);
+        const abs_path = try machine.check(std.fs.path.joinZ(machine.allocator, &.{ std.mem.span(current_entry.temp_path), entry.path }), InstallerError.CollectFileChecksumsFailed);
         defer machine.allocator.free(abs_path);
 
         const gfile = c_libs.g_file_new_for_path(abs_path.ptr);

@@ -45,12 +45,17 @@ pub const CSlice = extern struct {
     len: usize,
 
     // Converts a native Zig slice into a C-compatible CSlice struct, packaging the pointer and length
-    pub fn fromSlice(slice: []const u8) CSlice {
+    pub fn fromSlice(slice: [*:0]const u8) CSlice {
         return .{ .ptr = @ptrCast(slice.ptr), .len = slice.len };
     }
 
     // It performs the inverse operation—reconstructing a safe Zig slice from data received via a C interface—so that it can be manipulated using standard language constructs
-    pub fn toSlice(self: CSlice) []const u8 {
+    pub fn toSlice(self: CSlice) [*:0]const u8 {
+        return std.mem.span(self.ptr[0..self.len :0]);
+    }
+
+    // It performs the inverse operation—reconstructing a safe Zig slice from data received via a C interface—so that it can be manipulated using standard language constructs
+    pub fn toCSlice(self: CSlice) [*:0]const u8 {
         return self.ptr[0..self.len :0];
     }
 };
@@ -118,29 +123,33 @@ pub const CPackageMetaArray = extern struct {
     }
 };
 
-// Parameter sets for the сorresponding operation — Installation
-pub const CInstallRequest = extern struct {
-    struct_size: usize = @sizeOf(CInstallRequest),
-
-    packages: ?[*]const CPackageEntry,
-    packages_count: usize,
+pub const CMutatedRequest = extern struct {
+    struct_size: usize = @sizeOf(CMutatedRequest),
 
     repo_path: CSlice,
     root_path: CSlice,
     db_path: CSlice,
-
     branch: CSlice,
     prefix_directory: CSlice,
 
-    on_progress: ?CInstallProgressFn = null,
+    // Install
+    packages: ?[*]const CPackageEntry = null,
+    packages_count: usize = 0,
+
+    // Uninstall
+    package_names: ?[*]const CSlice = null,
+    package_names_len: usize = 0,
+
+    // Rollback
+    commit_hash: CSlice,
+
+    on_progress: ?*const fn (event: u32, package_name: CSlice, ctx: ?*anyopaque) callconv(.c) void = null,
     progress_ctx: ?*anyopaque = null,
 
-    max_retries: u8,
+    max_retries: u8 = 0,
 
-    pub fn validate(self: CInstallRequest) !void {
-        if (self.struct_size != @sizeOf(CInstallRequest)) return error.AbiMismatch;
-
-        if (self.packages_count > 0 and self.packages == null) return error.InvalidEntry;
+    pub fn validate(self: CMutatedRequest) !void {
+        if (self.struct_size != @sizeOf(CMutatedRequest)) return error.AbiMismatch;
     }
 };
 
@@ -156,32 +165,6 @@ pub const CInstallProgressFn = *const fn (
     ctx: ?*anyopaque,
 ) callconv(.c) void;
 
-// // Parameter sets for the сorresponding operation — Uninstallation
-pub const CUninstallRequest = extern struct {
-    struct_size: usize = @sizeOf(CUninstallRequest),
-
-    package_names: ?[*]const CSlice,
-    package_names_len: usize,
-
-    repo_path: CSlice,
-    root_path: CSlice,
-    db_path: CSlice,
-
-    branch: CSlice,
-    prefix_directory: CSlice,
-
-    on_progress: ?CUninstallProgressFn = null,
-    progress_ctx: ?*anyopaque = null,
-
-    max_retries: u8,
-
-    pub fn validate(self: CUninstallRequest) !void {
-        if (self.struct_size != @sizeOf(CUninstallRequest)) return error.AbiMismatch;
-
-        if (self.package_names_len > 0 and self.package_names == null) return error.InvalidEntry;
-    }
-};
-
 pub const UninstallProgressFn = *const fn (
     event: UninstallStateId,
     package_name: CSlice,
@@ -190,6 +173,18 @@ pub const UninstallProgressFn = *const fn (
 
 pub const CUninstallProgressFn = *const fn (
     event: UninstallStateId,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.c) void;
+
+pub const RollbackProgressFn = *const fn (
+    event: RollbackStateId,
+    package_name: CSlice,
+    ctx: ?*anyopaque,
+) callconv(.c) void;
+
+pub const CRollbackProgressFn = *const fn (
+    event: RollbackStateId,
     package_name: CSlice,
     ctx: ?*anyopaque,
 ) callconv(.c) void;
@@ -288,35 +283,6 @@ pub const CCommitArray = extern struct {
         return self.ptr[0..self.len];
     }
 };
-
-// // Parameter sets for the сorresponding operation — Rollback
-pub const CRollbackRequest = extern struct {
-    struct_size: usize = @sizeOf(CRollbackRequest),
-
-    root_path: CSlice,
-    repo_path: CSlice,
-
-    branch: CSlice,
-    prefix: CSlice,
-
-    commit_hash: CSlice,
-
-    pub fn validate(self: CRollbackRequest) !void {
-        if (self.struct_size != @sizeOf(CRollbackRequest)) return error.AbiMismatch;
-    }
-};
-
-pub const RollbackProgressFn = *const fn (
-    event: RollbackStateId,
-    package_name: CSlice,
-    ctx: ?*anyopaque,
-) callconv(.c) void;
-
-pub const CRollbackProgressFn = *const fn (
-    event: RollbackStateId,
-    package_name: CSlice,
-    ctx: ?*anyopaque,
-) callconv(.c) void;
 
 // Request structure for initializing the system with branch specification
 pub const CInitRequest = extern struct {

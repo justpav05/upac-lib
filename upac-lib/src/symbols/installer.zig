@@ -6,7 +6,7 @@ const InstallProgressEvent = installer_module.ffi.InstallProgressEvent;
 
 const CSlice = installer_module.ffi.CSlice;
 const CPackageMeta = installer_module.ffi.CPackageMeta;
-const CInstallRequest = installer_module.ffi.CInstallRequest;
+const CInstallRequest = installer_module.ffi.CMutatedRequest;
 
 const ErrorCode = installer_module.ffi.ErrorCode;
 const Operation = installer_module.ffi.Operation;
@@ -14,20 +14,24 @@ const fromError = installer_module.ffi.fromError;
 
 // The main entry point for package installation. It gathers installation data from the request, initializes the installation engine, and returns an error code as an i32
 pub fn install(install_request_c: CInstallRequest) callconv(.c) i32 {
-    var arena_allocator = std.heap.ArenaAllocator.init(installer_module.ffi.allocator());
-    defer arena_allocator.deinit();
+    install_request_c.validate() catch |err| return @intFromEnum(fromError(err, Operation.install));
+
+    const required_fields = [_]CSlice{ install_request_c.repo_path, install_request_c.root_path, install_request_c.db_path, install_request_c.branch, install_request_c.prefix_directory };
+    for (required_fields) |field| {
+        if (field.len == 0 or field.ptr[field.len] != 0) return @intFromEnum(fromError(error.InvalidEntry, Operation.install));
+    }
 
     const install_entries = collectInstallEntries(install_request_c, installer_module.ffi.allocator()) catch |err| return @intFromEnum(fromError(err, Operation.install));
     defer installer_module.ffi.allocator().free(install_entries);
 
     const install_data = installer_module.InstallData{
         .packages = install_entries,
-        .branch = arena_allocator.allocator().dupeZ(u8, install_request_c.branch.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+        .branch = install_request_c.branch.toCSlice(),
 
-        .repo_path = arena_allocator.allocator().dupeZ(u8, install_request_c.repo_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
-        .root_path = arena_allocator.allocator().dupeZ(u8, install_request_c.root_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
-        .database_path = arena_allocator.allocator().dupeZ(u8, install_request_c.db_path.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
-        .prefix_path = arena_allocator.allocator().dupeZ(u8, install_request_c.prefix_directory.toSlice()) catch return @intFromEnum(fromError(error.AllocZFailed, Operation.uninstall)),
+        .repo_path = install_request_c.repo_path.toCSlice(),
+        .root_path = install_request_c.root_path.toCSlice(),
+        .database_path = install_request_c.db_path.toCSlice(),
+        .prefix_path = install_request_c.prefix_directory.toCSlice(),
 
         .on_progress = install_request_c.on_progress,
         .progress_ctx = install_request_c.progress_ctx,
@@ -80,8 +84,8 @@ fn collectInstallEntries(c_install_request: CInstallRequest, allocator: std.mem.
                 .meta = toMeta(package_meta.*),
                 .files = &.{},
             },
-            .temp_path = package_entry_c.temp_path.toSlice(),
-            .checksum = package_entry_c.checksum.toSlice(),
+            .temp_path = package_entry_c.temp_path.toCSlice(),
+            .checksum = package_entry_c.checksum.toCSlice(),
         };
     }
 

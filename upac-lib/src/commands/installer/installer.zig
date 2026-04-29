@@ -45,8 +45,8 @@ pub const InstallerError = error{
 
 pub const InstallEntry = struct {
     package: Package,
-    temp_path: []const u8,
-    checksum: []const u8,
+    temp_path: [*:0]const u8,
+    checksum: [*:0]const u8,
 };
 
 // ── InstallData ───────────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@ const loadCommitBody = utils.loadCommitBody;
 pub fn stateVerifying(machine: *InstallerMachine) InstallerError!void {
     try machine.check(machine.enter(.verifying), InstallerError.OutOfMemory);
 
-    for (machine.data.packages) |entry| try machine.check(std.fs.accessAbsolute(entry.temp_path, .{}), InstallerError.PathNotFound);
+    for (machine.data.packages) |entry| try machine.check(std.fs.accessAbsolute(std.mem.span(entry.temp_path), .{}), InstallerError.PathNotFound);
 
     try machine.check(std.fs.accessAbsoluteZ(machine.data.root_path, .{}), InstallerError.PathNotFound);
     try machine.check(std.fs.accessAbsoluteZ(machine.data.repo_path, .{}), InstallerError.PathNotFound);
@@ -41,7 +41,7 @@ fn stateCheckSpace(machine: *InstallerMachine) InstallerError!void {
     try machine.check(machine.enter(.check_space), InstallerError.OutOfMemory);
 
     var new_packages_size: u64 = 0;
-    for (machine.data.packages) |entry| new_packages_size += try machine.check(dirSize(machine.allocator, entry.temp_path), InstallerError.CheckSpaceFailed);
+    for (machine.data.packages) |entry| new_packages_size += try machine.check(dirSize(machine.allocator, std.mem.span(entry.temp_path)), InstallerError.CheckSpaceFailed);
 
     const prefix_path = try machine.prefixPathZ();
     defer machine.allocator.free(prefix_path);
@@ -131,7 +131,7 @@ fn stateWriteDatabase(machine: *InstallerMachine) InstallerError!void {
     else
         std.mem.span(machine.data.database_path);
 
-    const staged_database_dir_path = try machine.check(std.fs.path.join(machine.allocator, &.{ current_install_entry.temp_path, relative_database_path }), InstallerError.AllocZFailed);
+    const staged_database_dir_path = try machine.check(std.fs.path.join(machine.allocator, &.{ std.mem.span(current_install_entry.temp_path), relative_database_path }), InstallerError.AllocZFailed);
     defer machine.allocator.free(staged_database_dir_path);
 
     try machine.check(std.fs.cwd().makePath(staged_database_dir_path), InstallerError.AllocZFailed);
@@ -155,7 +155,7 @@ fn stateProcessDbFiles(machine: *InstallerMachine) InstallerError!void {
 
     const current_install_entry = machine.data.packages[machine.current_package_index];
 
-    const temp_path_c = try machine.check(machine.allocator.dupeZ(u8, current_install_entry.temp_path), InstallerError.AllocZFailed);
+    const temp_path_c = try machine.check(machine.allocator.dupeZ(u8, std.mem.span(current_install_entry.temp_path)), InstallerError.AllocZFailed);
     defer machine.allocator.free(temp_path_c);
 
     if (c_libs.ostree_repo_write_dfd_to_mtree(repo, std.c.AT.FDCWD, temp_path_c.ptr, mtree, null, machine.cancellable, &machine.gerror) == 0) return machine.retry(stateProcessDbFiles);
@@ -240,7 +240,6 @@ fn stateCheckout(machine: *InstallerMachine) InstallerError!void {
     var options = std.mem.zeroes(c_libs.OstreeRepoCheckoutAtOptions);
     options.mode = c_libs.OSTREE_REPO_CHECKOUT_MODE_NONE;
     options.overwrite_mode = c_libs.OSTREE_REPO_CHECKOUT_OVERWRITE_UNION_FILES;
-
 
     if (machine.commit_checksum == null) {
         stateFailed(machine);
