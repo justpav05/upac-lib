@@ -6,6 +6,8 @@ const c_libs = ffi.c_libs;
 
 const CRepoMode = ffi.CRepoMode;
 
+const isCancelRequested = ffi.isCancelRequested;
+
 // ── Public imports ─────────────────────────────────────────────────────────────────────
 pub const std = @import("std");
 
@@ -28,25 +30,25 @@ pub fn initSystem(repo_path_c: [*:0]const u8, root_path_c: [*:0]const u8, repo_m
     const cancellable = c_libs.g_cancellable_new() orelse return error.OutOfMemory;
     defer c_libs.g_object_unref(cancellable);
 
-    if (ffi.isCancelRequested()) return error.Cancelled;
+    if (isCancelRequested()) return error.Cancelled;
     if (!try checkDirExists(root_path_c)) return InitError.RootNotFound;
 
-    if (ffi.isCancelRequested()) return error.Cancelled;
+    if (isCancelRequested()) return error.Cancelled;
     const prefix_path = std.fs.path.joinZ(allocator, &.{ std.mem.span(root_path_c), prefix }) catch return InitError.PrefixNotFound;
     defer allocator.free(prefix_path);
     if (!try checkDirExists(prefix_path)) std.fs.makeDirAbsoluteZ(prefix_path) catch return InitError.CreateDirFailed;
 
     for (additional_prefixes) |additional_prefix| {
-        if (ffi.isCancelRequested()) return error.Cancelled;
+        if (isCancelRequested()) return error.Cancelled;
         const additional_prefix_path = std.fs.path.joinZ(allocator, &.{ std.mem.span(root_path_c), additional_prefix }) catch return InitError.AdditionalPrefixNotFound;
         defer allocator.free(additional_prefix_path);
         if (!try checkDirExists(additional_prefix_path)) std.fs.makeDirAbsoluteZ(additional_prefix_path) catch return InitError.CreateDirFailed;
     }
 
-    if (ffi.isCancelRequested()) return error.Cancelled;
+    if (isCancelRequested()) return error.Cancelled;
     if (try checkFileExists(repo_path_c)) return InitError.NotADirectory;
 
-    if (ffi.isCancelRequested()) return error.Cancelled;
+    if (isCancelRequested()) return error.Cancelled;
     if (!try checkDirExists(repo_path_c)) {
         std.fs.makeDirAbsoluteZ(repo_path_c) catch return InitError.CreateDirFailed;
     } else {
@@ -62,7 +64,7 @@ pub fn initSystem(repo_path_c: [*:0]const u8, root_path_c: [*:0]const u8, repo_m
         if (!is_empty) return InitError.DirectoryNotEmpty;
     }
 
-    if (ffi.isCancelRequested()) return error.Cancelled;
+    if (isCancelRequested()) return error.Cancelled;
     try initOstreeRepo(repo_path_c, repo_mode, branch_c, cancellable, &gerror);
 }
 
