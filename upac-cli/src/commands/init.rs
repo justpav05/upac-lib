@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::ffi::{CInitRequest, CRepoMode, CSliceArray};
+use crate::ffi::{CArray, CRepoMode, CUnmutatedRequest};
 use crate::upac::UpacLib;
 use crate::utils::{spinner, BackendKind};
 
@@ -113,13 +113,12 @@ fn state_initializing(machine: &mut InitMachine) -> Result<()> {
     machine.state = State::Initializing;
     spinner(&machine.progress_bar, "Initializing system directories...");
 
-    let init_request_c = CInitRequest::new(
-        &machine.config.paths.repo_path.to_str()?,
-        &machine.config.paths.root_path.to_str()?,
-        &machine.config.ostree.prefix_directory.to_str()?,
-        CSliceArray::empty(),
+    let init_request_c = CUnmutatedRequest::new(
+        &machine.config.paths.repo_path.to_owned(),
+        &machine.config.paths.root_path.to_owned(),
+        &machine.config.ostree.prefix_directory.to_owned(),
         machine.repo_mode_c,
-        &machine.config.ostree.branch.to_str()?,
+        &machine.config.ostree.branch.to_owned(),
     );
 
     UpacLib::check(
