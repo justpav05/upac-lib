@@ -33,10 +33,12 @@ pub struct Args {
 
 pub fn run(args: Args) -> Result<()> {
     let root = generate_root(&args.common_name).map_err(LocalizedPkiError)?;
+
     let pem = root.to_pem().map_err(LocalizedPkiError)?;
 
     write(&args.key_out, &pem.key_pem)
         .with_context(|| format!("{}: {}", fl!(LOADER, "err-write"), args.key_out.display()))?;
+
     write(&args.cert_out, &pem.certificate_pem)
         .with_context(|| format!("{}: {}", fl!(LOADER, "err-write"), args.cert_out.display()))?;
 

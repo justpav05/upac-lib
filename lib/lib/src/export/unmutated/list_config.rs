@@ -7,11 +7,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use upac_abi::error::{CError, ErrorKind};
 use upac_abi::request::CListConfigRequest;
-use upac_abi::response::{CConfigCommitEntry, CListConfigResponse};
-use upac_abi::types::{COwned, CVec};
+use upac_abi::response::CListConfigResponse;
 
 use crate::export::{try_convert_abi, write_error};
-use crate::unmutated::list_config::ListConfigData;
+use crate::unmutated::list_config::{ListConfigData, run};
 
 use upac_types::states::ListConfigStateId;
 
@@ -25,25 +24,21 @@ pub unsafe extern "C" fn list_config(
 ) -> i32 {
     let list_config_data = try_convert_abi!(ListConfigData::try_from(&request_c), err_out, ListConfigStateId);
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        crate::unmutated::list_config::run(list_config_data)
-    }));
+    let result = catch_unwind(AssertUnwindSafe(|| run(list_config_data)));
 
     match result {
-        Ok(Ok((commits,))) => {
+        Ok(Ok(response)) => {
             if !response_out.is_null() {
-                unsafe {
-                    *response_out = CListConfigResponse::new(CVec::from_owned(
-                        commits.into_iter().map(CConfigCommitEntry::from).collect(),
-                    ));
-                }
+                unsafe { *response_out = response.into() };
             }
             0
         }
+
         Ok(Err((state, error))) => {
             unsafe { write_error(err_out, state, ErrorKind::from(error)) };
             -1
         }
+
         Err(_) => {
             unsafe { write_error(err_out, ListConfigStateId::Setup, ErrorKind::Unexpected) };
             -1

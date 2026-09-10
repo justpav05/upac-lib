@@ -14,6 +14,10 @@ use crate::errors::{
 };
 use crate::lock::LockError;
 
+#[cfg(test)]
+#[path = "../../../tests/inline/unmutated_diff_error.rs"]
+mod tests;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffError {
     Common(CommonError),

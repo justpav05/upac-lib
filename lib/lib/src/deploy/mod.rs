@@ -20,21 +20,25 @@ use rsblkid::utils::evaluation::find_canonical_device_name_from_path;
 
 use rsmount::tables::MountInfo;
 
-use self::error::SysrootError;
-
 use upac_types::settings::RuntimeSettings;
+
+use self::digest::current_prefix_digest;
+use self::error::SysrootError;
 
 use crate::composefs::error::RepoError;
 use crate::composefs::repository::{self, ObjectID};
 use crate::database::record::DeployRecord;
-use crate::deploy::digest::current_prefix_digest;
 use crate::errors::CommonError;
+use crate::layout::boot::{ESP_MOUNT_FALLBACK, ESP_MOUNT_PRIMARY};
 use crate::layout::deployment::{DEPLOYS_DIR, NEXT_SEQ_PATH, REPO_DIR, ROOT_DIR, SYSROOT_DIR};
 
 pub mod digest;
 pub mod error;
-pub mod esp;
 pub mod retention;
+
+#[cfg(test)]
+#[path = "../../tests/inline/deploy.rs"]
+mod tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeployMode {
@@ -212,5 +216,29 @@ impl Drop for Deploy {
     fn drop(&mut self) {
         let _ = umount(&self.sysroot);
         let _ = remove_dir(&self.sysroot);
+    }
+}
+
+pub fn find_esp_mount() -> Result<PathBuf, SysrootError> {
+    let mut mount_table = MountInfo::new()?;
+    mount_table.import_mountinfo()?;
+
+    for candidate_for_mount in [ESP_MOUNT_PRIMARY, ESP_MOUNT_FALLBACK] {
+        if mount_table.find_target(candidate_for_mount).is_some() {
+            return Ok(PathBuf::from(candidate_for_mount));
+        }
+    }
+
+    Err(SysrootError::EspNotFound)
+}
+
+#[cfg(test)]
+impl Deploy {
+    pub(crate) fn for_testing(deploy_dir: PathBuf) -> Self {
+        Deploy {
+            sysroot: deploy_dir.clone(),
+            deploy: deploy_dir,
+            repo: PathBuf::new(),
+        }
     }
 }

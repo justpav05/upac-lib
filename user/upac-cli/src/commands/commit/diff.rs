@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::ffi::CString;
+use std::ptr::null_mut;
 
 use anyhow::Result;
 
@@ -14,8 +14,11 @@ use colored::Colorize;
 use upac_abi::FileDiffKind;
 use upac_abi::request::CDiffConfigRequest;
 
+use upac_types::request::{DiffConfigRequest, RequestBase};
+
+use crate::cancel_token_ptr;
 use crate::types::CommandContext;
-use crate::types::abi::{invoke_with_response, optional_slice, request_base};
+use crate::types::abi::invoke_with_response;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -24,14 +27,16 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: CommandContext) -> Result<()> {
-    let from_config = args.from.as_deref().map(CString::new).transpose()?;
-    let to_config = args.to.as_deref().map(CString::new).transpose()?;
-
-    let request = CDiffConfigRequest::new(
-        request_base(),
-        optional_slice(from_config.as_ref()),
-        optional_slice(to_config.as_ref()),
-    );
+    let request: CDiffConfigRequest = DiffConfigRequest {
+        base: RequestBase {
+            on_hook: None,
+            hook_ctx: null_mut(),
+            cancel_token: cancel_token_ptr(),
+        },
+        from_config_digest: args.from,
+        to_config_digest: args.to,
+    }
+    .into();
 
     let response = invoke_with_response(|out, error| unsafe { (ctx.lib.ro.diff_config)(request, out, error) })?;
 

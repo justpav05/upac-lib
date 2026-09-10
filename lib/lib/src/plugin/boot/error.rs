@@ -21,7 +21,6 @@ pub enum BootPluginError {
     DuplicateName(String),
     UnknownName(String),
     NoClaimant,
-    AmbiguousClaim,
 }
 
 impl From<IoError> for BootPluginError {
@@ -48,7 +47,6 @@ impl From<BootPluginError> for ErrorKind {
             BootPluginError::DuplicateName(_) => ErrorKind::InvalidEntry,
             BootPluginError::UnknownName(_) => ErrorKind::NotFound,
             BootPluginError::NoClaimant => ErrorKind::NotFound,
-            BootPluginError::AmbiguousClaim => ErrorKind::InvalidEntry,
         }
     }
 }

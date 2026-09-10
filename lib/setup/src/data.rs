@@ -22,7 +22,6 @@ pub struct SetupExistingData<'data> {
 
     pub mount_point: Option<&'data str>,
     pub source: &'data str,
-    pub meta_filename: Option<&'data str>,
     pub empty_config: bool,
     pub pinned: bool,
     pub boot_plugin: Option<&'data str>,
@@ -55,7 +54,6 @@ impl<'data> TryFrom<&'data CSetupExistingRequest> for SetupExistingData<'data> {
 
             mount_point: (&request.base.mount_point).try_into()?,
             source: (&request.base.source).try_into()?,
-            meta_filename: (&request.base.meta_filename).try_into()?,
             empty_config: request.base.empty_config,
             pinned: request.base.pinned,
             boot_plugin: (&request.base.boot_plugin).try_into()?,
@@ -81,7 +79,6 @@ pub struct SetupWholeDiskData<'data> {
 
     pub mount_point: Option<&'data str>,
     pub source: &'data str,
-    pub meta_filename: Option<&'data str>,
     pub empty_config: bool,
     pub pinned: bool,
     pub boot_plugin: Option<&'data str>,
@@ -122,7 +119,6 @@ impl<'data> TryFrom<&'data CSetupWholeDiskRequest> for SetupWholeDiskData<'data>
 
             mount_point: (&request.base.mount_point).try_into()?,
             source: (&request.base.source).try_into()?,
-            meta_filename: (&request.base.meta_filename).try_into()?,
             empty_config: request.base.empty_config,
             pinned: request.base.pinned,
             boot_plugin: (&request.base.boot_plugin).try_into()?,

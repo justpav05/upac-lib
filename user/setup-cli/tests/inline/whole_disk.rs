@@ -24,7 +24,6 @@ fn valid_args() -> Args {
 
         mount_point: None,
         source: Some("/mnt/source".to_owned()),
-        meta_filename: None,
         empty_config: false,
         pinned: false,
         boot_plugin: None,

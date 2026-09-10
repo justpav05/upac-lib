@@ -11,7 +11,7 @@ use upac_abi::request::CFilesRequest;
 use upac_types::states::FilesStateId;
 
 use crate::export::{try_convert_abi, write_error};
-use crate::mutated::files::FilesData;
+use crate::mutated::files::{FilesData, run};
 
 /// # Safety
 /// Any borrowed byte-slice fields inside `request_c` must remain valid for the duration of the
@@ -20,7 +20,7 @@ use crate::mutated::files::FilesData;
 pub unsafe extern "C" fn files(request_c: CFilesRequest, err_out: *mut CError) -> i32 {
     let files_data = try_convert_abi!(FilesData::try_from(&request_c), err_out, FilesStateId);
 
-    let result = catch_unwind(AssertUnwindSafe(|| crate::mutated::files::run(files_data)));
+    let result = catch_unwind(AssertUnwindSafe(|| run(files_data)));
 
     match result {
         Ok(Ok(())) => 0,

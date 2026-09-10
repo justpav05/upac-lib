@@ -3,13 +3,15 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
 
-use crate::deploy::Deploy;
+use upac_types::hook::ProgressEventBuilder;
+
+use super::Deploy;
 
 use crate::errors::CommonError;
+use crate::orchestrator::context::{Context, ctx_get};
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get};
 
 pub struct RetentionStage;
 

@@ -3,7 +3,12 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+
+use upac_types::hook::ProgressEventBuilder;
+use upac_types::package::PackageEntry;
+
+use super::SearchInMetaError;
 
 use crate::composefs::file::FileHandle;
 use crate::database::error::DatabaseError;
@@ -12,12 +17,9 @@ use crate::database::{InMemory, MemoryDatabase};
 use crate::deploy::digest::current_prefix_digest;
 use crate::deploy::{Deploy, DeployMode};
 use crate::layout::database::DATABASE_PATH;
+use crate::orchestrator::context::{Context, ctx_get};
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get};
 use crate::search::Search;
-use crate::unmutated::search_in_meta::SearchInMetaError;
-
-use upac_types::PackageEntry;
 
 pub struct SearchingStage;
 

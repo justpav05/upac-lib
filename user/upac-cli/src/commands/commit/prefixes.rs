@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::ptr::null_mut;
+
 use anyhow::Result;
 
 use chrono::{Local, TimeZone};
@@ -13,14 +15,24 @@ use colored::Colorize;
 
 use upac_abi::request::CListPrefixRequest;
 
+use upac_types::request::{ListPrefixRequest, RequestBase};
+
+use crate::cancel_token_ptr;
 use crate::types::CommandContext;
-use crate::types::abi::{invoke_with_response, request_base};
+use crate::types::abi::invoke_with_response;
 
 #[derive(ClapArgs)]
 pub struct Args {}
 
 pub fn run(_args: Args, ctx: CommandContext) -> Result<()> {
-    let request = CListPrefixRequest::new(request_base());
+    let request: CListPrefixRequest = ListPrefixRequest {
+        base: RequestBase {
+            on_hook: None,
+            hook_ctx: null_mut(),
+            cancel_token: cancel_token_ptr(),
+        },
+    }
+    .into();
 
     let response = invoke_with_response(|out, error| unsafe { (ctx.lib.ro.list_prefix)(request, out, error) })?;
 

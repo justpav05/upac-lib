@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::ffi::CString;
+use std::ptr::null_mut;
 
 use anyhow::Result;
 
@@ -14,9 +14,12 @@ use colored::Colorize;
 use upac_abi::request::CDiffRequest;
 use upac_abi::{DiffFileSource, FileDiffKind, PackageDiffKind};
 
+use upac_types::request::{DiffRequest, RequestBase};
+
+use crate::cancel_token_ptr;
 use crate::commands::display::VersionDisplay;
 use crate::types::CommandContext;
-use crate::types::abi::{invoke_with_response, optional_slice, request_base};
+use crate::types::abi::invoke_with_response;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -31,18 +34,18 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: CommandContext) -> Result<()> {
-    let from_prefix = args.from_prefix.as_deref().map(CString::new).transpose()?;
-    let to_prefix = args.to_prefix.as_deref().map(CString::new).transpose()?;
-    let from_config = args.from_config.as_deref().map(CString::new).transpose()?;
-    let to_config = args.to_config.as_deref().map(CString::new).transpose()?;
-
-    let request = CDiffRequest::new(
-        request_base(),
-        optional_slice(from_prefix.as_ref()),
-        optional_slice(to_prefix.as_ref()),
-        optional_slice(from_config.as_ref()),
-        optional_slice(to_config.as_ref()),
-    );
+    let request: CDiffRequest = DiffRequest {
+        base: RequestBase {
+            on_hook: None,
+            hook_ctx: null_mut(),
+            cancel_token: cancel_token_ptr(),
+        },
+        from_prefix_digest: args.from_prefix,
+        to_prefix_digest: args.to_prefix,
+        from_config_digest: args.from_config,
+        to_config_digest: args.to_config,
+    }
+    .into();
 
     let response = invoke_with_response(|out, error| unsafe { (ctx.lib.ro.diff)(request, out, error) })?;
 

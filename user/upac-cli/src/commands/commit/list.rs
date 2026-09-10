@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::ptr::null_mut;
+
 use anyhow::Result;
 
 use clap::Args as ClapArgs;
@@ -11,14 +13,25 @@ use colored::Colorize;
 
 use upac_abi::request::CListConfigRequest;
 
+use upac_types::request::{ListConfigRequest, RequestBase};
+
+use crate::cancel_token_ptr;
 use crate::types::CommandContext;
-use crate::types::abi::{empty_slice, invoke_with_response, request_base};
+use crate::types::abi::invoke_with_response;
 
 #[derive(ClapArgs)]
 pub struct Args {}
 
 pub fn run(_args: Args, ctx: CommandContext) -> Result<()> {
-    let request = CListConfigRequest::new(request_base(), empty_slice());
+    let request: CListConfigRequest = ListConfigRequest {
+        base: RequestBase {
+            on_hook: None,
+            hook_ctx: null_mut(),
+            cancel_token: cancel_token_ptr(),
+        },
+        prefix_digest: None,
+    }
+    .into();
 
     let response = invoke_with_response(|out, error| unsafe { (ctx.lib.ro.list_config)(request, out, error) })?;
 

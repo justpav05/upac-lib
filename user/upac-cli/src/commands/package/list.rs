@@ -3,15 +3,20 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::ptr::null_mut;
+
 use anyhow::Result;
 
 use clap::Args as ClapArgs;
 
 use upac_abi::request::CListPackagesRequest;
 
+use upac_types::request::{ListPackagesRequest, RequestBase};
+
+use crate::cancel_token_ptr;
 use crate::commands::display::{PackageField, PackageFormatter};
 use crate::types::CommandContext;
-use crate::types::abi::{invoke_with_response, request_base};
+use crate::types::abi::invoke_with_response;
 
 #[cfg(test)]
 #[path = "../../../tests/inline/list.rs"]
@@ -42,7 +47,14 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: CommandContext) -> Result<()> {
-    let request = CListPackagesRequest::new(request_base());
+    let request: CListPackagesRequest = ListPackagesRequest {
+        base: RequestBase {
+            on_hook: None,
+            hook_ctx: null_mut(),
+            cancel_token: cancel_token_ptr(),
+        },
+    }
+    .into();
 
     let response = invoke_with_response(|out, error| unsafe { (ctx.lib.ro.list_packages)(request, out, error) })?;
 

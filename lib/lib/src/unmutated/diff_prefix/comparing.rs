@@ -3,15 +3,17 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
 use upac_abi::{DiffFileSource, FileDiffKind};
 
-use crate::database::attribution::FileAttribute;
-use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_take};
-use crate::unmutated::diff_prefix::{DiffPrefixError, DiffPrefixSnapshot};
+use upac_types::entry::{DiffFileEntryCommon, DiffPrefixFileEntry};
+use upac_types::hook::ProgressEventBuilder;
 
-use upac_types::{DiffFileEntryCommon, DiffPrefixFileEntry};
+use super::{DiffPrefixError, DiffPrefixSnapshot};
+
+use crate::database::attribution::FileAttribute;
+use crate::orchestrator::context::{Context, ctx_take};
+use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
 
 pub struct ComparingStage;
 

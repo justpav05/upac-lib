@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::ffi::CString;
+use std::ptr::null_mut;
 
 use anyhow::Result;
 
@@ -13,10 +13,14 @@ use i18n_embed_fl::fl;
 
 use upac_abi::request::{CSearchInMetaRequest, CSearchMetaRequest};
 
+use upac_types::package::PackageInfo;
+use upac_types::request::{RequestBase, SearchInMetaRequest, SearchMetaRequest};
+
+use crate::cancel_token_ptr;
 use crate::commands::display::{PackageField, PackageFormatter};
 use crate::locale::LOADER;
 use crate::types::CommandContext;
-use crate::types::abi::{invoke_with_response, package_info, request_base, slice_from_cstr};
+use crate::types::abi::invoke_with_response;
 
 #[cfg(test)]
 #[path = "../../../tests/inline/search.rs"]
@@ -56,7 +60,6 @@ pub struct Args {
 }
 
 pub fn run(args: Args, ctx: CommandContext) -> Result<()> {
-    let query = CString::new(args.query.as_str())?;
     let extra_fields = build_extra_fields(&args);
 
     match args.package.as_deref() {
@@ -65,12 +68,21 @@ pub fn run(args: Args, ctx: CommandContext) -> Result<()> {
                 anyhow::bail!(fl!(LOADER, "err-invalid-entry"));
             };
 
-            let package_name = CString::new(package)?;
-            let package_arch = CString::new(arch)?;
-            let package_arch_sub = args.package_arch_sub.as_deref().map(CString::new).transpose()?;
-            let package = package_info(&package_name, &package_arch, package_arch_sub.as_ref());
-
-            let request = CSearchInMetaRequest::new(request_base(), package, slice_from_cstr(&query), args.regex);
+            let request: CSearchInMetaRequest = SearchInMetaRequest {
+                base: RequestBase {
+                    on_hook: None,
+                    hook_ctx: null_mut(),
+                    cancel_token: cancel_token_ptr(),
+                },
+                package: PackageInfo {
+                    name: package.to_owned(),
+                    arch: arch.to_owned(),
+                    arch_sub: args.package_arch_sub.clone(),
+                },
+                search: args.query.clone(),
+                is_regex: args.regex,
+            }
+            .into();
             let response =
                 invoke_with_response(|out, error| unsafe { (ctx.lib.ro.search_in_meta)(request, out, error) })?;
 
@@ -83,8 +95,18 @@ pub fn run(args: Args, ctx: CommandContext) -> Result<()> {
 
             unsafe { response.free() };
         }
+
         None => {
-            let request = CSearchMetaRequest::new(request_base(), slice_from_cstr(&query), args.regex);
+            let request: CSearchMetaRequest = SearchMetaRequest {
+                base: RequestBase {
+                    on_hook: None,
+                    hook_ctx: null_mut(),
+                    cancel_token: cancel_token_ptr(),
+                },
+                search: args.query.clone(),
+                is_regex: args.regex,
+            }
+            .into();
             let response = invoke_with_response(|out, error| unsafe { (ctx.lib.ro.search_meta)(request, out, error) })?;
 
             PackageFormatter {

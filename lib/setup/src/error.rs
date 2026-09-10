@@ -12,8 +12,6 @@ use gptman::linux::BlockError as GptBlockError;
 
 use nix::errno::Errno;
 
-use toml::de::Error as TomlError;
-
 use upac::boot::error::BootError;
 use upac::composefs::error::RepoError;
 use upac::database::error::{DatabaseError, DeployRecordError};
@@ -31,7 +29,6 @@ pub enum SetupError {
     Boot(BootError),
     BootPlugin(BootPluginError),
     Io(IoErrorKind),
-    MetaMalformed,
     NoSpaceLeft,
     NotBlockDevice,
     MkfsFailed,
@@ -40,6 +37,7 @@ pub enum SetupError {
     InvalidPartitionLayout,
     InvalidFormatParams,
     RereadFailed(Errno),
+    ComposefsSetupRootUnitNotFound,
     Unexpected,
 }
 
@@ -94,12 +92,6 @@ impl From<BootPluginError> for SetupError {
 impl From<IoError> for SetupError {
     fn from(error: IoError) -> Self {
         SetupError::Io(error.kind())
-    }
-}
-
-impl From<TomlError> for SetupError {
-    fn from(_: TomlError) -> Self {
-        SetupError::MetaMalformed
     }
 }
 

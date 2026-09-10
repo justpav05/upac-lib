@@ -22,7 +22,6 @@ use super::WriteDeployRecordStage;
 fn genesis_input(pinned: bool) -> GenesisInput {
     GenesisInput {
         source: String::new(),
-        meta_filename: None,
         empty_config: false,
         pinned,
         boot_plugin: None,

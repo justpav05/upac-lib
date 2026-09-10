@@ -5,13 +5,14 @@
 
 use std::collections::HashMap;
 
-use upac_abi::decoder::{
-    CONSTRAINT_ANY, CONSTRAINT_EQUAL, CONSTRAINT_GREATER, CONSTRAINT_LESS, DecodeError, parse_constraint_prefix,
-};
-use upac_types::decoder::{DecodeMeta, DecodedMeta};
-use upac_types::{Dependency, PackageMeta, Version};
+use upac_abi::{CONSTRAINT_ANY, CONSTRAINT_EQUAL, CONSTRAINT_GREATER, CONSTRAINT_LESS};
 
-use crate::alpm::{
+use upac_types::decoder::parse_constraint_prefix;
+use upac_types::error::DecodeError;
+use upac_types::package::{DecodedPackageMeta, PackageDependency, PackageMeta, Version};
+use upac_types::traits::DecodeMeta;
+
+use super::alpm::{
     PKGINFO_ARCH_KEY, PKGINFO_DEPEND_KEY, PKGINFO_DESCRIPTION_KEY, PKGINFO_EPOCH_KEY, PKGINFO_LICENSE_KEY,
     PKGINFO_MAINTAINER_KEY, PKGINFO_NAME_KEY, PKGINFO_RELEASE_KEY, PKGINFO_SIZE_KEY, PKGINFO_URL_KEY,
     PKGINFO_VERSION_KEY,
@@ -43,7 +44,7 @@ const OPERATORS: [(&[u8], u8); 5] = [
 pub struct PkgInfo<'a>(pub &'a str);
 
 impl DecodeMeta for PkgInfo<'_> {
-    fn decode(&self, sha256: [u8; 32]) -> Result<DecodedMeta, DecodeError> {
+    fn decode(&self, sha256: [u8; 32]) -> Result<DecodedPackageMeta, DecodeError> {
         let (mut fields, dependencies) = self.parse_fields();
 
         let name = required_field!(fields, PKGINFO_NAME_KEY);
@@ -73,12 +74,12 @@ impl DecodeMeta for PkgInfo<'_> {
             installed_size,
         };
 
-        Ok(DecodedMeta { meta, dependencies })
+        Ok(DecodedPackageMeta { meta, dependencies })
     }
 }
 
 impl PkgInfo<'_> {
-    fn parse_fields(&self) -> (HashMap<&str, String>, Vec<Dependency>) {
+    fn parse_fields(&self) -> (HashMap<&str, String>, Vec<PackageDependency>) {
         let mut fields: HashMap<&str, String> = HashMap::new();
         let mut dependencies = Vec::new();
 
@@ -102,7 +103,7 @@ impl PkgInfo<'_> {
         (fields, dependencies)
     }
 
-    fn parse_dependency(value: &str) -> Dependency {
+    fn parse_dependency(value: &str) -> PackageDependency {
         let bytes = value.as_bytes();
 
         for index in 0..bytes.len() {
@@ -110,14 +111,14 @@ impl PkgInfo<'_> {
                 continue;
             };
 
-            return Dependency {
+            return PackageDependency {
                 name: value[..index].to_owned(),
                 constraint,
                 version: Version::parse(&value[index + operator_len..]),
             };
         }
 
-        Dependency {
+        PackageDependency {
             name: value.to_owned(),
             constraint: CONSTRAINT_ANY,
             version: Version::default(),

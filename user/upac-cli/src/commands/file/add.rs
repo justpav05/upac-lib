@@ -3,19 +3,25 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::ffi::CString;
-
 use anyhow::Result;
 
 use clap::Args as ClapArgs;
 
+use i18n_embed_fl::fl;
+
 use upac_abi::FileDiffKind;
 use upac_abi::error::ErrorDomain;
-use upac_abi::request::{CFilesRequest, CRequestBase};
+use upac_abi::package::CPackageInfo;
+use upac_abi::request::CFilesRequest;
+
+use upac_types::package::PackageInfo;
+use upac_types::request::{FilesRequest, RequestBase};
+use upac_types::settings::RuntimeSettings;
 
 use crate::cancel_token_ptr;
+use crate::locale::LOADER;
 use crate::types::CommandContext;
-use crate::types::abi::{FileScope, borrowed_vec, invoke, optional_slice, package_info, slice_from_cstr};
+use crate::types::abi::{FileScope, invoke};
 use crate::types::progress::{ProgressState, on_progress};
 
 #[derive(ClapArgs)]
@@ -39,37 +45,36 @@ pub struct Args {
 pub fn run(args: Args, ctx: CommandContext) -> Result<()> {
     let symbols = ctx.lib.require_write()?;
 
-    let package_name = CString::new(args.package)?;
-    let package_arch = CString::new(args.arch)?;
-    let package_arch_sub = args.arch_sub.map(CString::new).transpose()?;
-    let subject = CString::new("file add")?;
-    let message = args.message.map(CString::new).transpose()?;
-    let boot_plugin = args.boot.map(CString::new).transpose()?;
-    let scope = args.scope.into();
-
-    let file_cstrings = args
-        .files
-        .iter()
-        .map(|file_path| CString::new(file_path.as_str()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let file_slices: Vec<_> = file_cstrings.iter().map(slice_from_cstr).collect();
-
-    let package = package_info(&package_name, &package_arch, package_arch_sub.as_ref());
+    let package: CPackageInfo = PackageInfo {
+        name: args.package,
+        arch: args.arch,
+        arch_sub: args.arch_sub,
+    }
+    .into();
 
     let mut progress = ProgressState::new(ErrorDomain::Files);
-    let base = CRequestBase::new(Some(on_progress), progress.ctx_ptr(), cancel_token_ptr());
 
-    let request = CFilesRequest::new(
-        base,
-        slice_from_cstr(&ctx.tmp_path),
-        slice_from_cstr(&subject),
-        optional_slice(message.as_ref()),
-        borrowed_vec(&file_slices),
-        FileDiffKind::Added,
-        scope,
-        &package,
-        optional_slice(boot_plugin.as_ref()),
-    );
+    let boot_plugin = args
+        .boot
+        .or_else(|| RuntimeSettings::load().boot.plugin)
+        .ok_or_else(|| anyhow::anyhow!(fl!(LOADER, "err-boot-plugin-required")))?;
+
+    let request: CFilesRequest = FilesRequest {
+        base: RequestBase {
+            on_hook: Some(on_progress),
+            hook_ctx: progress.ctx_ptr(),
+            cancel_token: cancel_token_ptr(),
+        },
+        tmp_path: ctx.tmp_path.to_string_lossy().into_owned(),
+        subject: "file add".to_owned(),
+        message: args.message,
+        files: args.files,
+        file_kind: FileDiffKind::Added,
+        scope: args.scope.into(),
+        file_package: &package,
+        boot_plugin: boot_plugin,
+    }
+    .into();
 
     let result = invoke(|error| unsafe { (symbols.files)(request, error) });
     progress.finish();

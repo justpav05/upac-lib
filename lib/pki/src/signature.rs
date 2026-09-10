@@ -5,12 +5,15 @@
 
 use der::pem::LineEnding;
 use der::{Decode, DecodePem, Encode, EncodePem};
+
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
 use rcgen::SigningKey;
+
 use x509_cert::Certificate;
 
-use crate::error::PkiError;
-use crate::generate::SigningIdentity;
+use super::error::PkiError;
+use super::generate::SigningIdentity;
 
 const SIGNATURE_LEN: usize = 64;
 const LENGTH_PREFIX_LEN: usize = 4;
@@ -59,6 +62,7 @@ pub struct HookSignature {
 impl HookSignature {
     pub fn sign(hook_bytes: &[u8], signing: &SigningIdentity) -> Result<Self, PkiError> {
         let signature_bytes = signing.key_pair.sign(hook_bytes)?;
+
         let signature = Signature::try_from(signature_bytes.as_slice()).map_err(|_| PkiError::Malformed)?;
 
         Ok(HookSignature {
@@ -126,6 +130,7 @@ impl HookSignature {
         let verifying_key = Self::extract_verifying_key(issuer_certificate)?;
 
         let tbs_der = certificate.tbs_certificate().to_der()?;
+
         let signature = Signature::try_from(certificate.signature().raw_bytes()).map_err(|_| PkiError::Malformed)?;
 
         verifying_key
@@ -141,6 +146,7 @@ impl HookSignature {
             .subject_public_key_info()
             .subject_public_key
             .raw_bytes();
+
         let key_bytes: [u8; 32] = key_bytes.try_into()?;
 
         VerifyingKey::from_bytes(&key_bytes).map_err(|_| PkiError::Malformed)

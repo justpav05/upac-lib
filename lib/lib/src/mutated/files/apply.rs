@@ -11,10 +11,13 @@ use composefs::generic_tree::Stat;
 use composefs::repository::{ImportContext, Repository};
 use composefs::tree::FileSystem;
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
 use upac_abi::{DiffFileSource, FileDiffKind};
 
-use upac_types::{FileEntry, FileEntryScope};
+use upac_types::entry::{FileEntry, FileEntryScope};
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{ApplyTarget, FileProgress, FilesError, RequestedFileOperation, WorkingState};
 
 use crate::composefs::error::RepoError;
 use crate::composefs::file::{FileHandle, stat_from_metadata};
@@ -23,12 +26,8 @@ use crate::database::files::FileStoreMut;
 use crate::deploy::Deploy;
 use crate::errors::CommonError;
 use crate::layout::deployment::LIVE_ETC_DIR;
-use crate::mutated::files::{
-    EtcUpperDir, FilesError, PendingFiles, RequestedFileKind, RequestedFileScope, TargetUuid, TotalFiles,
-    WorkingDatabase, WorkingTree,
-};
+use crate::orchestrator::context::{Context, ctx_get, ctx_take};
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get, ctx_take};
 
 pub struct ApplyFileStage;
 
@@ -36,33 +35,30 @@ impl Stage<FilesError> for ApplyFileStage {
     fn run(
         &self, context: &mut Context, _cancel: &CancelToken, mut progress: ProgressEventBuilder,
     ) -> Result<(ProgressEventBuilder, StageResult, Box<dyn RollbackGuard>), FilesError> {
-        let mut pending_files = ctx_take!(context, PendingFiles);
-        let mut woking_files_tree = ctx_take!(context, WorkingTree);
-        let mut woking_database = ctx_take!(context, WorkingDatabase);
-        let mut import_ctx = ctx_take!(context, ImportContext);
+        let mut file_progress = ctx_take!(context, FileProgress);
+        let mut woking_state = ctx_take!(context, WorkingState);
+        let mut imported_ctx = ctx_take!(context, ImportContext);
 
-        let config_upper_dir = ctx_get!(context, EtcUpperDir);
-        let uuid = ctx_get!(context, TargetUuid);
-        let file_kind = ctx_get!(context, RequestedFileKind);
-        let scope = ctx_get!(context, RequestedFileScope);
-        let total_files = ctx_get!(context, TotalFiles);
+        let apply_target = ctx_get!(context, ApplyTarget);
+        let file_operation = ctx_get!(context, RequestedFileOperation);
+
         let deploy = ctx_get!(context, Deploy);
 
-        let path = pending_files.0.pop_front().ok_or(CommonError::MissingResult)?;
+        let path = file_progress.pending.pop_front().ok_or(CommonError::MissingResult)?;
 
-        match scope.0 {
+        match file_operation.scope {
             DiffFileSource::Prefix => {
                 let repository = deploy.open_repository()?;
 
-                match file_kind.0 {
+                match file_operation.kind {
                     FileDiffKind::Removed => {
-                        FileHandle::new(&path).remove_in_tree(&mut woking_files_tree.0)?;
-                        woking_database.0.remove_user_file(uuid.0, &path)?;
+                        FileHandle::new(&path).remove_in_tree(&mut woking_state.tree)?;
+                        woking_state.database.remove_user_file(apply_target.uuid, &path)?;
                     }
                     FileDiffKind::Added | FileDiffKind::Modified => {
-                        Self::add_file(&path, &repository, &mut woking_files_tree.0, &mut import_ctx)?;
-                        woking_database.0.insert_package_file(
-                            uuid.0,
+                        Self::add_file(&path, &repository, &mut woking_state.tree, &mut imported_ctx)?;
+                        woking_state.database.insert_package_file(
+                            apply_target.uuid,
                             &FileEntry {
                                 path: path.clone(),
                                 is_user: true,
@@ -72,15 +68,15 @@ impl Stage<FilesError> for ApplyFileStage {
                     }
                 }
             }
-            DiffFileSource::Config => match file_kind.0 {
+            DiffFileSource::Config => match file_operation.kind {
                 FileDiffKind::Removed => {
-                    remove_file(config_upper_dir.0.join(&path)).map_err(RepoError::from)?;
-                    woking_database.0.remove_user_file(uuid.0, &path)?;
+                    remove_file(apply_target.config_upper_dir.join(&path)).map_err(RepoError::from)?;
+                    woking_state.database.remove_user_file(apply_target.uuid, &path)?;
                 }
                 FileDiffKind::Added | FileDiffKind::Modified => {
-                    Self::add_config_file(&path, &config_upper_dir.0)?;
-                    woking_database.0.insert_package_file(
-                        uuid.0,
+                    Self::add_config_file(&path, &apply_target.config_upper_dir)?;
+                    woking_state.database.insert_package_file(
+                        apply_target.uuid,
                         &FileEntry {
                             path: path.clone(),
                             is_user: true,
@@ -91,20 +87,19 @@ impl Stage<FilesError> for ApplyFileStage {
             },
         }
 
-        let remaining = pending_files.0.len() as u64;
-        let processed = total_files.0 - remaining;
-        progress = progress.subject(path).progress(processed, total_files.0);
+        let remaining = file_progress.pending.len() as u64;
+        let processed = file_progress.total - remaining;
+        progress = progress.subject(path).progress(processed, file_progress.total);
 
-        let result = if pending_files.0.is_empty() {
+        let result = if file_progress.pending.is_empty() {
             StageResult::Advance
         } else {
             StageResult::Repeat
         };
 
-        context.put(pending_files);
-        context.put(woking_files_tree);
-        context.put(woking_database);
-        context.put(import_ctx);
+        context.put(file_progress);
+        context.put(woking_state);
+        context.put(imported_ctx);
 
         Ok((progress, result, Box::new(NoRollback)))
     }
@@ -112,7 +107,8 @@ impl Stage<FilesError> for ApplyFileStage {
 
 impl ApplyFileStage {
     fn add_file(
-        path: &str, repository: &Repository<ObjectID>, tree: &mut FileSystem<ObjectID>, import_ctx: &mut ImportContext,
+        path: &str, repository: &Repository<ObjectID>, tree: &mut FileSystem<ObjectID>,
+        imported_ctx: &mut ImportContext,
     ) -> Result<(), FilesError> {
         let source_path = Path::new(path);
         let metadata = symlink_metadata(source_path).map_err(RepoError::from)?;
@@ -143,17 +139,17 @@ impl ApplyFileStage {
                 tree,
                 &File::open(source_path).map_err(RepoError::from)?,
                 stat,
-                import_ctx,
+                imported_ctx,
             )?;
         }
 
         Ok(())
     }
 
-    fn add_config_file(path: &str, etc_upper_dir: &Path) -> Result<(), FilesError> {
+    fn add_config_file(path: &str, config_upper_dir: &Path) -> Result<(), FilesError> {
         let live_path = Path::new(LIVE_ETC_DIR).join(path);
         let metadata = symlink_metadata(&live_path).map_err(RepoError::from)?;
-        let dest_path = etc_upper_dir.join(path);
+        let dest_path = config_upper_dir.join(path);
 
         if let Some(parent) = dest_path.parent() {
             create_dir_all(parent).map_err(RepoError::from)?;

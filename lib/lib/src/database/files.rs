@@ -9,11 +9,11 @@ use twox_hash::xxhash3_64::Hasher as XxHasher;
 
 use uuid::Uuid;
 
-use upac_types::FileEntry;
 use upac_types::codec::RedbCodable;
+use upac_types::entry::FileEntry;
 
 use super::error::DatabaseError;
-use super::{FILES_UUID_HASH_TABLE, FILES_UUID_TABLE, MemoryDatabase, ReadableSource};
+use super::{FILES_UUID_HASH_TABLE, FILES_UUID_TABLE, MemoryDatabase, ReadTransactionExt, ReadableSource};
 
 use crate::layout::database::FILES_ENTRY_TYPE_NAME;
 
@@ -37,14 +37,18 @@ pub trait FileStoreMut: FileStore {
 impl<T: ReadableSource> FileStore for T {
     fn find_file_owner(&self, path: &str) -> Result<Option<Uuid>, DatabaseError> {
         let transaction = self.source().begin_read()?;
-        let by_path = transaction.open_table(FILES_UUID_HASH_TABLE)?;
+        let Some(by_path) = transaction.open_table_or_none(FILES_UUID_HASH_TABLE)? else {
+            return Ok(None);
+        };
 
         Ok(by_path.get(Self::path_hash(path))?.map(|guard| guard.value()))
     }
 
     fn list_package_files(&self, uuid: Uuid) -> Result<Vec<FileEntry>, DatabaseError> {
         let transaction = self.source().begin_read()?;
-        let files = transaction.open_table(FILES_UUID_TABLE)?;
+        let Some(files) = transaction.open_table_or_none(FILES_UUID_TABLE)? else {
+            return Ok(Vec::new());
+        };
         let mut out = Vec::new();
 
         for entry in files.range((uuid, 0u64)..)? {
@@ -63,7 +67,9 @@ impl<T: ReadableSource> FileStore for T {
 
     fn list_files(&self) -> Result<Vec<(Uuid, FileEntry)>, DatabaseError> {
         let transaction = self.source().begin_read()?;
-        let files = transaction.open_table(FILES_UUID_TABLE)?;
+        let Some(files) = transaction.open_table_or_none(FILES_UUID_TABLE)? else {
+            return Ok(Vec::new());
+        };
         let mut out = Vec::new();
 
         for entry in files.iter()? {

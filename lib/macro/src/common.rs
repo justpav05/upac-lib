@@ -28,12 +28,7 @@ pub(crate) const VALIDATABLE_COMPOSITES: &[&str] = &[
     "CPrefixEntry",
     "CHistoryEntry",
     "CRequestBase",
-    "CDependency",
-    "CSetupBase",
-    "CPartitionMount",
-    "CPartitionSpec",
-    "CGptLayout",
-    "CBtrfsOptions",
+    "CPackageDependency",
 ];
 
 pub(crate) fn generic_arg(segment: &PathSegment) -> Option<&Type> {

@@ -8,20 +8,23 @@ use std::fs::create_dir_all;
 use composefs::fsverity::FsVerityHashValue;
 use composefs::repository::ImportContext;
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{CommitInfo, NewState, UninstallError};
 
 use crate::composefs::file::FileHandle;
 use crate::composefs::overlay::apply_overlay_upper;
 use crate::composefs::repository::commit_tree;
-use crate::config::merge::merge_config;
+use crate::config::merge_config;
 use crate::database::error::DeployRecordError;
 use crate::database::record::DeployRecord;
 use crate::deploy::Deploy;
 use crate::deploy::digest::current_prefix_digest;
 use crate::layout::deployment::CONFIG_DIR_NAME;
-use crate::mutated::uninstaller::{CommitMessage, NewPrefixDigest, RemovedConfigPaths, Subject, UninstallError};
+use crate::orchestrator::context::{Context, ctx_get};
 use crate::orchestrator::stage::{RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get, ctx_take};
 
 pub struct MergeStage;
 
@@ -29,12 +32,9 @@ impl Stage<UninstallError> for MergeStage {
     fn run(
         &self, context: &mut Context, _cancel: &CancelToken, progress: ProgressEventBuilder,
     ) -> Result<(ProgressEventBuilder, StageResult, Box<dyn RollbackGuard>), UninstallError> {
-        let removed_config_paths = ctx_take!(context, RemovedConfigPaths);
-
-        let new_prefix = ctx_get!(context, NewPrefixDigest);
+        let new_state = ctx_get!(context, NewState);
         let deploy = ctx_get!(context, Deploy);
-        let subject = ctx_get!(context, Subject);
-        let message = ctx_get!(context, CommitMessage);
+        let commit_info = ctx_get!(context, CommitInfo);
 
         let repository = deploy.open_repository()?;
 
@@ -52,23 +52,23 @@ impl Stage<UninstallError> for MergeStage {
 
         let mut new = base_config_layout.clone();
 
-        for path in &removed_config_paths.0 {
+        for path in &new_state.removed_config_paths {
             FileHandle::new(path).remove_in_tree(&mut new)?;
         }
 
         let merge_result = merge_config(&base_config_layout, &new, &live_config_layout, true)?;
         let new_config_digest = commit_tree(&repository, merge_result.tree)?.to_hex();
 
-        let new_record_dir = deploy.deploy(&new_prefix.0);
+        let new_record_dir = deploy.deploy(&new_state.prefix_digest);
         let mut record = match DeployRecord::read(&new_record_dir) {
             Ok(existing) => existing,
             Err(DeployRecordError::NotFound) => {
                 create_dir_all(&new_record_dir).map_err(DeployRecordError::from)?;
 
                 DeployRecord {
-                    prefix_digest: new_prefix.0.clone(),
-                    subject: subject.0.clone(),
-                    message: message.0.clone(),
+                    prefix_digest: new_state.prefix_digest.clone(),
+                    subject: commit_info.subject.clone(),
+                    message: commit_info.message.clone(),
                     seq: DeployRecord::allocate_seq(&deploy.next_seq_path())?,
                     timestamp: DeployRecord::now_secs(),
                     config_history: Vec::new(),
@@ -83,8 +83,8 @@ impl Stage<UninstallError> for MergeStage {
         written.extend(record.update_working_config(
             &new_record_dir,
             new_config_digest,
-            subject.0.clone(),
-            message.0.clone(),
+            commit_info.subject.clone(),
+            commit_info.message.clone(),
         )?);
 
         Ok((progress, StageResult::Advance, Box::new(written)))

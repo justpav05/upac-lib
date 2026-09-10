@@ -3,26 +3,27 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use std::fs::OpenOptions;
+use std::fs::{OpenOptions, copy};
 use std::os::fd::AsRawFd;
 use std::os::raw::c_long;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::str::FromStr;
 
 use efivar::VarManager;
+use efivar::boot::{
+    BootEntry, BootEntryAttributes, BootVarName, EFIHardDrive, EFIHardDriveType, FilePath, FilePathList,
+};
 use efivar::efi::{Variable, VariableFlags};
 
 use nix::{ioctl_read, ioctl_write_ptr};
 
 use uuid::Uuid;
 
-use upac_abi::boot::Booter;
+use upac_types::traits::Booter;
 
-use crate::boot::{BOOT_NEXT_VAR, BOOT_ORDER_VAR, EFI_SYSFS_PATH, EFIVARFS_PATH, LOADER_INFO_VAR, SD_BOOT_LOADER_GUID};
-use crate::error::UkiError;
-use crate::grub::{GRUBENV_FALLBACK, GRUBENV_PRIMARY};
-use crate::refind::{PREVIOUS_BOOT_GUID, PREVIOUS_BOOT_VAR};
+use super::boot::{BOOT_NEXT_VAR, BOOT_ORDER_VAR, EFIVARFS_PATH};
+use super::error::UkiError;
+use super::uki::{EFI_LINUX_DIR, EFI_LINUX_REAL_PATH, FROM_SLOT, TO_SLOT};
 
 const FS_IMMUTABLE_FL: c_long = 0x0000_0010;
 
@@ -42,22 +43,6 @@ impl Booter for Uki {
         })
     }
 
-    fn probes() -> bool {
-        if !Path::new(EFI_SYSFS_PATH).exists() {
-            return false;
-        }
-        if Path::new(GRUBENV_PRIMARY).exists() || Path::new(GRUBENV_FALLBACK).exists() {
-            return false;
-        }
-
-        let Ok(manager) = catch_unwind(AssertUnwindSafe(efivar::system)) else {
-            return false;
-        };
-
-        !efi_variable_exists(manager.as_ref(), LOADER_INFO_VAR, SD_BOOT_LOADER_GUID)
-            && !efi_variable_exists(manager.as_ref(), PREVIOUS_BOOT_VAR, PREVIOUS_BOOT_GUID)
-    }
-
     fn set_one_shot(&mut self, entry_name: &str) -> Result<(), UkiError> {
         let id = self.find_boot_id(entry_name)?;
 
@@ -70,7 +55,7 @@ impl Booter for Uki {
         Ok(())
     }
 
-    fn confirm_boot(&mut self, entry_name: &str) -> Result<(), UkiError> {
+    fn confirm_boot(&mut self, entry_name: &str, esp_mount_point: &str) -> Result<(), UkiError> {
         let id = self.find_boot_id(entry_name)?;
 
         let mut order = self.manager.get_boot_order()?;
@@ -80,20 +65,55 @@ impl Booter for Uki {
         Self::clear_immutable(&Variable::new(BOOT_ORDER_VAR));
         self.manager.set_boot_order(order)?;
 
+        if entry_name == TO_SLOT {
+            let efi_linux = Path::new(esp_mount_point).join(EFI_LINUX_REAL_PATH);
+            let to_path = efi_linux.join(format!("{TO_SLOT}.efi"));
+            let from_path = efi_linux.join(format!("{FROM_SLOT}.efi"));
+            copy(&to_path, &from_path)?;
+        }
+
+        Ok(())
+    }
+
+    fn install(
+        &mut self, esp_mount_point: &str, esp_partition_number: u32, esp_starting_lba: u64, esp_ending_lba: u64,
+        esp_unique_partition_guid: [u8; 16], to_slot: &str, from_slot: &str,
+    ) -> Result<(), UkiError> {
+        let _ = esp_mount_point;
+
+        let partition_size = esp_ending_lba - esp_starting_lba + 1;
+        let partition_sig = Uuid::from_bytes_le(esp_unique_partition_guid);
+
+        self.register_slot(
+            esp_partition_number,
+            esp_starting_lba,
+            partition_size,
+            partition_sig,
+            to_slot,
+        )?;
+        self.register_slot(
+            esp_partition_number,
+            esp_starting_lba,
+            partition_size,
+            partition_sig,
+            from_slot,
+        )?;
+
         Ok(())
     }
 }
 
 impl Uki {
     fn find_boot_id(&self, slot_filename: &str) -> Result<u16, UkiError> {
+        let slot_file_name = format!("{}.efi", slot_filename.to_lowercase());
+
         for (entry, _var) in self.manager.get_boot_entries()? {
             let entry = entry?;
-            let matches = entry.entry.file_path_list.as_ref().is_some_and(|list| {
-                list.file_path
-                    .path
-                    .to_lowercase()
-                    .ends_with(&slot_filename.to_lowercase())
-            });
+            let matches = entry
+                .entry
+                .file_path_list
+                .as_ref()
+                .is_some_and(|list| list.file_path.path.to_lowercase().ends_with(&slot_file_name));
 
             if matches {
                 return Ok(entry.id);
@@ -101,6 +121,42 @@ impl Uki {
         }
 
         Err(UkiError::EntryNotFound)
+    }
+
+    fn register_slot(
+        &mut self, partition_number: u32, partition_start: u64, partition_size: u64, partition_sig: Uuid,
+        slot_filename: &str,
+    ) -> Result<u16, UkiError> {
+        let id = self.free_boot_id()?;
+
+        let entry = BootEntry {
+            attributes: BootEntryAttributes::LOAD_OPTION_ACTIVE,
+            description: slot_filename.to_owned(),
+            file_path_list: Some(FilePathList {
+                file_path: FilePath {
+                    path: format!("{EFI_LINUX_DIR}{slot_filename}.efi"),
+                },
+                hard_drive: EFIHardDrive {
+                    partition_number,
+                    partition_start,
+                    partition_size,
+                    partition_sig,
+                    format: 0x02,
+                    sig_type: EFIHardDriveType::Gpt,
+                },
+            }),
+            optional_data: Vec::new(),
+        };
+
+        self.manager.add_boot_entry(id, entry)?;
+
+        Ok(id)
+    }
+
+    fn free_boot_id(&self) -> Result<u16, UkiError> {
+        (0..u16::MAX)
+            .find(|id| !self.manager.exists(&Variable::new(&id.boot_var_name())).unwrap_or(true))
+            .ok_or(UkiError::NoFreeBootId)
     }
 
     fn clear_immutable(variable: &Variable) {
@@ -122,12 +178,4 @@ impl Uki {
             let _ = unsafe { fs_ioc_setflags(fd, &flags) };
         }
     }
-}
-
-fn efi_variable_exists(manager: &dyn VarManager, name: &str, guid: &str) -> bool {
-    let Ok(guid) = Uuid::from_str(guid) else {
-        return false;
-    };
-
-    manager.exists(&Variable::new_with_vendor(name, guid)).unwrap_or(false)
 }

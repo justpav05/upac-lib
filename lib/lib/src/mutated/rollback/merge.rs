@@ -3,13 +3,16 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{RequestedConfigDigest, RollbackError, TargetPrefixDigest};
 
 use crate::database::record::DeployRecord;
 use crate::deploy::Deploy;
-use crate::mutated::rollback::{RequestedConfigDigest, RollbackError, TargetPrefixDigest};
+use crate::orchestrator::context::{Context, ctx_get};
 use crate::orchestrator::stage::{RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get};
 
 pub struct MergeStage;
 
@@ -20,7 +23,7 @@ impl Stage<RollbackError> for MergeStage {
         let requested = ctx_get!(context, RequestedConfigDigest);
         let deploy = ctx_get!(context, Deploy);
 
-        let (config_digest, prefix_digest) = DeployRecord::resolve_config_digest(deploy, Some(&requested.0))?;
+        let (config_digest, prefix_digest) = DeployRecord::resolve_config_digest(deploy, Some(&requested))?;
 
         let record_dir = deploy.deploy(&prefix_digest);
         let mut record = DeployRecord::read(&record_dir)?;

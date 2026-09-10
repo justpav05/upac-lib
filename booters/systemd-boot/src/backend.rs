@@ -16,62 +16,74 @@ use nix::{ioctl_read, ioctl_write_ptr};
 
 use uuid::Uuid;
 
-use upac_abi::boot::Booter;
+use upac_types::traits::Booter;
 
-use crate::boot::{
-    EFIVARFS_PATH, LOADER_ENTRY_DEFAULT_VAR, LOADER_ENTRY_ONE_SHOT_VAR, LOADER_INFO_VAR, SD_BOOT_LOADER_GUID,
-};
-use crate::error::BlsError;
+use super::boot::{EFIVARFS_PATH, LOADER_ENTRY_DEFAULT_VAR, LOADER_ENTRY_ONE_SHOT_VAR, SD_BOOT_LOADER_GUID};
+use super::error::SystemdBootError;
 
 const FS_IMMUTABLE_FL: c_long = 0x0000_0010;
 
 ioctl_read!(fs_ioc_getflags, b'f', 1, c_long);
 ioctl_write_ptr!(fs_ioc_setflags, b'f', 2, c_long);
 
-pub struct Bls {
+macro_rules! encode_utf16_null {
+    ($value:expr) => {{
+        let mut bytes: Vec<u8> = $value.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes.extend_from_slice(&[0x00, 0x00]);
+        bytes
+    }};
+}
+
+pub struct SystemdBoot {
     manager: Box<dyn VarManager>,
 }
 
-impl Booter for Bls {
-    type Error = BlsError;
+impl Booter for SystemdBoot {
+    type Error = SystemdBootError;
 
-    fn new() -> Result<Self, BlsError> {
+    fn new() -> Result<Self, SystemdBootError> {
         Ok(Self {
             manager: catch_unwind(AssertUnwindSafe(efivar::system))?,
         })
     }
 
-    fn probes() -> bool {
-        let Ok(manager) = catch_unwind(AssertUnwindSafe(efivar::system)) else {
-            return false;
-        };
-        let Ok(guid) = Uuid::from_str(SD_BOOT_LOADER_GUID) else {
-            return false;
-        };
-
-        manager
-            .exists(&Variable::new_with_vendor(LOADER_INFO_VAR, guid))
-            .unwrap_or(false)
-    }
-
-    fn set_one_shot(&mut self, entry_name: &str) -> Result<(), BlsError> {
+    fn set_one_shot(&mut self, entry_name: &str) -> Result<(), SystemdBootError> {
         self.write_loader_variable(LOADER_ENTRY_ONE_SHOT_VAR, entry_name)
     }
 
-    fn confirm_boot(&mut self, entry_name: &str) -> Result<(), BlsError> {
+    fn confirm_boot(&mut self, entry_name: &str, esp_mount_point: &str) -> Result<(), SystemdBootError> {
+        let _ = esp_mount_point;
+
         self.write_loader_variable(LOADER_ENTRY_DEFAULT_VAR, entry_name)
+    }
+
+    fn install(
+        &mut self, esp_mount_point: &str, esp_partition_number: u32, esp_starting_lba: u64, esp_ending_lba: u64,
+        esp_unique_partition_guid: [u8; 16], to_slot: &str, from_slot: &str,
+    ) -> Result<(), SystemdBootError> {
+        let _ = (
+            esp_mount_point,
+            esp_partition_number,
+            esp_starting_lba,
+            esp_ending_lba,
+            esp_unique_partition_guid,
+            to_slot,
+            from_slot,
+        );
+
+        Ok(())
     }
 }
 
-impl Bls {
-    fn write_loader_variable(&mut self, name: &str, entry_name: &str) -> Result<(), BlsError> {
+impl SystemdBoot {
+    fn write_loader_variable(&mut self, name: &str, entry_name: &str) -> Result<(), SystemdBootError> {
         let guid = Uuid::from_str(SD_BOOT_LOADER_GUID)?;
         let variable = Variable::new_with_vendor(name, guid);
 
         Self::clear_immutable(&variable);
 
         self.manager
-            .write(&variable, VariableFlags::default(), &encode_utf16_null(entry_name))?;
+            .write(&variable, VariableFlags::default(), &encode_utf16_null!(entry_name))?;
 
         Ok(())
     }
@@ -95,11 +107,4 @@ impl Bls {
             let _ = unsafe { fs_ioc_setflags(fd, &flags) };
         }
     }
-}
-
-fn encode_utf16_null(value: &str) -> Vec<u8> {
-    let mut bytes: Vec<u8> = value.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    bytes.extend_from_slice(&[0x00, 0x00]);
-
-    bytes
 }

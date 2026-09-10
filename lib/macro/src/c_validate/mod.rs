@@ -9,7 +9,9 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
+
 use quote::quote;
+
 use syn::{Data, DeriveInput, Error, Field, Fields, Ident, PathSegment, Type, TypePtr, parse_macro_input};
 
 use crate::common::{VALIDATABLE_COMPOSITES, generic_arg, segment_name};
@@ -89,7 +91,17 @@ fn field_ptr_validate(ident: &Ident, ptr: &TypePtr) -> TokenStream2 {
         return quote! {};
     };
 
-    if VALIDATABLE_COMPOSITES.contains(&seg.ident.to_string().as_str()) {
+    let name = seg.ident.to_string();
+
+    if name == "CancelToken" {
+        return quote! {
+            if self.#ident.is_null() {
+                return Err(ErrorKind::InvalidEntry);
+            }
+        };
+    }
+
+    if VALIDATABLE_COMPOSITES.contains(&name.as_str()) {
         quote! {
             unsafe {
                 if self.#ident.is_null() {
@@ -127,6 +139,12 @@ fn validate_impl(name: &Ident, validations: &[TokenStream2]) -> TokenStream2 {
                 check_size::<#name>(self.struct_size)?;
                 #(#validations)*
                 Ok(())
+            }
+        }
+
+        impl crate::types::CValidatable for #name {
+            unsafe fn validate(&self) -> Result<(), ErrorKind> {
+                unsafe { #name::validate(self) }
             }
         }
     }

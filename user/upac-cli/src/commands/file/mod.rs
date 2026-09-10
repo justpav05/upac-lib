@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-// ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
 
 use clap::{Args, Subcommand};
@@ -15,14 +14,12 @@ pub mod diff;
 pub mod remove;
 pub mod search;
 
-// ── Args ─────────────────────────────────────────────────────────────────────
 #[derive(Args)]
 pub struct FileArgs {
     #[command(subcommand)]
     pub command: FileCommand,
 }
 
-// ── Subcommands ───────────────────────────────────────────────────────────────
 #[derive(Subcommand)]
 pub enum FileCommand {
     Add(add::Args),
@@ -31,7 +28,6 @@ pub enum FileCommand {
     Search(search::Args),
 }
 
-// ── Dispatch ──────────────────────────────────────────────────────────────────
 pub fn run(args: FileArgs, context: CommandContext) -> Result<()> {
     match args.command {
         FileCommand::Add(args) => add::run(args, context),

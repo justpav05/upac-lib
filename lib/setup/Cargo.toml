@@ -24,7 +24,7 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-upac-lib   = { workspace = true, features = ["builtin-all-booters"] }
+upac-lib   = { workspace = true, features = ["builtin-all-booters", "builtin-all-decoders"] }
 upac-types = { workspace = true }
 upac-abi   = { workspace = true }
 upac-macro = { workspace = true }
@@ -42,7 +42,6 @@ xz2        = { workspace = true }
 zstd       = { workspace = true }
 tempfile   = { workspace = true }
 
-composefs-setup-root = "0.9.0"
 sevenz-rust2 = "0.22.2"
 btrfs-mkfs = "0.13.0"
 gptman     = "3.1.1"

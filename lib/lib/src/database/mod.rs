@@ -8,21 +8,21 @@ use std::path::Path;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use redb::{
-    Builder, Database as RedbDatabase, ReadOnlyDatabase as RedbReadOnlyDatabase, ReadableDatabase, StorageBackend,
-    TableDefinition,
+    Builder, Database as RedbDatabase, Key, ReadOnlyDatabase as RedbReadOnlyDatabase, ReadOnlyTable, ReadTransaction,
+    ReadableDatabase, StorageBackend, TableDefinition, TableError, Value,
 };
 
 use uuid::Uuid;
-
-use crate::layout::database::{
-    FILES_BY_PATH_TABLE_NAME, FILES_TABLE_NAME, PACKAGES_BY_NAME_TABLE_NAME, PACKAGES_TABLE_NAME,
-    PACKAGES_TRIGGERS_TABLE_NAME,
-};
 
 use self::error::DatabaseError;
 use self::files::StoredFileEntry;
 use self::meta::StoredPackageMeta;
 use self::triggers::StoredTriggers;
+
+use crate::layout::database::{
+    FILES_BY_PATH_TABLE_NAME, FILES_TABLE_NAME, PACKAGES_BY_NAME_TABLE_NAME, PACKAGES_TABLE_NAME,
+    PACKAGES_TRIGGERS_TABLE_NAME,
+};
 
 pub mod attribution;
 pub mod error;
@@ -119,6 +119,24 @@ impl ReadableSource for ReadOnlyDatabase {
 
     fn source(&self) -> &RedbReadOnlyDatabase {
         &self.database
+    }
+}
+
+pub(crate) trait ReadTransactionExt {
+    fn open_table_or_none<K: Key + 'static, V: Value + 'static>(
+        &self, definition: TableDefinition<K, V>,
+    ) -> Result<Option<ReadOnlyTable<K, V>>, DatabaseError>;
+}
+
+impl ReadTransactionExt for ReadTransaction {
+    fn open_table_or_none<K: Key + 'static, V: Value + 'static>(
+        &self, definition: TableDefinition<K, V>,
+    ) -> Result<Option<ReadOnlyTable<K, V>>, DatabaseError> {
+        match self.open_table(definition) {
+            Ok(table) => Ok(Some(table)),
+            Err(TableError::TableDoesNotExist(_)) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
     }
 }
 

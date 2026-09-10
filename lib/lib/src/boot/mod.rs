@@ -9,6 +9,7 @@ use std::path::Path;
 use composefs::generic_tree::Stat;
 use composefs::repository::Repository;
 use composefs::tree::{Directory, FileSystem, Inode};
+
 use composefs_boot::bootloader::{BootEntry, get_boot_resources};
 use composefs_boot::cmdline::ComposefsCmdline;
 use composefs_boot::write_boot::write_boot_simple;

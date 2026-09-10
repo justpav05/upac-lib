@@ -27,7 +27,6 @@ mod layout {
 }
 mod locale;
 
-// ── CLI arguments ─────────────────────────────────────────────────────────────
 #[derive(Parser)]
 #[command(name = "up-si", author, version, about)]
 enum Command {
@@ -37,7 +36,6 @@ enum Command {
     VerifyHook(commands::verify_hook::Args),
 }
 
-// ── Entry points ───────────────────────────────────────────────────────────────
 fn main() -> ExitCode {
     locale::init();
 

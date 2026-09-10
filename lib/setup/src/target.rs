@@ -17,11 +17,14 @@ use upac::layout::deployment::{DEPLOYS_DIR, NEXT_SEQ_PATH, REPO_DIR};
 
 use upac_abi::FsKind;
 
+use uuid::Uuid;
+
 use upac_types::PartitionMount;
 
 use crate::data::SetupWholeDiskData;
 use crate::error::SetupError;
 use crate::format::FormatTarget;
+use crate::layout::partition::{DEPLOY_LABEL, ESP_LABEL};
 use crate::partition::DiskLayout;
 
 pub struct TargetSysroot {
@@ -29,12 +32,21 @@ pub struct TargetSysroot {
     deploy_dir: PathBuf,
     repository: ManuallyDrop<Repository<ObjectID>>,
     mounted: Vec<PathBuf>,
+    esp_partition_number: Option<u32>,
+    esp_starting_lba: Option<u64>,
+    esp_ending_lba: Option<u64>,
+    esp_unique_partition_guid: Option<Uuid>,
 }
 
 impl TargetSysroot {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "flat ESP-geometry params by design, not grouped into a struct — see partition::DiskLayout"
+    )]
     pub fn new(
         deploy_device: &Path, deploy_fs: FsKind, esp_device: &Path, mount_point: PathBuf,
-        extra_mounts: &[PartitionMount],
+        extra_mounts: &[PartitionMount], esp_partition_number: Option<u32>, esp_starting_lba: Option<u64>,
+        esp_ending_lba: Option<u64>, esp_unique_partition_guid: Option<Uuid>,
     ) -> Result<Self, SetupError> {
         create_dir_all(&mount_point)?;
 
@@ -84,6 +96,10 @@ impl TargetSysroot {
             deploy_dir,
             repository: ManuallyDrop::new(repository),
             mounted,
+            esp_partition_number,
+            esp_starting_lba,
+            esp_ending_lba,
+            esp_unique_partition_guid,
         })
     }
 
@@ -97,16 +113,17 @@ impl TargetSysroot {
         )?;
 
         let esp_path = layout.esp_path();
+
         FormatTarget {
             device_path: &esp_path,
-            label: Some("ESP"),
+            label: Some(ESP_LABEL),
         }
         .format_esp()?;
 
         let deploy_path = layout.deploy_path();
         FormatTarget {
             device_path: &deploy_path,
-            label: Some("upac-deploy"),
+            label: Some(DEPLOY_LABEL),
         }
         .format(data.deploy_fs, data.node_size, data.sector_size, data.force_wipe)?;
 
@@ -133,6 +150,10 @@ impl TargetSysroot {
             &esp_path,
             PathBuf::from(data.mount_point()),
             &extra_mounts,
+            Some(layout.esp_partition_number()),
+            Some(layout.esp_starting_lba()),
+            Some(layout.esp_ending_lba()),
+            Some(layout.esp_unique_partition_guid()),
         )
     }
 
@@ -151,27 +172,21 @@ impl TargetSysroot {
     pub fn esp_mount_point(&self) -> PathBuf {
         self.mount_point.join(ESP_MOUNT_PRIMARY.trim_start_matches('/'))
     }
-}
 
-#[cfg(test)]
-impl TargetSysroot {
-    /// Builds a `TargetSysroot` over a plain directory — no `mount()`, no root required. Only
-    /// `deploy_dir`/`next_seq_path`/`repository` are meaningful on the result; `Drop` has nothing
-    /// to unmount since `mounted` stays empty.
-    pub(crate) fn for_testing(mount_point: PathBuf) -> Result<Self, SetupError> {
-        create_dir_all(&mount_point)?;
+    pub fn esp_partition_number(&self) -> Option<u32> {
+        self.esp_partition_number
+    }
 
-        let deploy_dir = mount_point.join(DEPLOYS_DIR);
-        create_dir_all(&deploy_dir)?;
+    pub fn esp_starting_lba(&self) -> Option<u64> {
+        self.esp_starting_lba
+    }
 
-        let (repository, _freshly_initialized) = repository::init(&mount_point.join(REPO_DIR))?;
+    pub fn esp_ending_lba(&self) -> Option<u64> {
+        self.esp_ending_lba
+    }
 
-        Ok(Self {
-            mount_point,
-            deploy_dir,
-            repository: ManuallyDrop::new(repository),
-            mounted: Vec::new(),
-        })
+    pub fn esp_unique_partition_guid(&self) -> Option<Uuid> {
+        self.esp_unique_partition_guid
     }
 }
 
@@ -190,5 +205,28 @@ impl Drop for TargetSysroot {
         }
 
         let _ = umount(base);
+    }
+}
+
+#[cfg(test)]
+impl TargetSysroot {
+    pub(crate) fn for_testing(mount_point: PathBuf) -> Result<Self, SetupError> {
+        create_dir_all(&mount_point)?;
+
+        let deploy_dir = mount_point.join(DEPLOYS_DIR);
+        create_dir_all(&deploy_dir)?;
+
+        let (repository, _freshly_initialized) = repository::init_insecure(&mount_point.join(REPO_DIR))?;
+
+        Ok(Self {
+            mount_point,
+            deploy_dir,
+            repository: ManuallyDrop::new(repository),
+            mounted: Vec::new(),
+            esp_partition_number: None,
+            esp_starting_lba: None,
+            esp_ending_lba: None,
+            esp_unique_partition_guid: None,
+        })
     }
 }

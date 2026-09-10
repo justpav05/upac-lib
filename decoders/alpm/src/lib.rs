@@ -5,13 +5,14 @@
 
 use std::str::from_utf8;
 
-use upac_abi::ABI_VERSION;
-use upac_abi::decoder::{CDecodeRequest, CDecodeResponse, CDependency, DecodeError};
+use upac_abi::DECODER_ABI_VERSION;
 use upac_abi::memory::{free_cslice, free_cvec_owning};
-use upac_abi::package::CPackageMeta;
-use upac_abi::types::COwned;
-use upac_abi::types::{CSlice, CVec};
-use upac_types::decoder::{DecodeMeta, DecodedMeta};
+use upac_abi::request::CDecodeRequest;
+use upac_abi::response::CDecodeResponse;
+
+use upac_types::decoder::{build_decode_response, verify};
+use upac_types::error::DecodeError;
+use upac_types::traits::DecodeMeta;
 
 use crate::extract::ExtractedMetadata;
 use crate::pkginfo::PkgInfo;
@@ -20,15 +21,14 @@ pub mod pkginfo;
 pub mod triggers;
 
 mod extract;
-mod verify;
 
 include!(concat!(env!("OUT_DIR"), "/layout.rs"));
 
 /// # Safety
 /// Touches no pointers.
 #[cfg_attr(feature = "cdylib", unsafe(no_mangle))]
-pub unsafe extern "C" fn abi_version() -> u32 {
-    ABI_VERSION
+pub unsafe extern "C" fn decode_abi_version() -> u32 {
+    DECODER_ABI_VERSION
 }
 
 /// # Safety
@@ -78,34 +78,16 @@ fn decode_package(request: &CDecodeRequest) -> Result<CDecodeResponse, DecodeErr
     let output_dir = from_utf8(unsafe { request.output_dir.as_slice() }).map_err(|_| DecodeError::InvalidRequest)?;
     let cancel = unsafe { request.cancel_token.as_ref() }.ok_or(DecodeError::InvalidRequest)?;
 
-    verify::verify(package_path, request.checksum, cancel)?;
+    verify(package_path, request.checksum, cancel)?;
 
     let extracted = ExtractedMetadata::extract(package_path, output_dir, cancel)?;
     let declarative_triggers = triggers::scan(extracted.install.as_deref().unwrap_or(""));
 
     let decoded = PkgInfo(&extracted.pkginfo).decode(request.checksum)?;
 
-    Ok(build_response(decoded, declarative_triggers))
-}
-
-fn build_response(decoded: DecodedMeta, declarative_triggers: Vec<String>) -> CDecodeResponse {
-    let DecodedMeta { meta, dependencies } = decoded;
-
-    let dependencies = dependencies.into_iter().map(CDependency::from).collect::<Vec<_>>();
-
-    let declarative_triggers = declarative_triggers
-        .into_iter()
-        .map(|trigger| CSlice::from_owned(trigger.into_bytes()))
-        .collect::<Vec<_>>();
-
-    CDecodeResponse {
-        struct_size: size_of::<CDecodeResponse>(),
-
-        meta: CPackageMeta::from(meta),
-
-        dependencies: CVec::from_owned(dependencies),
-        declarative_triggers: CVec::from_owned(declarative_triggers),
-
-        free: free_decode_response,
-    }
+    Ok(build_decode_response(
+        decoded,
+        declarative_triggers,
+        free_decode_response,
+    ))
 }

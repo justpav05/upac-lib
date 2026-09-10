@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-// ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
 
 use clap::{Args, Subcommand};
@@ -18,14 +17,12 @@ pub mod pin;
 pub mod prefixes;
 pub mod unpin;
 
-// ── Args ─────────────────────────────────────────────────────────────────────
 #[derive(Args)]
 pub struct CommitArgs {
     #[command(subcommand)]
     pub command: CommitCommand,
 }
 
-// ── Subcommands ───────────────────────────────────────────────────────────────
 #[derive(Subcommand)]
 pub enum CommitCommand {
     Diff(diff::Args),
@@ -37,7 +34,6 @@ pub enum CommitCommand {
     Unpin(unpin::Args),
 }
 
-// ── Dispatch ──────────────────────────────────────────────────────────────────
 pub fn run(args: CommitArgs, context: CommandContext) -> Result<()> {
     match args.command {
         CommitCommand::Diff(args) => diff::run(args, context),

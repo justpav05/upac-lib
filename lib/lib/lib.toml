@@ -145,17 +145,21 @@ update_mime_database_bin = "update-mime-database"
 update_desktop_database_bin = "update-desktop-database"
 shared_mime_info_xmlns = "http://www.freedesktop.org/standards/shared-mime-info"
 
-# ESP discovery and the fixed UKI-direct staging slot name (§5.2/§5.3). esp_mount_primary/
+# ESP discovery and the fixed UKI-direct staging slots (§5.2/§5.3). esp_mount_primary/
 # esp_mount_fallback are tried in that order against the running system's mount table (same
 # rsmount::tables::MountInfo mechanism Deploy::device_path() already uses) — chapter 3 documents
-# the ESP as mounted at either. upac_to_slot is the fixed stem a UKI-direct image is always
-# staged under (`\EFI\Linux\upac-to.efi`): the corresponding UEFI Boot#### entry is pre-registered
-# once, out of scope of this pipeline, and CheckoutStage only ever overwrites that same file's
-# content — a content-addressed name would require a new Boot#### NVRAM entry each time, which
-# nothing here creates. BLS-style images (systemd-boot/grub/refind) use the prefix_digest itself
-# as the entry name instead — content-addressed, no fixed slot needed, since those loaders rescan
-# their entries directory fresh every boot.
+# the ESP as mounted at either. upac_uki_to_slot is the fixed stem the corresponding UEFI Boot####
+# entry is pre-registered against once, out of scope of this pipeline (`\EFI\Linux\upac-to.efi`) —
+# a content-addressed name would require a new Boot#### NVRAM entry each time, which nothing here
+# creates. upac_uki_from_slot is NOT a second independently-bootable slot — it's a staging name:
+# `write_boot_entry` writes the new image there first, then atomically renames it over
+# upac_uki_to_slot, so a crash mid-write never leaves the one file Boot#### actually points at
+# truncated (the upstream `composefs-boot` writer itself just does a plain, non-atomic
+# `fs::write`). BLS-style images (systemd-boot/grub/refind) use the prefix_digest itself as the
+# entry name instead — content-addressed, no staging needed, since those loaders rescan their
+# entries directory fresh every boot.
 [boot]
 esp_mount_primary = "/efi"
 esp_mount_fallback = "/boot"
 upac_uki_to_slot = "upac-to"
+upac_uki_from_slot = "upac-from"

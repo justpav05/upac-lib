@@ -19,7 +19,6 @@ fn existing_data<'data>(cancel_token: &'data CancelToken, mount_point: Option<&'
 
         mount_point,
         source: "/mnt/source",
-        meta_filename: None,
         empty_config: false,
         pinned: false,
         boot_plugin: None,
@@ -47,7 +46,6 @@ fn whole_disk_data<'data>(
 
         mount_point,
         source: "/mnt/source",
-        meta_filename: None,
         empty_config: false,
         pinned: false,
         boot_plugin: None,

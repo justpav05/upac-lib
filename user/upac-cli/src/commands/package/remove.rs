@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::ffi::CString;
 use std::io::{self, Write};
+use std::ptr::null_mut;
 
 use anyhow::Result;
 
@@ -15,15 +15,17 @@ use colored::Colorize;
 use i18n_embed_fl::fl;
 
 use upac_abi::error::ErrorDomain;
-use upac_abi::request::{CListPackagesRequest, CRequestBase, CUninstallRequest};
+use upac_abi::request::{CListPackagesRequest, CUninstallRequest};
 use upac_abi::types::CSlice;
+
+use upac_types::package::PackageInfo;
+use upac_types::request::{ListPackagesRequest, RequestBase, UninstallRequest};
+use upac_types::settings::RuntimeSettings;
 
 use crate::cancel_token_ptr;
 use crate::locale::LOADER;
 use crate::types::CommandContext;
-use crate::types::abi::{
-    borrowed_vec, invoke, invoke_with_response, optional_slice, package_info, request_base, slice_from_cstr,
-};
+use crate::types::abi::{invoke, invoke_with_response};
 use crate::types::progress::{ProgressState, on_progress};
 
 #[cfg(test)]
@@ -31,7 +33,6 @@ use crate::types::progress::{ProgressState, on_progress};
 mod tests;
 
 type InstalledEntry = (String, String, Option<String>);
-type ResolvedEntry = (CString, CString, Option<CString>);
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -89,12 +90,19 @@ struct RemoveMachine {
     ctx: CommandContext,
 
     installed: Vec<InstalledEntry>,
-    resolved: Vec<ResolvedEntry>,
+    resolved: Vec<PackageInfo>,
 }
 
 impl RemoveMachine {
     fn state_listing(&mut self) -> Result<State> {
-        let request = CListPackagesRequest::new(request_base());
+        let request: CListPackagesRequest = ListPackagesRequest {
+            base: RequestBase {
+                on_hook: None,
+                hook_ctx: null_mut(),
+                cancel_token: cancel_token_ptr(),
+            },
+        }
+        .into();
 
         let response =
             invoke_with_response(|out, error| unsafe { (self.ctx.lib.ro.list_packages)(request, out, error) })?;
@@ -124,14 +132,12 @@ impl RemoveMachine {
             .args
             .names
             .iter()
-            .map(|name| {
-                Ok((
-                    CString::new(name.as_str())?,
-                    CString::new(arch)?,
-                    self.args.arch_sub.as_deref().map(CString::new).transpose()?,
-                ))
+            .map(|name| PackageInfo {
+                name: name.clone(),
+                arch: arch.to_owned(),
+                arch_sub: self.args.arch_sub.clone(),
             })
-            .collect::<Result<_>>()?;
+            .collect();
         Ok(State::Removing)
     }
 
@@ -142,11 +148,11 @@ impl RemoveMachine {
             .iter()
             .map(|name| {
                 let (arch, arch_sub) = find_installed(&self.installed, name)?;
-                Ok((
-                    CString::new(name.as_str())?,
-                    CString::new(arch)?,
-                    arch_sub.as_deref().map(CString::new).transpose()?,
-                ))
+                Ok(PackageInfo {
+                    name: name.clone(),
+                    arch,
+                    arch_sub,
+                })
             })
             .collect::<Result<_>>()?;
         Ok(State::Removing)
@@ -155,28 +161,29 @@ impl RemoveMachine {
     fn state_removing(&mut self) -> Result<State> {
         let symbols = self.ctx.lib.require_write()?;
 
-        let subject = CString::new("remove")?;
-        let message = self.args.message.as_deref().map(CString::new).transpose()?;
-        let boot_plugin = self.args.boot.as_deref().map(CString::new).transpose()?;
-
-        let packages: Vec<_> = self
-            .resolved
-            .iter()
-            .map(|(name, arch, arch_sub)| package_info(name, arch, arch_sub.as_ref()))
-            .collect();
-
         let mut progress = ProgressState::new(ErrorDomain::Uninstall);
-        let base = CRequestBase::new(Some(on_progress), progress.ctx_ptr(), cancel_token_ptr());
 
-        let request = CUninstallRequest::new(
-            base,
-            slice_from_cstr(&self.ctx.tmp_path),
-            slice_from_cstr(&subject),
-            optional_slice(message.as_ref()),
-            borrowed_vec(&packages),
-            optional_slice(boot_plugin.as_ref()),
-            self.args.purge,
-        );
+        let boot_plugin = self
+            .args
+            .boot
+            .clone()
+            .or_else(|| RuntimeSettings::load().boot.plugin)
+            .ok_or_else(|| anyhow::anyhow!(fl!(LOADER, "err-boot-plugin-required")))?;
+
+        let request: CUninstallRequest = UninstallRequest {
+            base: RequestBase {
+                on_hook: Some(on_progress),
+                hook_ctx: progress.ctx_ptr(),
+                cancel_token: cancel_token_ptr(),
+            },
+            tmp_path: self.ctx.tmp_path.to_string_lossy().into_owned(),
+            subject: "remove".to_owned(),
+            message: self.args.message.clone(),
+            packages: std::mem::take(&mut self.resolved),
+            boot_plugin,
+            purge: self.args.purge,
+        }
+        .into();
 
         let result = invoke(|error| unsafe { (symbols.uninstall)(request, error) });
         progress.finish();

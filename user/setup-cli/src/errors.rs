@@ -50,7 +50,6 @@ impl Display for LocalizedSetupError {
             SetupError::Io(kind) => {
                 write!(formatter, "{} ({kind:?})", fl!(LOADER, "err-io"))
             }
-            SetupError::MetaMalformed => formatter.write_str(&fl!(LOADER, "err-meta-malformed")),
             SetupError::NoSpaceLeft => formatter.write_str(&fl!(LOADER, "err-no-space-left")),
             SetupError::NotBlockDevice => formatter.write_str(&fl!(LOADER, "err-not-block-device")),
             SetupError::MkfsFailed => formatter.write_str(&fl!(LOADER, "err-mkfs-failed")),
@@ -60,6 +59,9 @@ impl Display for LocalizedSetupError {
             SetupError::InvalidFormatParams => formatter.write_str(&fl!(LOADER, "err-invalid-format-params")),
             SetupError::RereadFailed(errno) => {
                 write!(formatter, "{} ({errno})", fl!(LOADER, "err-reread-failed"))
+            }
+            SetupError::ComposefsSetupRootUnitNotFound => {
+                formatter.write_str(&fl!(LOADER, "err-composefs-setup-root-unit-not-found"))
             }
             SetupError::Unexpected => formatter.write_str(&fl!(LOADER, "err-unexpected")),
         }

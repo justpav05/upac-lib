@@ -6,13 +6,11 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use upac_abi::error::{CError, ErrorKind};
-use upac_abi::package::CPackageMeta;
 use upac_abi::request::CListPackagesRequest;
 use upac_abi::response::CListPackagesResponse;
-use upac_abi::types::{COwned, CVec};
 
 use crate::export::{try_convert_abi, write_error};
-use crate::unmutated::list_packages::ListPackagesData;
+use crate::unmutated::list_packages::{ListPackagesData, run};
 
 use upac_types::states::ListPackagesStateId;
 
@@ -26,25 +24,21 @@ pub unsafe extern "C" fn list_packages(
 ) -> i32 {
     let list_packages_data = try_convert_abi!(ListPackagesData::try_from(&request_c), err_out, ListPackagesStateId);
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        crate::unmutated::list_packages::run(list_packages_data)
-    }));
+    let result = catch_unwind(AssertUnwindSafe(|| run(list_packages_data)));
 
     match result {
-        Ok(Ok((metas,))) => {
+        Ok(Ok(response)) => {
             if !response_out.is_null() {
-                unsafe {
-                    *response_out = CListPackagesResponse::new(CVec::from_owned(
-                        metas.into_iter().map(CPackageMeta::from).collect(),
-                    ));
-                }
+                unsafe { *response_out = response.into() };
             }
             0
         }
+
         Ok(Err((state, error))) => {
             unsafe { write_error(err_out, state, ErrorKind::from(error)) };
             -1
         }
+
         Err(_) => {
             unsafe { write_error(err_out, ListPackagesStateId::Setup, ErrorKind::Unexpected) };
             -1

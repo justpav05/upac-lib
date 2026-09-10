@@ -7,14 +7,16 @@ use std::fs::remove_dir_all;
 use std::path::PathBuf;
 
 use upac_abi::error::ErrorKind;
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
 
 use upac_types::TmpPath;
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{ImportProgress, UnpackState, UpdateError};
 
 use crate::errors::CommonError;
-use crate::mutated::update::{PendingPackagePaths, PendingPackages, TotalPackages, UnpackerState, UpdateError};
+use crate::orchestrator::context::{Context, ctx_get, ctx_take};
 use crate::orchestrator::stage::{RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get, ctx_take};
 
 pub struct PreparationStage;
 
@@ -24,38 +26,40 @@ impl Stage<UpdateError> for PreparationStage {
     fn run(
         &self, context: &mut Context, cancel: &CancelToken, mut progress: ProgressEventBuilder,
     ) -> Result<(ProgressEventBuilder, StageResult, Box<dyn RollbackGuard>), UpdateError> {
-        let mut pending_paths = ctx_take!(context, PendingPackagePaths);
-        let mut unpacker = ctx_take!(context, UnpackerState);
-        let mut pending_packages = ctx_take!(context, PendingPackages);
+        let mut unpack_state = ctx_take!(context, UnpackState);
+        let mut import_progress = ctx_take!(context, ImportProgress);
 
         let tmp_path = ctx_get!(context, TmpPath);
-        let total_packages = ctx_get!(context, TotalPackages);
 
-        let package_path = pending_paths.0.pop_front().ok_or(CommonError::MissingResult)?;
-        let index = pending_packages.0.len();
+        let package_path = unpack_state
+            .pending_paths
+            .pop_front()
+            .ok_or(CommonError::MissingResult)?;
+        let index = import_progress.pending.len();
 
-        let (package, trigger) = unpacker
-            .0
+        let (package, trigger) = unpack_state
+            .unpacker
             .unpack_one(&package_path, index, tmp_path.as_ref(), cancel)
             .map_err(CommonError::Decoder)?;
 
         let guard = UnpackedPackageDir(PathBuf::from(&package.temp_package_path));
 
-        pending_packages.0.push_back((package, trigger));
+        import_progress.pending.push_back((package, trigger));
 
-        let remaining = pending_paths.0.len() as u64;
-        let processed = total_packages.0 - remaining;
-        progress = progress.subject(package_path).progress(processed, total_packages.0);
+        let remaining = unpack_state.pending_paths.len() as u64;
+        let processed = import_progress.total - remaining;
+        progress = progress
+            .subject(package_path)
+            .progress(processed, import_progress.total);
 
-        let result = if pending_paths.0.is_empty() {
+        let result = if unpack_state.pending_paths.is_empty() {
             StageResult::Advance
         } else {
             StageResult::Repeat
         };
 
-        context.put(pending_paths);
-        context.put(unpacker);
-        context.put(pending_packages);
+        context.put(unpack_state);
+        context.put(import_progress);
 
         Ok((progress, result, Box::new(guard)))
     }

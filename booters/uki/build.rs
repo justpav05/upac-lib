@@ -20,27 +20,33 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config: Value = from_str(&raw)?;
 
     let mut generated = String::new();
-
-    let sections = config.as_table().ok_or("booter.toml: root must be a table")?;
-    for (section, entries) in sections {
-        generated.push_str(&format!("pub mod {section} {{\n"));
-
-        let entries = entries
-            .as_table()
-            .ok_or_else(|| format!("booter.toml: [{section}] must be a table"))?;
-        for (key, value) in entries {
-            let value = value
-                .as_str()
-                .ok_or_else(|| format!("booter.toml: {section}.{key} must be a string"))?;
-
-            generated.push_str(&format!("    pub const {}: &str = {value:?};\n", key.to_uppercase()));
-        }
-
-        generated.push_str("}\n");
-    }
+    generated.push_str(&generate_section(&config, "boot")?);
+    generated.push_str(&generate_section(&config, "uki")?);
 
     let out = Path::new(&var("OUT_DIR")?).join("layout.rs");
     write(out, generated)?;
 
     Ok(())
+}
+
+fn generate_section(config: &Value, section: &str) -> Result<String, Box<dyn Error>> {
+    let entries = config
+        .get(section)
+        .and_then(Value::as_table)
+        .ok_or_else(|| format!("booter.toml: [{section}] must be a table"))?;
+
+    let mut generated = String::new();
+    generated.push_str(&format!("pub mod {section} {{\n"));
+
+    for (key, value) in entries {
+        let value = value
+            .as_str()
+            .ok_or_else(|| format!("booter.toml: {section}.{key} must be a string"))?;
+
+        generated.push_str(&format!("    pub const {}: &str = {value:?};\n", key.to_uppercase()));
+    }
+
+    generated.push_str("}\n");
+
+    Ok(generated)
 }

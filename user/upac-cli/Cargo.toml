@@ -28,7 +28,7 @@ name = "up"
 path = "src/main.rs"
 
 [dependencies]
-upac-lib   = { workspace = true, optional = true }
+upac-lib   = { workspace = true, optional = true, default-features = false }
 upac-abi   = { workspace = true }
 upac-types = { workspace = true }
 

@@ -7,13 +7,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use upac_abi::error::{CError, ErrorKind};
 use upac_abi::request::CDiffConfigRequest;
-use upac_abi::response::{CDiffConfigFileEntry, CDiffConfigResponse};
-use upac_abi::types::{COwned, CVec};
+use upac_abi::response::CDiffConfigResponse;
 
 use upac_types::states::DiffConfigStateId;
 
 use crate::export::{try_convert_abi, write_error};
-use crate::unmutated::diff_config::DiffConfigData;
+use crate::unmutated::diff_config::{DiffConfigData, run};
 
 /// # Safety
 /// Any borrowed byte-slice fields inside `request_c` must remain valid for the duration of the
@@ -25,25 +24,21 @@ pub unsafe extern "C" fn diff_config(
 ) -> i32 {
     let diff_config_data = try_convert_abi!(DiffConfigData::try_from(&request_c), err_out, DiffConfigStateId);
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        crate::unmutated::diff_config::run(diff_config_data)
-    }));
+    let result = catch_unwind(AssertUnwindSafe(|| run(diff_config_data)));
 
     match result {
-        Ok(Ok((files,))) => {
+        Ok(Ok(response)) => {
             if !response_out.is_null() {
-                unsafe {
-                    *response_out = CDiffConfigResponse::new(CVec::from_owned(
-                        files.into_iter().map(CDiffConfigFileEntry::from).collect(),
-                    ));
-                }
+                unsafe { *response_out = response.into() };
             }
             0
         }
+
         Ok(Err((state, error))) => {
             unsafe { write_error(err_out, state, ErrorKind::from(error)) };
             -1
         }
+
         Err(_) => {
             unsafe { write_error(err_out, DiffConfigStateId::Setup, ErrorKind::Unexpected) };
             -1

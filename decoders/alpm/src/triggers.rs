@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_types::DecoderTrigger;
+use upac_types::decoder::DecoderTrigger;
 
-use crate::alpm::{POST_INSTALL_FN, POST_REMOVE_FN, POST_UPGRADE_FN, PRE_INSTALL_FN, PRE_REMOVE_FN, PRE_UPGRADE_FN};
+use super::alpm::{POST_INSTALL_FN, POST_REMOVE_FN, POST_UPGRADE_FN, PRE_INSTALL_FN, PRE_REMOVE_FN, PRE_UPGRADE_FN};
 
 pub fn scan(content: &str) -> Vec<String> {
     DecoderTrigger::ALL

@@ -5,17 +5,18 @@
 
 use std::collections::HashMap;
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
 use upac_abi::{FileDiffKind, PackageDiffKind};
 
-use crate::database::attribution::FileAttribute;
-use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_take};
-use crate::unmutated::diff::{DiffError, DiffSnapshot};
+use upac_types::entry::{DiffFileEntryCommon, DiffPackageEntry, DiffPrefixFileEntry, DiffUntrackedFileEntry};
+use upac_types::hook::ProgressEventBuilder;
+use upac_types::package::{PackageMeta, Version};
 
-use upac_types::{
-    DiffFileEntryCommon, DiffPackageEntry, DiffPrefixFileEntry, DiffUntrackedFileEntry, PackageMeta, Version,
-};
+use super::{DiffError, DiffSnapshot};
+
+use crate::database::attribution::FileAttribute;
+use crate::orchestrator::context::{Context, ctx_take};
+use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
 
 type PackageIdentity = (String, String, Option<String>);
 

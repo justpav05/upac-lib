@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use i18n_embed_fl::fl;
@@ -29,4 +30,4 @@ impl Display for LocalizedPkiError {
     }
 }
 
-impl std::error::Error for LocalizedPkiError {}
+impl Error for LocalizedPkiError {}

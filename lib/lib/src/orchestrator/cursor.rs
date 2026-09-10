@@ -8,7 +8,7 @@ use std::any::TypeId;
 use upac_abi::hook::CancelToken;
 
 use crate::errors::CommonError;
-use crate::orchestrator::Context;
+use crate::orchestrator::context::Context;
 use crate::orchestrator::stage::{Stage, StageResult};
 
 pub struct Cursor<E> {

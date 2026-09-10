@@ -35,7 +35,9 @@ fn vec_to_c(ident: &Ident, segment: &PathSegment) -> TokenStream2 {
         return quote! { compile_error!("RustToC: unsupported Vec element type") };
     };
 
-    if PRIMITIVES.contains(&inner_name.as_str()) {
+    if inner_name == "String" {
+        quote! { CVec::from_owned(value.#ident.into_iter().map(|element| CSlice::from_owned(element.into_bytes())).collect()) }
+    } else if PRIMITIVES.contains(&inner_name.as_str()) {
         quote! { CVec::from_owned(value.#ident) }
     } else {
         let c_inner = format_ident!("C{inner_name}");
@@ -55,6 +57,10 @@ fn field_path_to_c(ident: &Ident, segment: &PathSegment) -> TokenStream2 {
 
 fn field_to_c(ident: &Ident, ty: &Type) -> TokenStream2 {
     if let Type::Array(_) = ty {
+        return quote! { value.#ident };
+    }
+
+    if let Type::Ptr(_) = ty {
         return quote! { value.#ident };
     }
 

@@ -7,8 +7,9 @@ use std::os::raw::c_void;
 
 use upac_macro::{CNew, CValidate};
 
+use super::HookMessageFn;
 use crate::error::ErrorKind;
-use crate::hook::{CancelToken, HookMessageFn};
+use crate::hook::CancelToken;
 use crate::package::CPackageInfo;
 use crate::types::{CSlice, CVec, check_size};
 use crate::{DiffFileSource, FileDiffKind};
@@ -30,6 +31,8 @@ pub struct CInstallRequest {
     pub struct_size: usize,
     pub base: CRequestBase,
 
+    pub boot_plugin: CSlice,
+
     pub tmp_path: CSlice,
 
     pub subject: CSlice,
@@ -37,8 +40,7 @@ pub struct CInstallRequest {
     pub message: CSlice,
 
     pub packages: CVec<CSlice>,
-    #[optional]
-    pub boot_plugin: CSlice,
+
     pub allow_conflict_files: bool,
 }
 
@@ -48,6 +50,8 @@ pub struct CUpdateRequest {
     pub struct_size: usize,
     pub base: CRequestBase,
 
+    pub boot_plugin: CSlice,
+
     pub tmp_path: CSlice,
 
     pub subject: CSlice,
@@ -55,8 +59,7 @@ pub struct CUpdateRequest {
     pub message: CSlice,
 
     pub packages: CVec<CSlice>,
-    #[optional]
-    pub boot_plugin: CSlice,
+
     pub allow_downgrade: bool,
     pub allow_conflict_files: bool,
 }
@@ -67,13 +70,14 @@ pub struct CUninstallRequest {
     pub struct_size: usize,
     pub base: CRequestBase,
 
+    pub boot_plugin: CSlice,
+
     pub tmp_path: CSlice,
     pub subject: CSlice,
     #[optional]
     pub message: CSlice,
     pub packages: CVec<CPackageInfo>,
-    #[optional]
-    pub boot_plugin: CSlice,
+
     pub purge: bool,
 }
 
@@ -83,10 +87,10 @@ pub struct CRollbackRequest {
     pub struct_size: usize,
     pub base: CRequestBase,
 
+    pub boot_plugin: CSlice,
+
     pub tmp_path: CSlice,
     pub config_digest: CSlice,
-    #[optional]
-    pub boot_plugin: CSlice,
 }
 
 #[repr(C)]
@@ -107,16 +111,17 @@ pub struct CFilesRequest {
     pub struct_size: usize,
     pub base: CRequestBase,
 
+    pub boot_plugin: CSlice,
+
     pub tmp_path: CSlice,
     pub subject: CSlice,
     #[optional]
     pub message: CSlice,
     pub files: CVec<CSlice>,
     pub file_kind: FileDiffKind,
-    pub scope: DiffFileSource,
     pub file_package: *const CPackageInfo,
-    #[optional]
-    pub boot_plugin: CSlice,
+
+    pub scope: DiffFileSource,
 }
 
 #[repr(C)]
@@ -267,4 +272,48 @@ pub struct CSearchInPackageFilesRequest {
     pub package: CPackageInfo,
     pub search: CSlice,
     pub is_regex: bool,
+}
+
+#[repr(C)]
+#[derive(CNew, CValidate)]
+pub struct CDecodeRequest {
+    pub struct_size: usize,
+
+    pub package_path: CSlice,
+    pub output_dir: CSlice,
+
+    pub checksum: [u8; 32],
+
+    pub cancel_token: *mut CancelToken,
+}
+
+#[repr(C)]
+#[derive(CNew, CValidate)]
+pub struct CBootPluginSetOneShotRequest {
+    pub struct_size: usize,
+
+    pub entry_name: CSlice,
+}
+
+#[repr(C)]
+#[derive(CNew, CValidate)]
+pub struct CBootPluginConfirmSuccsesBootRequest {
+    pub struct_size: usize,
+
+    pub entry_name: CSlice,
+    pub esp_mount_point: CSlice,
+}
+
+#[repr(C)]
+#[derive(CNew, CValidate)]
+pub struct CBootPluginInstallRequest {
+    pub struct_size: usize,
+
+    pub esp_mount_point: CSlice,
+    pub esp_partition_number: u32,
+    pub esp_starting_lba: u64,
+    pub esp_ending_lba: u64,
+    pub esp_unique_partition_guid: [u8; 16],
+    pub to_slot: CSlice,
+    pub from_slot: CSlice,
 }

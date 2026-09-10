@@ -33,8 +33,6 @@ pub struct Args {
     #[arg(long)]
     pub source: String,
     #[arg(long)]
-    pub meta_filename: Option<String>,
-    #[arg(long)]
     pub empty_config: bool,
     #[arg(long)]
     pub pinned: bool,
@@ -53,7 +51,6 @@ pub fn run(args: Args, cancel_token: &CancelToken) -> Result<()> {
 
         mount_point: args.mount_point.as_deref(),
         source: &args.source,
-        meta_filename: args.meta_filename.as_deref(),
         empty_config: args.empty_config,
         pinned: args.pinned,
         boot_plugin: args.boot_plugin.as_deref(),

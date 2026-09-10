@@ -3,9 +3,11 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_abi::error::{CommandState, ErrorDomain};
+use upac_abi::error::ErrorDomain;
 
 use upac_macro::{FromStageIndex, StageKey};
+
+use crate::error::CommandState;
 
 macro_rules! impl_command_state {
     ($name:ident, $domain:ident) => {

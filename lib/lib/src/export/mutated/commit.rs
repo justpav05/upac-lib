@@ -11,7 +11,7 @@ use upac_abi::request::CCommitRequest;
 use upac_types::states::CommitStateId;
 
 use crate::export::{try_convert_abi, write_error};
-use crate::mutated::commit::CommitData;
+use crate::mutated::commit::{CommitData, run};
 
 /// # Safety
 /// Any borrowed byte-slice fields inside `request_c` must remain valid for the duration of the
@@ -20,14 +20,16 @@ use crate::mutated::commit::CommitData;
 pub unsafe extern "C" fn commit(request_c: CCommitRequest, err_out: *mut CError) -> i32 {
     let commit_data = try_convert_abi!(CommitData::try_from(&request_c), err_out, CommitStateId);
 
-    let result = catch_unwind(AssertUnwindSafe(|| crate::mutated::commit::run(commit_data)));
+    let result = catch_unwind(AssertUnwindSafe(|| run(commit_data)));
 
     match result {
         Ok(Ok(())) => 0,
+
         Ok(Err((state, error))) => {
             unsafe { write_error(err_out, state, ErrorKind::from(error)) };
             -1
         }
+
         Err(_) => {
             unsafe { write_error(err_out, CommitStateId::Setup, ErrorKind::Unexpected) };
             -1

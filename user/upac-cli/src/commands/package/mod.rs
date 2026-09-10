@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-// ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
 
 use clap::{Args, Subcommand};
@@ -17,14 +16,12 @@ pub mod remove;
 pub mod search;
 pub mod update;
 
-// ── Args ─────────────────────────────────────────────────────────────────────
 #[derive(Args)]
 pub struct PkgArgs {
     #[command(subcommand)]
     pub command: PkgCommand,
 }
 
-// ── Subcommands ───────────────────────────────────────────────────────────────
 #[derive(Subcommand)]
 pub enum PkgCommand {
     Install(install::Args),
@@ -36,7 +33,6 @@ pub enum PkgCommand {
     Search(search::Args),
 }
 
-// ── Dispatch ──────────────────────────────────────────────────────────────────
 pub fn run(args: PkgArgs, context: CommandContext) -> Result<()> {
     match args.command {
         PkgCommand::Install(args) => install::run(args, context),

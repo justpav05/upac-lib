@@ -5,27 +5,34 @@
 
 use std::os::raw::c_void;
 
-use upac_abi::error::ErrorKind;
-use upac_abi::hook::{CancelToken, HookMessageFn, Message, MessageHook};
-use upac_abi::request::CCommitRequest;
+use upac_types::TmpPath;
+use upac_types::hook::Message;
+use upac_types::states::CommitStateId;
+use upac_types::traits::MessageHook;
 
-pub use self::error::CommitError;
+use upac_abi::HookMessageFn;
+use upac_abi::error::ErrorKind;
+use upac_abi::hook::CancelToken;
+use upac_abi::request::CCommitRequest;
 
 use self::transaction::TransactionStage;
 
 use crate::deploy::retention::RetentionStage;
 use crate::deploy::{Deploy, DeployMode};
-use crate::orchestrator::{Context, Orchestrator, SequentialOrchestrator, run_mutating};
+use crate::orchestrator::context::Context;
+use crate::orchestrator::{Orchestrator, SequentialOrchestrator, run_mutating};
 use crate::scripts::HookStage;
 use crate::scripts::pipeline::{Operation, PipelineTrigger};
-use upac_types::TmpPath;
-use upac_types::states::CommitStateId;
+
+pub use self::error::CommitError;
 
 mod error;
 mod transaction;
 
-pub(crate) struct Subject(pub String);
-pub(crate) struct CommitMessage(pub Option<String>);
+pub(crate) struct CommitInfo {
+    pub subject: String,
+    pub message: Option<String>,
+}
 
 pub struct CommitData<'a> {
     pub tmp_path: &'a str,
@@ -45,7 +52,7 @@ impl<'a> TryFrom<&'a CCommitRequest> for CommitData<'a> {
     fn try_from(request: &'a CCommitRequest) -> Result<Self, ErrorKind> {
         unsafe { request.validate()? };
 
-        let cancel_token = unsafe { request.base.cancel_token.as_ref() }.ok_or(ErrorKind::InvalidEntry)?;
+        let cancel_token = unsafe { &*request.base.cancel_token };
 
         Ok(CommitData {
             tmp_path: (&request.tmp_path).try_into()?,
@@ -68,8 +75,10 @@ pub fn run(data: CommitData) -> Result<(), (CommitStateId, CommitError)> {
     let mut context = Context::new();
     context.put(deploy);
     context.put(TmpPath(data.tmp_path.to_owned()));
-    context.put(Subject(data.subject.to_owned()));
-    context.put(CommitMessage(data.message.map(str::to_owned)));
+    context.put(CommitInfo {
+        subject: data.subject.to_owned(),
+        message: data.message.map(str::to_owned),
+    });
     context.put(Box::new(Message::new(data.hook_message, data.hook_message_context)) as Box<dyn MessageHook>);
 
     let orchestrator = assemble();

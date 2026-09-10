@@ -3,11 +3,12 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
+use upac_types::entry::FileEntry;
+use upac_types::package::PackageMeta;
+
 use super::error::DatabaseError;
 use super::files::FileStore;
 use super::meta::MetaStore;
-
-use upac_types::{FileEntry, PackageMeta};
 
 pub struct FileAttribution {
     pub package_meta: PackageMeta,

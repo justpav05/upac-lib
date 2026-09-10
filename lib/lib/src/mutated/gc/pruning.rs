@@ -5,12 +5,13 @@
 
 use std::collections::VecDeque;
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+use upac_types::hook::ProgressEventBuilder;
 
 use crate::deploy::Deploy;
-use crate::mutated::gc::{CollectedRoots, GcError, PendingDeploys, TotalDeploys};
+use crate::mutated::gc::{CollectedRoots, DeployProgress, GcError};
+use crate::orchestrator::context::{Context, ctx_get};
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get};
 
 pub struct PruneStage;
 
@@ -23,11 +24,10 @@ impl Stage<GcError> for PruneStage {
         deploy.prune_deploys()?;
 
         let deploys = deploy.deploys()?;
-        let total_deploys_count = deploys.len() as u64;
+        let total = deploys.len() as u64;
         let pending: VecDeque<_> = deploys.into_iter().collect();
 
-        context.put(PendingDeploys(pending));
-        context.put(TotalDeploys(total_deploys_count));
+        context.put(DeployProgress { pending, total });
         context.put(CollectedRoots(Vec::new()));
 
         Ok((progress, StageResult::Advance, Box::new(NoRollback)))

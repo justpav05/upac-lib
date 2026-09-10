@@ -3,10 +3,11 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_abi::ABI_VERSION;
-use upac_abi::error::{CError, CommandState, ErrorKind};
+use upac_abi::LIB_ABI_VERSION;
+use upac_abi::error::{CError, ErrorKind};
 use upac_abi::hook::CancelToken;
-use upac_abi::response::CUnmutatedResponse;
+
+use upac_types::error::CommandState;
 
 pub mod mutated;
 pub mod unmutated;
@@ -14,8 +15,8 @@ pub mod unmutated;
 /// # Safety
 /// Touches no pointers — `unsafe extern "C"` only to match the ABI calling convention.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn version_abi() -> u32 {
-    ABI_VERSION
+pub unsafe extern "C" fn lib_abi_version() -> u32 {
+    LIB_ABI_VERSION
 }
 
 /// # Safety
@@ -27,17 +28,6 @@ pub unsafe extern "C" fn cancel(token: *mut CancelToken) {
         return;
     }
     unsafe { (*token).cancel() };
-}
-
-/// # Safety
-/// `response`, if non-null, must point to a valid `CUnmutatedResponse` produced by this library
-/// that has not already been freed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_response(response: *mut CUnmutatedResponse) {
-    if response.is_null() {
-        return;
-    }
-    unsafe { (*response).free() };
 }
 
 pub(crate) unsafe fn write_error<S: CommandState>(err_out: *mut CError, state: S, error: ErrorKind) {

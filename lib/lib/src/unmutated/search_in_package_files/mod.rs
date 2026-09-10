@@ -5,18 +5,25 @@
 
 use std::os::raw::c_void;
 
+use upac_abi::HookMessageFn;
 use upac_abi::error::ErrorKind;
-use upac_abi::hook::{CancelToken, HookMessageFn, Message, MessageHook};
+use upac_abi::hook::CancelToken;
 use upac_abi::request::CSearchInPackageFilesRequest;
 
-pub use self::error::SearchInPackageFilesError;
+use upac_types::entry::SearchFileEntry;
+use upac_types::hook::Message;
+use upac_types::package::PackageEntry;
+use upac_types::response::SearchInPackageFilesResponse;
+use upac_types::states::SearchInPackageFilesStateId;
+use upac_types::traits::MessageHook;
 
 use self::searching::SearchingStage;
 
-use crate::orchestrator::{Context, Orchestrator, SequentialOrchestrator, run_unmutated};
+use crate::orchestrator::context::Context;
+use crate::orchestrator::{Orchestrator, SequentialOrchestrator, run_unmutated};
 use crate::search::Search;
-use upac_types::states::SearchInPackageFilesStateId;
-use upac_types::{PackageEntry, SearchFileEntry};
+
+pub use self::error::SearchInPackageFilesError;
 
 mod error;
 mod searching;
@@ -40,7 +47,7 @@ impl<'a> TryFrom<&'a CSearchInPackageFilesRequest> for SearchInPackageFilesData<
     fn try_from(request: &'a CSearchInPackageFilesRequest) -> Result<Self, ErrorKind> {
         unsafe { request.validate()? };
 
-        let cancel_token = unsafe { request.base.cancel_token.as_ref() }.ok_or(ErrorKind::InvalidEntry)?;
+        let cancel_token = unsafe { &*request.base.cancel_token };
 
         Ok(SearchInPackageFilesData {
             name: (&request.package.name).try_into()?,
@@ -59,7 +66,7 @@ impl<'a> TryFrom<&'a CSearchInPackageFilesRequest> for SearchInPackageFilesData<
 
 pub fn run(
     data: SearchInPackageFilesData,
-) -> Result<(Vec<SearchFileEntry>,), (SearchInPackageFilesStateId, SearchInPackageFilesError)> {
+) -> Result<SearchInPackageFilesResponse, (SearchInPackageFilesStateId, SearchInPackageFilesError)> {
     let search = Search::new(data.search, data.is_regex).map_err(|error| {
         (
             SearchInPackageFilesStateId::Setup,
@@ -78,12 +85,14 @@ pub fn run(
 
     let orchestrator = SequentialOrchestrator::new(vec![Box::new(SearchingStage)]);
 
-    run_unmutated!(
+    let (files,) = run_unmutated!(
         orchestrator,
         context,
         data.cancel_token,
         SearchInPackageFilesStateId,
         SearchInPackageFilesError,
         Vec<SearchFileEntry>
-    )
+    )?;
+
+    Ok(SearchInPackageFilesResponse { files })
 }

@@ -5,12 +5,17 @@
 
 use std::path::PathBuf;
 
+use uuid::Uuid;
+
 use super::DiskLayout;
 
 fn layout(device_path: &str, extra_partitions: Vec<u32>) -> DiskLayout {
     DiskLayout {
         device_path: PathBuf::from(device_path),
         esp_partition: 1,
+        esp_starting_lba: 2048,
+        esp_ending_lba: 2048 + 1024 * 1024 / 512 - 1,
+        esp_unique_partition_guid: Uuid::new_v4(),
         deploy_partition: 2,
         extra_partitions,
     }

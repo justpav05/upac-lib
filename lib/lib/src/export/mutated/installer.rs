@@ -11,7 +11,7 @@ use upac_abi::request::CInstallRequest;
 use upac_types::states::InstallStateId;
 
 use crate::export::{try_convert_abi, write_error};
-use crate::mutated::installer::InstallData;
+use crate::mutated::installer::{InstallData, run};
 
 /// # Safety
 /// Any borrowed byte-slice fields inside `request_c` must remain valid for the duration of the
@@ -20,14 +20,16 @@ use crate::mutated::installer::InstallData;
 pub unsafe extern "C" fn install(request_c: CInstallRequest, err_out: *mut CError) -> i32 {
     let install_data = try_convert_abi!(InstallData::try_from(&request_c), err_out, InstallStateId);
 
-    let result = catch_unwind(AssertUnwindSafe(|| crate::mutated::installer::run(install_data)));
+    let result = catch_unwind(AssertUnwindSafe(|| run(install_data)));
 
     match result {
         Ok(Ok(())) => 0,
+
         Ok(Err((state, error))) => {
             unsafe { write_error(err_out, state, ErrorKind::from(error)) };
             -1
         }
+
         Err(_) => {
             unsafe { write_error(err_out, InstallStateId::Setup, ErrorKind::Unexpected) };
             -1

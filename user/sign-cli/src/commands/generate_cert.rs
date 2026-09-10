@@ -42,13 +42,16 @@ pub fn run(args: Args) -> Result<()> {
         certificate_pem: read_to_string(&args.root_cert)
             .with_context(|| format!("{}: {}", fl!(LOADER, "err-read"), args.root_cert.display()))?,
     };
+
     let root = RootIdentity::from_pem(&root_pem).map_err(LocalizedPkiError)?;
 
     let signing = generate_signing_cert(&args.common_name, &root).map_err(LocalizedPkiError)?;
+
     let pem = signing.to_pem().map_err(LocalizedPkiError)?;
 
     write(&args.key_out, &pem.key_pem)
         .with_context(|| format!("{}: {}", fl!(LOADER, "err-write"), args.key_out.display()))?;
+
     write(&args.cert_out, &pem.certificate_pem)
         .with_context(|| format!("{}: {}", fl!(LOADER, "err-write"), args.cert_out.display()))?;
 

@@ -3,7 +3,11 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+
+use upac_types::hook::ProgressEventBuilder;
+
+use super::ListPackagesError;
 
 use crate::composefs::file::FileHandle;
 use crate::database::meta::MetaStore;
@@ -11,9 +15,8 @@ use crate::database::{InMemory, MemoryDatabase};
 use crate::deploy::digest::current_prefix_digest;
 use crate::deploy::{Deploy, DeployMode};
 use crate::layout::database::DATABASE_PATH;
-use crate::orchestrator::Context;
+use crate::orchestrator::context::Context;
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::unmutated::list_packages::ListPackagesError;
 
 pub struct FetchingStage;
 

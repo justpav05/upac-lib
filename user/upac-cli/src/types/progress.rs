@@ -35,8 +35,9 @@ pub unsafe extern "C" fn on_progress(event: *const CProgressEvent, ctx: *mut c_v
 
 pub struct ProgressState {
     pub(crate) bar: ProgressBar,
-    domain: ErrorDomain,
     pub(crate) is_bar: bool,
+
+    domain: ErrorDomain,
     settings: ProgressSettings,
 }
 

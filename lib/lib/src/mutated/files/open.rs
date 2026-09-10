@@ -7,7 +7,10 @@ use std::collections::VecDeque;
 
 use composefs::repository::ImportContext;
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{ApplyTarget, FileProgress, FilesError, RequestedFilePackage, WorkingState};
 
 use crate::composefs::file::FileHandle;
 use crate::database::meta::MetaStore;
@@ -16,11 +19,8 @@ use crate::deploy::Deploy;
 use crate::deploy::digest::current_prefix_digest;
 use crate::layout::database::DATABASE_PATH;
 use crate::layout::deployment::CONFIG_DIR_NAME;
-use crate::mutated::files::{
-    EtcUpperDir, FilesError, PendingFiles, RequestedFilePackage, TargetUuid, TotalFiles, WorkingDatabase, WorkingTree,
-};
+use crate::orchestrator::context::{Context, ctx_get, ctx_take};
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get, ctx_take};
 
 pub struct OpenTransactionStage;
 
@@ -50,13 +50,10 @@ impl Stage<FilesError> for OpenTransactionStage {
         let total = files.len() as u64;
         let pending: VecDeque<_> = files.into_iter().collect();
 
-        context.put(WorkingTree(tree));
-        context.put(WorkingDatabase(database));
+        context.put(WorkingState { tree, database });
         context.put(ImportContext::default());
-        context.put(EtcUpperDir(config_upper_dir));
-        context.put(TargetUuid(uuid));
-        context.put(PendingFiles(pending));
-        context.put(TotalFiles(total));
+        context.put(ApplyTarget { uuid, config_upper_dir });
+        context.put(FileProgress { pending, total });
 
         Ok((progress, StageResult::Advance, Box::new(NoRollback)))
     }

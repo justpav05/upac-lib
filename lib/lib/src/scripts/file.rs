@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use upac_abi::hook::ProgressEventBuilder;
+use upac_types::hook::ProgressEventBuilder;
 
 use crate::errors::CommonError;
 use crate::orchestrator::stage::{ConcurrentStage, RollbackGuard, StageResult};

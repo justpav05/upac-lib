@@ -24,6 +24,7 @@ err-invalid-entry = Invalid entry
 err-pkg-not-found = Package not found
 err-already-exists = Already exists
 err-not-initialized = Not initialized
+err-boot-plugin-required = No boot plugin specified (use --boot or set [boot] plugin in /etc/upac.d/upac.toml)
 
 stage-pre-hooks = Pre-hooks
 stage-post-hooks = Post-hooks

@@ -7,11 +7,14 @@ use std::fs::{read_link, write};
 use std::path::{Path, PathBuf};
 
 use tempfile::{Builder, TempDir};
+use upac::errors::CommonError;
+use upac::orchestrator::stage::{ConcurrentStage, StageResult};
 use upac::scripts::error::HookError;
 use upac::scripts::file::HookFile;
 use upac::scripts::load::load_hooks;
 use upac::scripts::pipeline::{Operation, PipelineTrigger, Timing};
 use upac::scripts::primitive::Step;
+use upac_abi::hook::ProgressEventBuilder;
 use upac_pki::generate::{Identity, SigningIdentity, generate_root, generate_signing_cert};
 use upac_pki::signature::HookSignature;
 
@@ -214,6 +217,80 @@ fn primitive_vec_rollback_guard_unwinds_in_reverse_order() {
     assert!(a.exists());
     assert!(!b.exists());
     assert!(!c.exists());
+}
+
+#[test]
+fn hook_file_run_executes_all_steps_and_returns_advance() {
+    let dir = scratch_dir("run-advance");
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+
+    let hook_file = HookFile::parse(&format!(
+        concat!(
+            "operation = \"install\"\ntiming = \"pre\"\n\n",
+            "[[steps]]\ntype = \"touch_file\"\npath = {:?}\n\n",
+            "[[steps]]\ntype = \"touch_file\"\npath = {:?}\n",
+        ),
+        a, b
+    ))
+    .unwrap();
+
+    let (_, result, _guard) =
+        ConcurrentStage::<CommonError>::run(Box::new(hook_file), ProgressEventBuilder::new(0)).unwrap();
+
+    assert!(matches!(result, StageResult::Advance));
+    assert!(a.exists());
+    assert!(b.exists());
+}
+
+#[test]
+fn hook_file_run_rolls_back_and_errors_when_a_critical_step_fails() {
+    let dir = scratch_dir("run-critical-failure");
+    let touched = dir.path().join("touched");
+    let missing_from = dir.path().join("does-not-exist");
+    let move_to = dir.path().join("move-to");
+
+    let hook_file = HookFile::parse(&format!(
+        concat!(
+            "operation = \"install\"\ntiming = \"pre\"\ncritical = true\n\n",
+            "[[steps]]\ntype = \"touch_file\"\npath = {:?}\n\n",
+            "[[steps]]\ntype = \"move_file\"\nfrom = {:?}\nto = {:?}\n",
+        ),
+        touched, missing_from, move_to
+    ))
+    .unwrap();
+
+    let result = ConcurrentStage::<CommonError>::run(Box::new(hook_file), ProgressEventBuilder::new(0));
+
+    assert!(result.is_err());
+    assert!(!touched.exists(), "the already-executed step must be rolled back");
+}
+
+#[test]
+fn hook_file_run_stops_early_without_error_when_a_non_critical_step_fails() {
+    let dir = scratch_dir("run-non-critical-failure");
+    let touched = dir.path().join("touched");
+    let missing_from = dir.path().join("does-not-exist");
+    let move_to = dir.path().join("move-to");
+
+    let hook_file = HookFile::parse(&format!(
+        concat!(
+            "operation = \"install\"\ntiming = \"pre\"\ncritical = false\n\n",
+            "[[steps]]\ntype = \"touch_file\"\npath = {:?}\n\n",
+            "[[steps]]\ntype = \"move_file\"\nfrom = {:?}\nto = {:?}\n",
+        ),
+        touched, missing_from, move_to
+    ))
+    .unwrap();
+
+    let (_, result, _guard) =
+        ConcurrentStage::<CommonError>::run(Box::new(hook_file), ProgressEventBuilder::new(0)).unwrap();
+
+    assert!(matches!(result, StageResult::Advance));
+    assert!(
+        touched.exists(),
+        "a non-critical failure must not roll back prior steps"
+    );
 }
 
 #[test]

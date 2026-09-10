@@ -17,6 +17,10 @@ use crate::errors::{
 use crate::lock::LockError;
 use crate::plugin::boot::error::BootPluginError;
 
+#[cfg(test)]
+#[path = "../../../tests/inline/mutated_rollback_error.rs"]
+mod tests;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RollbackError {
     Common(CommonError),

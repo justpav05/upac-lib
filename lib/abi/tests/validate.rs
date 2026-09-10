@@ -6,18 +6,16 @@
 use std::mem::size_of;
 use std::ptr::{null, null_mut};
 
-use upac_abi::decoder::CDependency;
 use upac_abi::error::ErrorKind;
 use upac_abi::memory::free_cslice;
-use upac_abi::package::{CPackageInfo, CPackageMeta, CVersion};
+use upac_abi::package::{CPackageDependency, CPackageInfo, CPackageMeta, CVersion};
 use upac_abi::request::CRequestBase;
 use upac_abi::response::{
     CConfigCommitEntry, CDiffConfigFileEntry, CDiffFileEntryCommon, CDiffPrefixFileEntry, CDiffUntrackedFileEntry,
     CHistoryEntry, CPrefixEntry, CSearchFileEntry,
 };
-use upac_abi::setup::{CBtrfsOptions, CGptLayout, CPartitionMount, CPartitionSpec, CSetupBase};
 use upac_abi::types::{COwned, CSlice, CVec};
-use upac_abi::{DiffFileSource, FileDiffKind, FsKind};
+use upac_abi::{DiffFileSource, FileDiffKind};
 
 fn valid_version() -> CVersion {
     CVersion {
@@ -103,8 +101,8 @@ fn package_info_validate_rejects_missing_required_field() {
 
 #[test]
 fn dependency_validate_rejects_invalid_nested_version() {
-    let mut dependency = CDependency {
-        struct_size: size_of::<CDependency>(),
+    let mut dependency = CPackageDependency {
+        struct_size: size_of::<CPackageDependency>(),
         name: CSlice::from_owned(b"glibc".to_vec()),
         constraint: 0b010,
         version: valid_version(),
@@ -381,147 +379,4 @@ fn request_base_validate_rejects_wrong_struct_size() {
     base.struct_size = 0;
 
     assert_eq!(unsafe { base.validate() }, Err(ErrorKind::AbiMismatch));
-}
-
-fn valid_setup_base() -> CSetupBase {
-    CSetupBase {
-        struct_size: size_of::<CSetupBase>(),
-        base: valid_request_base(),
-        mount_point: CSlice { ptr: null(), len: 0 },
-        source: CSlice::from_owned(b"/mnt/source".to_vec()),
-        meta_filename: CSlice { ptr: null(), len: 0 },
-        empty_config: false,
-        pinned: false,
-        boot_plugin: CSlice { ptr: null(), len: 0 },
-    }
-}
-
-#[test]
-fn setup_base_validate_ok_with_all_optionals_absent() {
-    let base = valid_setup_base();
-
-    assert!(unsafe { base.validate() }.is_ok());
-    unsafe { free_cslice(&base.source) };
-}
-
-#[test]
-fn setup_base_validate_rejects_missing_required_source() {
-    let mut base = valid_setup_base();
-    unsafe { free_cslice(&base.source) };
-    base.source = CSlice { ptr: null(), len: 0 };
-
-    assert_eq!(unsafe { base.validate() }, Err(ErrorKind::InvalidEntry));
-}
-
-fn valid_partition_mount() -> CPartitionMount {
-    CPartitionMount {
-        struct_size: size_of::<CPartitionMount>(),
-        mount_path: CSlice::from_owned(b"/boot".to_vec()),
-        device_path: CSlice::from_owned(b"/dev/sda1".to_vec()),
-        fs_kind: FsKind::Ext4,
-    }
-}
-
-#[test]
-fn partition_mount_validate_ok_for_well_formed() {
-    let mount = valid_partition_mount();
-
-    assert!(unsafe { mount.validate() }.is_ok());
-    unsafe {
-        free_cslice(&mount.mount_path);
-        free_cslice(&mount.device_path);
-    }
-}
-
-#[test]
-fn partition_mount_validate_rejects_missing_mount_path() {
-    let mut mount = valid_partition_mount();
-    unsafe { free_cslice(&mount.mount_path) };
-    mount.mount_path = CSlice { ptr: null(), len: 0 };
-
-    assert_eq!(unsafe { mount.validate() }, Err(ErrorKind::InvalidEntry));
-    unsafe { free_cslice(&mount.device_path) };
-}
-
-fn valid_partition_spec() -> CPartitionSpec {
-    CPartitionSpec {
-        struct_size: size_of::<CPartitionSpec>(),
-        mount_path: CSlice::from_owned(b"/boot".to_vec()),
-        size_mib: 512,
-        fs_kind: FsKind::Ext4,
-    }
-}
-
-#[test]
-fn partition_spec_validate_ok_for_well_formed() {
-    let spec = valid_partition_spec();
-
-    assert!(unsafe { spec.validate() }.is_ok());
-    unsafe { free_cslice(&spec.mount_path) };
-}
-
-#[test]
-fn partition_spec_validate_rejects_missing_mount_path() {
-    let mut spec = valid_partition_spec();
-    unsafe { free_cslice(&spec.mount_path) };
-    spec.mount_path = CSlice { ptr: null(), len: 0 };
-
-    assert_eq!(unsafe { spec.validate() }, Err(ErrorKind::InvalidEntry));
-}
-
-fn valid_gpt_layout() -> CGptLayout {
-    CGptLayout {
-        struct_size: size_of::<CGptLayout>(),
-        esp_size_mib: 512,
-        deploy_fs: FsKind::Ext4,
-        deploy_size_mib: 8192,
-        extra_partitions: CVec {
-            ptr: null_mut(),
-            len: 0,
-        },
-        force_wipe: false,
-    }
-}
-
-#[test]
-fn gpt_layout_validate_ok_with_no_extra_partitions() {
-    assert!(unsafe { valid_gpt_layout().validate() }.is_ok());
-}
-
-#[test]
-fn gpt_layout_validate_rejects_an_invalid_extra_partition() {
-    let mut bad_spec = valid_partition_spec();
-    bad_spec.struct_size = 0;
-    let mut specs = vec![bad_spec];
-
-    let mut layout = valid_gpt_layout();
-    layout.extra_partitions = CVec {
-        ptr: specs.as_mut_ptr(),
-        len: specs.len(),
-    };
-
-    assert_eq!(unsafe { layout.validate() }, Err(ErrorKind::AbiMismatch));
-
-    unsafe { free_cslice(&specs[0].mount_path) };
-}
-
-fn valid_btrfs_options() -> CBtrfsOptions {
-    CBtrfsOptions {
-        struct_size: size_of::<CBtrfsOptions>(),
-        node_size: 0,
-        sector_size: 0,
-    }
-}
-
-#[test]
-fn btrfs_options_validate_ok_for_well_formed() {
-    assert!(unsafe { valid_btrfs_options().validate() }.is_ok());
-}
-
-#[test]
-fn btrfs_options_validate_rejects_wrong_struct_size() {
-    let mut options = valid_btrfs_options();
-    options.struct_size = 0;
-
-    assert_eq!(unsafe { options.validate() }, Err(ErrorKind::AbiMismatch));
 }

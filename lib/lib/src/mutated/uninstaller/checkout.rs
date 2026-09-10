@@ -3,17 +3,18 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{NewState, RequestedBootPlugin, ResolvedBootEntry, UninstallError};
 
 use crate::boot::write_boot_entry;
 use crate::composefs::repository::object_id_from_hex;
-use crate::deploy::Deploy;
-use crate::deploy::esp::find_esp_mount;
-use crate::layout::boot_plugins::{BOOT_PLUGINS_DIR, MANIFEST_EXTENSION};
-use crate::mutated::uninstaller::{NewPrefixDigest, RequestedBootPlugin, ResolvedBootEntry, UninstallError};
+use crate::deploy::{Deploy, find_esp_mount};
+use crate::orchestrator::context::{Context, ctx_get};
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get};
-use crate::plugin::boot::resolve_boot_plugin;
+use crate::plugin::boot::BootPlugins;
 
 pub struct CheckoutStage;
 
@@ -21,18 +22,18 @@ impl Stage<UninstallError> for CheckoutStage {
     fn run(
         &self, context: &mut Context, _cancel: &CancelToken, progress: ProgressEventBuilder,
     ) -> Result<(ProgressEventBuilder, StageResult, Box<dyn RollbackGuard>), UninstallError> {
-        let new_prefix = ctx_get!(context, NewPrefixDigest);
+        let new_state = ctx_get!(context, NewState);
         let deploy = ctx_get!(context, Deploy);
-        let requested = ctx_get!(context, RequestedBootPlugin);
+        let requested_boot_plugin = ctx_get!(context, RequestedBootPlugin);
 
         let repository = deploy.open_repository()?;
-        let tree = deploy.open_tree(&new_prefix.0)?;
-        let digest = object_id_from_hex(&new_prefix.0)?;
+        let tree = deploy.open_tree(&new_state.prefix_digest)?;
+        let digest = object_id_from_hex(&new_state.prefix_digest)?;
 
         let esp_mount = find_esp_mount()?;
-        let entry_name = write_boot_entry(&repository, &tree, digest, &esp_mount, &new_prefix.0)?;
+        let entry_name = write_boot_entry(&repository, &tree, digest, &esp_mount, &new_state.prefix_digest)?;
 
-        let plugin = resolve_boot_plugin(BOOT_PLUGINS_DIR, MANIFEST_EXTENSION, requested.0.as_deref())?;
+        let plugin = BootPlugins::new()?.load(&requested_boot_plugin)?;
 
         context.put(ResolvedBootEntry { plugin, entry_name });
 

@@ -3,11 +3,6 @@
 #
 # SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-# meta.filename is the default name of the per-source_dir package-metadata
-# manifest (see meta.rs) — overridable per request via CSetupBase.meta_filename.
-[meta]
-filename = "meta.toml"
-
 # mount.default_mount_point is where the target deployment partition (and,
 # under it, the ESP + any extra_mounts) gets mounted when the request's own
 # mount_point is left empty.
@@ -27,8 +22,15 @@ wipefs_bin = "wipefs"
 # partition.settle_attempts/settle_interval_ms bound how long DiskLayout::create waits for the
 # kernel (via udev) to create the new partition device nodes after BLKRRPART, before giving up —
 # the ioctl itself is synchronous, but the /dev/vdaN nodes it triggers are created by udev
-# asynchronously afterward.
+# asynchronously afterward. esp_label/deploy_label name both the GPT partition entry itself
+# (DiskLayout::create) and the filesystem volume label written at format time
+# (TargetSysroot::create_whole_disk) — purely informational (`lsblk -f`/`blkid`/other OS
+# installers), nothing in this codebase looks a partition up by either. Uppercase by the same
+# convention real-world ESP volume labels always use.
 [partition]
+esp_label = "ESP"
+deploy_label = "UPAC-DEPLOY"
+
 settle_attempts = 50
 settle_interval_ms = 100
 
@@ -36,15 +38,40 @@ settle_interval_ms = 100
 # written (under the OS temp dir) before being embedded into the new /usr
 # tree — purely transient, read back once right after the write.
 #
-# *_source are the fixed, package-convention paths (source-tree-relative) where each supported
-# bootloader ships its own EFI binary — systemd's own packaging always installs to
-# lib/systemd/boot/efi/, rEFInd's own packaging always installs to share/refind/. Checked in this
-# order (first one found in the source tree wins) since a fresh ESP has no bootloader binary at
-# all yet — install/update never need this, the binary is already on the ESP from genesis.
 # esp_fallback_loader is the fixed "removable media" path UEFI firmware always tries when NVRAM
-# has no Boot#### entries at all, which is exactly genesis's situation on a brand-new disk.
+# has no Boot#### entries at all, which is exactly genesis's situation on a brand-new disk. The
+# resolved boot plugin's own `esp_loader_source()` (see `booters/booter.toml`) says which source
+# path — if any — a fresh ESP needs it copied from; genesis only owns the destination.
+# efi_linux_dir is a real, mounted-filesystem-relative path (forward slashes, joined via
+# `Path::join`) to where `composefs-boot`'s own UKI writer always lands `upac-to.efi`/
+# `upac-from.efi` (`EFI/Linux/`, hardcoded upstream) — used only to seed `upac-from.efi` with the
+# same first image on genesis's very first deploy. Distinct from `booters/booter.toml`'s
+# `uki.efi_linux_dir`, which is the same directory spelled as a backslash UEFI device-path string
+# for NVRAM Boot#### entries, not a filesystem path — the two can't share a definition across the
+# crate boundary.
+#
+# system_dir is a source-relative directory, sibling to the package archives `EnumeratePackagesStage`
+# scans (skipped by it automatically — it only looks at files, never directories) — a literal,
+# 1:1 mirror of the target's real `/usr` layout (matches `PrefixTree`, see `database_path` in
+# `lib/lib/lib.toml`), imported wholesale by `ImportSystemStage`. This is how a built `up`/
+# `upac-lib`/booters (or anything else that must exist outside the normal per-package pipeline)
+# gets onto a genesis'd disk — genesis never resolves or installs itself automatically, whoever
+# assembles `--source` has to put it there, same assumption already made for the systemd-boot/
+# rEFInd binaries.
+#
+# composefs_setup_root_unit_path (relative to `system_dir`, i.e. also relative to real `/usr`) is
+# where `ImportSystemStage` requires to find a `composefs-setup-root.service` unit — hard error
+# (`SetupError::ComposefsSetupRootUnitNotFound`) if missing, since a genesis'd disk cannot boot at
+# all without it. composefs_setup_root_wants_path/composefs_setup_root_wants_target: the stage
+# also creates the unit's `*.target.wants/` enablement symlink itself (pure systemd mechanics, no
+# reason to burden `--source` with it) — see TODO.md for why this specific set of paths matches
+# `composefs-setup-root`'s own hardcoded expectations (confirmed by reading its upstream source,
+# not guessed).
 [genesis]
 scratch_filename = "genesis-packages.redb"
-systemd_boot_source = "usr/lib/systemd/boot/efi/systemd-bootx64.efi"
-refind_source = "usr/share/refind/refind_x64.efi"
 esp_fallback_loader = "EFI/BOOT/BOOTX64.EFI"
+efi_linux_dir = "EFI/Linux"
+system_dir = "system"
+composefs_setup_root_unit_path = "lib/systemd/system/composefs-setup-root.service"
+composefs_setup_root_wants_path = "lib/systemd/system/initrd-root-fs.target.wants/composefs-setup-root.service"
+composefs_setup_root_wants_target = "../composefs-setup-root.service"

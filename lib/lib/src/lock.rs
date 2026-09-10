@@ -10,7 +10,7 @@ use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, bind, socket
 
 use upac_abi::error::ErrorKind;
 
-use crate::layout::runtime;
+use crate::layout::runtime::LOCK_ADDRESS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockError {
@@ -51,7 +51,7 @@ pub struct Lock {
 impl Lock {
     pub fn acquire() -> Result<Lock, LockError> {
         let socket = socket(AddressFamily::Unix, SockType::Stream, SockFlag::SOCK_CLOEXEC, None)?;
-        let address = UnixAddr::new_abstract(runtime::LOCK_ADDRESS.as_bytes())?;
+        let address = UnixAddr::new_abstract(LOCK_ADDRESS.as_bytes())?;
 
         bind(socket.as_raw_fd(), &address)?;
 

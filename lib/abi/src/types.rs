@@ -40,6 +40,13 @@ pub trait COwned {
     unsafe fn into_owned(self) -> Self::Owned;
 }
 
+pub trait CValidatable {
+    /// # Safety
+    /// Same contract as the inherent `validate()` this forwards to — the receiver must be a
+    /// freshly-received C-ABI struct that hasn't yet been trusted for reads.
+    unsafe fn validate(&self) -> Result<(), ErrorKind>;
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct CSlice {

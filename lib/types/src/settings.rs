@@ -41,9 +41,16 @@ impl Default for ProgressSettings {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
+pub struct BootSettings {
+    pub plugin: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
 pub struct RuntimeSettings {
     pub gc: GcSettings,
     pub progress: ProgressSettings,
+    pub boot: BootSettings,
 }
 
 impl RuntimeSettings {

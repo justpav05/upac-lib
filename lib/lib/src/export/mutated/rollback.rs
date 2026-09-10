@@ -11,7 +11,7 @@ use upac_abi::request::CRollbackRequest;
 use upac_types::states::RollbackStateId;
 
 use crate::export::{try_convert_abi, write_error};
-use crate::mutated::rollback::RollbackData;
+use crate::mutated::rollback::{RollbackData, run};
 
 /// # Safety
 /// Any borrowed byte-slice fields inside `request_c` must remain valid for the duration of the
@@ -20,14 +20,16 @@ use crate::mutated::rollback::RollbackData;
 pub unsafe extern "C" fn rollback(request_c: CRollbackRequest, err_out: *mut CError) -> i32 {
     let rollback_data = try_convert_abi!(RollbackData::try_from(&request_c), err_out, RollbackStateId);
 
-    let result = catch_unwind(AssertUnwindSafe(|| crate::mutated::rollback::run(rollback_data)));
+    let result = catch_unwind(AssertUnwindSafe(|| run(rollback_data)));
 
     match result {
         Ok(Ok(())) => 0,
+
         Ok(Err((state, error))) => {
             unsafe { write_error(err_out, state, ErrorKind::from(error)) };
             -1
         }
+
         Err(_) => {
             unsafe { write_error(err_out, RollbackStateId::Setup, ErrorKind::Unexpected) };
             -1

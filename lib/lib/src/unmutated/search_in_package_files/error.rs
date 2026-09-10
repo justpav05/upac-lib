@@ -14,6 +14,10 @@ use crate::errors::{
 };
 use crate::lock::LockError;
 
+#[cfg(test)]
+#[path = "../../../tests/inline/unmutated_search_in_package_files_error.rs"]
+mod tests;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchInPackageFilesError {
     Common(CommonError),

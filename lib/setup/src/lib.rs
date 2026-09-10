@@ -10,7 +10,6 @@ pub mod genesis;
 pub mod layout {
     include!(concat!(env!("OUT_DIR"), "/layout.rs"));
 }
-pub mod meta;
 pub mod partition;
 pub mod target;
 mod types;

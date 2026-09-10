@@ -30,6 +30,8 @@ fn option_from_c(ident: &Ident, segment: &PathSegment) -> TokenStream2 {
 
     if inner_name == "String" {
         quote! { Option::<&str>::try_from(&value.#ident)?.map(str::to_owned) }
+    } else if inner_name == "HookMessageFn" {
+        quote! { value.#ident }
     } else {
         quote! { compile_error!("CTryToRust: unsupported Option inner type") }
     }
@@ -40,7 +42,18 @@ fn vec_from_c(ident: &Ident, segment: &PathSegment) -> TokenStream2 {
         return quote! { compile_error!("CTryToRust: unsupported Vec element type") };
     };
 
-    if PRIMITIVES.contains(&inner_name.as_str()) {
+    if inner_name == "String" {
+        quote! {
+            {
+                unsafe { value.#ident.validate()? };
+                unsafe { value.#ident.as_slice() }
+                    .iter()
+                    .map(<&str>::try_from)
+                    .map(|element| element.map(str::to_owned))
+                    .collect::<Result<Vec<_>, ErrorKind>>()?
+            }
+        }
+    } else if PRIMITIVES.contains(&inner_name.as_str()) {
         quote! {
             {
                 unsafe { value.#ident.validate()? };
@@ -71,9 +84,24 @@ fn field_path_from_c(ident: &Ident, segment: &PathSegment) -> TokenStream2 {
     }
 }
 
+fn ptr_from_c(ident: &Ident) -> TokenStream2 {
+    quote! {
+        {
+            if value.#ident.is_null() {
+                return Err(ErrorKind::InvalidEntry);
+            }
+            value.#ident
+        }
+    }
+}
+
 fn field_from_c_fallible(ident: &Ident, ty: &Type) -> TokenStream2 {
     if let Type::Array(_) = ty {
         return quote! { value.#ident };
+    }
+
+    if let Type::Ptr(_) = ty {
+        return ptr_from_c(ident);
     }
 
     let Type::Path(type_path) = ty else {

@@ -17,7 +17,7 @@ use upac_types::PartitionSpec;
 
 use crate::error::SetupError;
 use crate::format::FormatTarget;
-use crate::layout::partition::{SETTLE_ATTEMPTS, SETTLE_INTERVAL_MS};
+use crate::layout::partition::{DEPLOY_LABEL, ESP_LABEL, SETTLE_ATTEMPTS, SETTLE_INTERVAL_MS};
 
 #[cfg(test)]
 #[path = "../tests/inline/partition.rs"]
@@ -47,11 +47,11 @@ impl GptTable {
 
     fn insert_partition(
         &mut self, number: u32, partition_type: Uuid, name: &str, size_sectors: u64,
-    ) -> Result<(), SetupError> {
+    ) -> Result<GPTPartitionEntry, SetupError> {
         let starting_lba = self.0.find_first_place(size_sectors).ok_or(SetupError::NoSpaceLeft)?;
         let ending_lba = starting_lba + size_sectors - 1;
 
-        self.0[number] = GPTPartitionEntry {
+        let entry = GPTPartitionEntry {
             partition_type_guid: partition_type.to_bytes_le(),
             unique_partition_guid: Uuid::new_v4().to_bytes_le(),
             starting_lba,
@@ -60,7 +60,9 @@ impl GptTable {
             partition_name: name.into(),
         };
 
-        Ok(())
+        self.0[number] = entry.clone();
+
+        Ok(entry)
     }
 
     fn write_into(&mut self, device: &mut File) -> Result<(), SetupError> {
@@ -73,6 +75,9 @@ impl GptTable {
 pub struct DiskLayout {
     device_path: PathBuf,
     esp_partition: u32,
+    esp_starting_lba: u64,
+    esp_ending_lba: u64,
+    esp_unique_partition_guid: Uuid,
     deploy_partition: u32,
     extra_partitions: Vec<u32>,
 }
@@ -98,10 +103,10 @@ impl DiskLayout {
         let mut next_number = 1;
 
         let esp_partition = next_number;
-        gpt.insert_partition(
+        let esp_entry = gpt.insert_partition(
             esp_partition,
             ESP_PARTITION_TYPE_GUID,
-            "ESP",
+            ESP_LABEL,
             mib_to_sectors!(esp_size_mib, sector_size),
         )?;
         next_number += 1;
@@ -110,7 +115,7 @@ impl DiskLayout {
         gpt.insert_partition(
             deploy_partition,
             LINUX_ROOT_X86_64_GUID,
-            "upac-deploy",
+            DEPLOY_LABEL,
             mib_to_sectors!(deploy_size_mib, sector_size),
         )?;
         next_number += 1;
@@ -134,6 +139,9 @@ impl DiskLayout {
         let layout = DiskLayout {
             device_path: device_path.to_owned(),
             esp_partition,
+            esp_starting_lba: esp_entry.starting_lba,
+            esp_ending_lba: esp_entry.ending_lba,
+            esp_unique_partition_guid: Uuid::from_bytes_le(esp_entry.unique_partition_guid),
             deploy_partition,
             extra_partitions: extras,
         };
@@ -167,6 +175,22 @@ impl DiskLayout {
 
     pub fn esp_path(&self) -> PathBuf {
         self.partition_path(self.esp_partition)
+    }
+
+    pub fn esp_partition_number(&self) -> u32 {
+        self.esp_partition
+    }
+
+    pub fn esp_starting_lba(&self) -> u64 {
+        self.esp_starting_lba
+    }
+
+    pub fn esp_ending_lba(&self) -> u64 {
+        self.esp_ending_lba
+    }
+
+    pub fn esp_unique_partition_guid(&self) -> Uuid {
+        self.esp_unique_partition_guid
     }
 
     pub fn deploy_path(&self) -> PathBuf {

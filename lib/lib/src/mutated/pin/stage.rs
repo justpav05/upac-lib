@@ -5,13 +5,16 @@
 
 use std::mem::replace;
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{PinError, RequestedPinned, RequestedPrefixDigest};
 
 use crate::database::record::DeployRecord;
 use crate::deploy::Deploy;
-use crate::mutated::pin::{PinError, RequestedPinned, RequestedPrefixDigest};
+use crate::orchestrator::context::{Context, ctx_get};
 use crate::orchestrator::stage::{RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get};
 
 pub struct SetPinnedStage;
 
@@ -23,7 +26,7 @@ impl Stage<PinError> for SetPinnedStage {
         let prefix_digest = ctx_get!(context, RequestedPrefixDigest);
         let pinned = ctx_get!(context, RequestedPinned);
 
-        let record_dir = deploy.deploy(&prefix_digest.0);
+        let record_dir = deploy.deploy(&prefix_digest);
         let mut record = DeployRecord::read(&record_dir)?;
 
         let mut written = Vec::new();

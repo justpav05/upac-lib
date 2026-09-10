@@ -12,7 +12,7 @@ use nix::fcntl::AT_FDCWD;
 use tempfile::{Builder, TempDir};
 use upac::composefs::file::FileHandle;
 use upac::composefs::repository::ObjectID;
-use upac::config::merge::merge_config;
+use upac::config::merge_config;
 
 fn scratch_dir(name: &str) -> TempDir {
     Builder::new().prefix(name).tempdir().unwrap()

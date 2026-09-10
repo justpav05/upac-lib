@@ -16,16 +16,24 @@ use uuid::Uuid;
 
 use nix::{ioctl_read, ioctl_write_ptr};
 
-use upac_abi::boot::Booter;
+use upac_types::traits::Booter;
 
-use crate::boot::EFIVARFS_PATH;
-use crate::error::RefindError;
-use crate::refind::{PREVIOUS_BOOT_GUID, PREVIOUS_BOOT_VAR};
+use super::boot::EFIVARFS_PATH;
+use super::error::RefindError;
+use super::refind::{PREVIOUS_BOOT_GUID, PREVIOUS_BOOT_VAR};
 
 const FS_IMMUTABLE_FL: c_long = 0x0000_0010;
 
 ioctl_read!(fs_ioc_getflags, b'f', 1, c_long);
 ioctl_write_ptr!(fs_ioc_setflags, b'f', 2, c_long);
+
+macro_rules! encode_utf16_null {
+    ($value:expr) => {{
+        let mut bytes: Vec<u8> = $value.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes.extend_from_slice(&[0x00, 0x00]);
+        bytes
+    }};
+}
 
 pub struct Refind {
     manager: Box<dyn VarManager>,
@@ -40,25 +48,31 @@ impl Booter for Refind {
         })
     }
 
-    fn probes() -> bool {
-        let Ok(manager) = catch_unwind(AssertUnwindSafe(efivar::system)) else {
-            return false;
-        };
-        let Ok(guid) = Uuid::from_str(PREVIOUS_BOOT_GUID) else {
-            return false;
-        };
-
-        manager
-            .exists(&Variable::new_with_vendor(PREVIOUS_BOOT_VAR, guid))
-            .unwrap_or(false)
-    }
-
     fn set_one_shot(&mut self, entry_name: &str) -> Result<(), RefindError> {
         self.write_previous_boot(entry_name)
     }
 
-    fn confirm_boot(&mut self, entry_name: &str) -> Result<(), RefindError> {
+    fn confirm_boot(&mut self, entry_name: &str, esp_mount_point: &str) -> Result<(), RefindError> {
+        let _ = esp_mount_point;
+
         self.write_previous_boot(entry_name)
+    }
+
+    fn install(
+        &mut self, esp_mount_point: &str, esp_partition_number: u32, esp_starting_lba: u64, esp_ending_lba: u64,
+        esp_unique_partition_guid: [u8; 16], to_slot: &str, from_slot: &str,
+    ) -> Result<(), RefindError> {
+        let _ = (
+            esp_mount_point,
+            esp_partition_number,
+            esp_starting_lba,
+            esp_ending_lba,
+            esp_unique_partition_guid,
+            to_slot,
+            from_slot,
+        );
+
+        Ok(())
     }
 }
 
@@ -70,7 +84,7 @@ impl Refind {
         Self::clear_immutable(&variable);
 
         self.manager
-            .write(&variable, VariableFlags::default(), &encode_utf16_null(entry_name))?;
+            .write(&variable, VariableFlags::default(), &encode_utf16_null!(entry_name))?;
 
         Ok(())
     }
@@ -94,11 +108,4 @@ impl Refind {
             let _ = unsafe { fs_ioc_setflags(fd, &flags) };
         }
     }
-}
-
-fn encode_utf16_null(value: &str) -> Vec<u8> {
-    let mut bytes: Vec<u8> = value.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    bytes.extend_from_slice(&[0x00, 0x00]);
-
-    bytes
 }

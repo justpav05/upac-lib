@@ -38,14 +38,18 @@ pub fn run(args: Args) -> Result<()> {
     let signing_pem = PemIdentity {
         key_pem: read_to_string(&args.key)
             .with_context(|| format!("{}: {}", fl!(LOADER, "err-read"), args.key.display()))?,
+
         certificate_pem: read_to_string(&args.cert)
             .with_context(|| format!("{}: {}", fl!(LOADER, "err-read"), args.cert.display()))?,
     };
+
     let signing = SigningIdentity::from_pem(&signing_pem).map_err(LocalizedPkiError)?;
 
     let hook_bytes =
         read(&args.hook).with_context(|| format!("{}: {}", fl!(LOADER, "err-read"), args.hook.display()))?;
+
     let signature = HookSignature::sign(&hook_bytes, &signing).map_err(LocalizedPkiError)?;
+
     let signature_bytes = signature.to_bytes().map_err(LocalizedPkiError)?;
 
     write(&args.signature, signature_bytes)

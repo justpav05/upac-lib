@@ -3,13 +3,13 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-// ── Imports ─────────────────────────────────────────────────────────────────
 use anyhow::Result;
 
 use i18n_embed_fl::fl;
 
 use nix::unistd::Uid;
 
+use upac_abi::LIB_ABI_VERSION;
 use upac_abi::error::CError;
 use upac_abi::hook::CancelToken;
 use upac_abi::request::{
@@ -24,15 +24,16 @@ use upac_abi::response::{
     CSearchInPackageFilesResponse, CSearchMetaResponse,
 };
 
+#[cfg(feature = "dynamic-plugins")]
+use libloading::Library;
+
+use super::types::errors::{AbiMismatch, LibError};
+
 use crate::locale::LOADER;
-use crate::types::errors::{AbiMismatch, LibError};
 
 #[cfg(test)]
 #[path = "../tests/inline/libcore.rs"]
 mod tests;
-
-#[cfg(feature = "dynamic-plugins")]
-use libloading::Library;
 
 #[cfg(feature = "static-link")]
 use upac::export::mutated::{
@@ -49,7 +50,6 @@ use upac::export::unmutated::{
 #[cfg(feature = "static-link")]
 use upac::export::{cancel, version_abi};
 
-// ── Static-link symbol construction ────────────────────────────────────────
 #[cfg(feature = "static-link")]
 impl RoSymbols {
     fn from_static() -> Self {
@@ -111,7 +111,6 @@ impl Lib {
     }
 }
 
-// ── Dynamic-link symbol loading ────────────────────────────────────────────
 #[cfg(feature = "dynamic-plugins")]
 pub trait LoadLibrarySymbols: Sized {
     fn load(lib: &Library) -> Result<Self>;
@@ -170,10 +169,10 @@ impl Lib {
         };
 
         let abi_version = unsafe { (lib.version_abi)() };
-        if abi_version != upac_abi::ABI_VERSION {
+        if abi_version != LIB_ABI_VERSION {
             let err = AbiMismatch {
                 got: abi_version,
-                expected: upac_abi::ABI_VERSION,
+                expected: LIB_ABI_VERSION,
             };
 
             return Err(err.into());
@@ -194,7 +193,6 @@ impl Lib {
     }
 }
 
-// ── Read-only symbols ─────────────────────────────────────────────────────────
 pub struct RoSymbols {
     pub list_packages: unsafe extern "C" fn(CListPackagesRequest, *mut CListPackagesResponse, *mut CError) -> i32,
     pub search_meta: unsafe extern "C" fn(CSearchMetaRequest, *mut CSearchMetaResponse, *mut CError) -> i32,
@@ -211,7 +209,6 @@ pub struct RoSymbols {
         unsafe extern "C" fn(CSearchInPackageFilesRequest, *mut CSearchInPackageFilesResponse, *mut CError) -> i32,
 }
 
-// ── Mutating symbols ──────────────────────────────────────────────────────────
 pub struct RwSymbols {
     pub install: unsafe extern "C" fn(CInstallRequest, *mut CError) -> i32,
     pub update: unsafe extern "C" fn(CUpdateRequest, *mut CError) -> i32,
@@ -224,7 +221,6 @@ pub struct RwSymbols {
     pub pin_deploy: unsafe extern "C" fn(CPinRequest, *mut CError) -> i32,
 }
 
-// ── Wrapper around either libupac.so or the statically linked upac-lib ──────
 pub struct Lib {
     pub ro: RoSymbols,
     pub rw: RwSymbols,
@@ -236,9 +232,6 @@ pub struct Lib {
 }
 
 impl Lib {
-    /// Gates access to the mutating symbol table behind an effective-root check — call sites for
-    /// install/update/uninstall/commit/rollback/files/gc/mime go through here instead of reading
-    /// `self.rw` directly, so the check can't be forgotten at a new call site.
     pub fn require_write(&self) -> Result<&RwSymbols> {
         if !Uid::effective().is_root() {
             anyhow::bail!(fl!(LOADER, "err-requires-root"));

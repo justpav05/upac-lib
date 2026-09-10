@@ -7,11 +7,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use upac_abi::error::{CError, ErrorKind};
 use upac_abi::request::CSearchInPackageFilesRequest;
-use upac_abi::response::{CSearchFileEntry, CSearchInPackageFilesResponse};
-use upac_abi::types::{COwned, CVec};
+use upac_abi::response::CSearchInPackageFilesResponse;
 
 use crate::export::{try_convert_abi, write_error};
-use crate::unmutated::search_in_package_files::SearchInPackageFilesData;
+use crate::unmutated::search_in_package_files::{SearchInPackageFilesData, run};
 
 use upac_types::states::SearchInPackageFilesStateId;
 
@@ -29,25 +28,21 @@ pub unsafe extern "C" fn search_in_package_files(
         SearchInPackageFilesStateId
     );
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        crate::unmutated::search_in_package_files::run(search_in_package_files_data)
-    }));
+    let result = catch_unwind(AssertUnwindSafe(|| run(search_in_package_files_data)));
 
     match result {
-        Ok(Ok((files,))) => {
+        Ok(Ok(response)) => {
             if !response_out.is_null() {
-                unsafe {
-                    *response_out = CSearchInPackageFilesResponse::new(CVec::from_owned(
-                        files.into_iter().map(CSearchFileEntry::from).collect(),
-                    ));
-                }
+                unsafe { *response_out = response.into() };
             }
             0
         }
+
         Ok(Err((state, error))) => {
             unsafe { write_error(err_out, state, ErrorKind::from(error)) };
             -1
         }
+
         Err(_) => {
             unsafe { write_error(err_out, SearchInPackageFilesStateId::Setup, ErrorKind::Unexpected) };
             -1

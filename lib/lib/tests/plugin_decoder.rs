@@ -145,6 +145,15 @@ fn load_decoder_manifests_fails_on_duplicate_format() {
 }
 
 #[test]
+fn load_decoder_manifests_treats_a_missing_directory_as_no_manifests() {
+    let dir = scratch_dir("missing-dir").path().join("does-not-exist");
+
+    let manifests = load_decoder_manifests(dir.to_str().unwrap(), "decoder").unwrap();
+
+    assert!(manifests.is_empty());
+}
+
+#[test]
 fn load_decoder_manifests_fails_on_malformed_toml() {
     let dir = scratch_dir("malformed-toml");
     write(dir.path().join("broken.decoder"), "not valid toml [[[").unwrap();

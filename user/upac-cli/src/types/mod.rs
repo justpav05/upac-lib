@@ -9,7 +9,7 @@ use std::env::temp_dir;
 use std::ffi::CString;
 use std::sync::Arc;
 
-use crate::libcore::Lib;
+use super::libcore::Lib;
 
 pub mod abi;
 pub mod errors;

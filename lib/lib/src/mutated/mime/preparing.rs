@@ -5,14 +5,17 @@
 
 use std::fs;
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{DesktopContent, MimeError};
 
 use crate::errors::CommonError;
-use crate::layout::{decoders, mime};
-use crate::mutated::mime::{DesktopContent, MimeError};
-use crate::orchestrator::Context;
+use crate::layout::mime;
+use crate::orchestrator::context::Context;
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::plugin::decoder::manifest::load_decoder_manifests;
+use crate::plugin::decoder::manifest::DecoderManifests;
 
 pub struct PreparingStage;
 
@@ -20,11 +23,10 @@ impl Stage<MimeError> for PreparingStage {
     fn run(
         &self, context: &mut Context, _cancel: &CancelToken, progress: ProgressEventBuilder,
     ) -> Result<(ProgressEventBuilder, StageResult, Box<dyn RollbackGuard>), MimeError> {
-        let manifests = load_decoder_manifests(decoders::DECODERS_DIR, decoders::MANIFEST_EXTENSION)
-            .map_err(CommonError::Decoder)?;
+        let manifests = DecoderManifests::new().map_err(CommonError::Decoder)?;
         let desktop_content = fs::read_to_string(mime::DESKTOP_FILE_PATH)?;
 
-        context.put(manifests);
+        context.put(manifests.0);
         context.put(DesktopContent(desktop_content));
 
         Ok((progress, StageResult::Advance, Box::new(NoRollback)))

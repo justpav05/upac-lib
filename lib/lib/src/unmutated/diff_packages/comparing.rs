@@ -6,13 +6,16 @@
 use std::collections::HashMap;
 
 use upac_abi::PackageDiffKind;
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
 
+use upac_types::DiffPackagesSnapshot;
+use upac_types::entry::DiffPackageEntry;
+use upac_types::hook::ProgressEventBuilder;
+
+use super::DiffPackagesError;
+
+use crate::orchestrator::context::{Context, ctx_take};
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_take};
-use crate::unmutated::diff_packages::DiffPackagesError;
-
-use upac_types::{DiffPackageEntry, DiffPackagesSnapshot};
 
 pub struct ComparingStage;
 

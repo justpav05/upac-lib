@@ -11,13 +11,19 @@ use composefs::tree::FileSystem;
 
 use uuid::Uuid;
 
+use upac_abi::HookMessageFn;
 use upac_abi::error::ErrorKind;
-use upac_abi::hook::{CancelToken, HookMessageFn, Message, MessageHook};
+use upac_abi::hook::CancelToken;
 use upac_abi::package::CPackageInfo;
 use upac_abi::request::CFilesRequest;
 use upac_abi::{DiffFileSource, FileDiffKind};
 
-pub use self::error::FilesError;
+use upac_types::TmpPath;
+use upac_types::hook::Message;
+use upac_types::states::FilesStateId;
+use upac_types::traits::MessageHook;
+
+use upac_macro::ContextValue;
 
 use self::apply::ApplyFileStage;
 use self::checkout::CheckoutStage;
@@ -29,12 +35,13 @@ use crate::composefs::repository::ObjectID;
 use crate::database::MemoryDatabase;
 use crate::deploy::retention::RetentionStage;
 use crate::deploy::{Deploy, DeployMode};
-use crate::orchestrator::{Context, Orchestrator, SequentialOrchestrator, run_mutating};
+use crate::orchestrator::context::Context;
+use crate::orchestrator::{Orchestrator, SequentialOrchestrator, run_mutating};
 use crate::plugin::boot::BootPlugin;
 use crate::scripts::HookStage;
 use crate::scripts::pipeline::{Operation, PipelineTrigger};
-use upac_types::TmpPath;
-use upac_types::states::FilesStateId;
+
+pub use self::error::FilesError;
 
 mod apply;
 mod checkout;
@@ -43,28 +50,45 @@ mod error;
 mod open;
 mod swap;
 
-pub(crate) struct RequestedFileKind(pub FileDiffKind);
-pub(crate) struct RequestedFileScope(pub DiffFileSource);
+pub(crate) struct RequestedFileOperation {
+    pub kind: FileDiffKind,
+    pub scope: DiffFileSource,
+}
 pub(crate) struct RequestedFilePackage {
     pub name: String,
     pub arch: String,
     pub arch_sub: Option<String>,
 }
+
+#[derive(ContextValue)]
 pub(crate) struct NewPrefixDigest(pub String);
-pub(crate) struct Subject(pub String);
-pub(crate) struct CommitMessage(pub Option<String>);
-pub(crate) struct RequestedBootPlugin(pub Option<String>);
+
+pub(crate) struct CommitInfo {
+    pub subject: String,
+    pub message: Option<String>,
+}
+
+#[derive(ContextValue)]
+pub(crate) struct RequestedBootPlugin(pub String);
 pub(crate) struct ResolvedBootEntry {
     pub plugin: BootPlugin,
     pub entry_name: String,
 }
 
-pub(crate) struct PendingFiles(pub VecDeque<String>);
-pub(crate) struct TotalFiles(pub u64);
-pub(crate) struct WorkingTree(pub FileSystem<ObjectID>);
-pub(crate) struct WorkingDatabase(pub MemoryDatabase);
-pub(crate) struct TargetUuid(pub Uuid);
-pub(crate) struct EtcUpperDir(pub PathBuf);
+pub(crate) struct FileProgress {
+    pub pending: VecDeque<String>,
+    pub total: u64,
+}
+
+pub(crate) struct WorkingState {
+    pub tree: FileSystem<ObjectID>,
+    pub database: MemoryDatabase,
+}
+
+pub(crate) struct ApplyTarget {
+    pub uuid: Uuid,
+    pub config_upper_dir: PathBuf,
+}
 
 pub struct FilesPackage<'a> {
     pub name: &'a str,
@@ -87,11 +111,13 @@ impl<'a> TryFrom<&'a CPackageInfo> for FilesPackage<'a> {
 }
 
 pub struct FilesData<'a> {
+    pub scope: DiffFileSource,
+
     pub files: Vec<&'a str>,
     pub file_kind: FileDiffKind,
-    pub scope: DiffFileSource,
     pub file_package: FilesPackage<'a>,
-    pub boot_plugin: Option<&'a str>,
+
+    pub boot_plugin: &'a str,
 
     pub tmp_path: &'a str,
 
@@ -111,13 +137,16 @@ impl<'a> TryFrom<&'a CFilesRequest> for FilesData<'a> {
         unsafe { request.validate()? };
 
         let file_package = unsafe { request.file_package.as_ref() }.ok_or(ErrorKind::InvalidEntry)?;
-        let cancel_token = unsafe { request.base.cancel_token.as_ref() }.ok_or(ErrorKind::InvalidEntry)?;
+
+        let cancel_token = unsafe { &*request.base.cancel_token };
 
         Ok(FilesData {
+            scope: request.scope,
+
             files: Vec::try_from(&request.files)?,
             file_kind: request.file_kind,
-            scope: request.scope,
             file_package: FilesPackage::try_from(file_package)?,
+
             boot_plugin: (&request.boot_plugin).try_into()?,
 
             tmp_path: (&request.tmp_path).try_into()?,
@@ -144,17 +173,21 @@ pub fn run(data: FilesData) -> Result<(), (FilesStateId, FilesError)> {
             .map(|path| (*path).to_owned())
             .collect::<Vec<String>>(),
     );
-    context.put(RequestedFileKind(data.file_kind));
-    context.put(RequestedFileScope(data.scope));
+    context.put(RequestedFileOperation {
+        kind: data.file_kind,
+        scope: data.scope,
+    });
     context.put(RequestedFilePackage {
         name: data.file_package.name.to_owned(),
         arch: data.file_package.arch.to_owned(),
         arch_sub: data.file_package.arch_sub.map(str::to_owned),
     });
     context.put(TmpPath(data.tmp_path.to_owned()));
-    context.put(Subject(data.subject.to_owned()));
-    context.put(CommitMessage(data.message.map(str::to_owned)));
-    context.put(RequestedBootPlugin(data.boot_plugin.map(str::to_owned)));
+    context.put(CommitInfo {
+        subject: data.subject.to_owned(),
+        message: data.message.map(str::to_owned),
+    });
+    context.put(RequestedBootPlugin(data.boot_plugin.to_owned()));
     context.put(Box::new(Message::new(data.hook_message, data.hook_message_context)) as Box<dyn MessageHook>);
 
     let orchestrator = assemble();

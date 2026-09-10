@@ -10,7 +10,7 @@ use colored::Colorize;
 use strum::AsRefStr;
 
 use upac_abi::package::{CPackageMeta, CVersion};
-use upac_types::Version;
+use upac_types::package::Version;
 
 use crate::locale::LOADER;
 

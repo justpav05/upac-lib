@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-// ── Imports ─────────────────────────────────────────────────────────────────
 use std::process::ExitCode;
 use std::ptr::addr_of_mut;
 use std::sync::Arc;
@@ -18,11 +17,11 @@ use i18n_embed_fl::fl;
 
 use upac_abi::hook::CancelToken;
 
-use crate::commands::commit::CommitArgs;
-use crate::commands::file::FileArgs;
-use crate::commands::package::PkgArgs;
-use crate::libcore::Lib;
-use crate::types::CommandContext;
+use self::commands::commit::CommitArgs;
+use self::commands::file::FileArgs;
+use self::commands::package::PkgArgs;
+use self::libcore::Lib;
+use self::types::CommandContext;
 
 mod libcore;
 mod layout {
@@ -48,7 +47,6 @@ pub(crate) fn cancel_token_ptr() -> *mut CancelToken {
     addr_of_mut!(CANCEL_TOKEN)
 }
 
-// ── CLI arguments ─────────────────────────────────────────────────────────────
 #[derive(Parser)]
 #[command(author, version, about)]
 enum Command {
@@ -61,7 +59,6 @@ enum Command {
     Rollback(commands::rollback::Args),
 }
 
-// ── Entry points ───────────────────────────────────────────────────────────────
 fn main() -> ExitCode {
     locale::init();
 
@@ -78,6 +75,7 @@ fn run() -> Result<()> {
     let lib = Arc::new(Lib::load()?);
 
     let lib_cancel = Arc::clone(&lib);
+
     ctrlc::set_handler(move || {
         unsafe { (lib_cancel.cancel)(cancel_token_ptr()) };
     })?;

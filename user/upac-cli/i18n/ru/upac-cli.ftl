@@ -24,6 +24,7 @@ err-invalid-entry = Некорректная запись
 err-pkg-not-found = Пакет не найден
 err-already-exists = Уже существует
 err-not-initialized = Не инициализировано
+err-boot-plugin-required = Не указан boot-плагин (используйте --boot или задайте [boot] plugin в /etc/upac.d/upac.toml)
 
 stage-pre-hooks = Пре-хуки
 stage-post-hooks = Пост-хуки

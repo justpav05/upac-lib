@@ -5,12 +5,14 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::str::FromStr;
 
 use mime::Mime;
 
 use serde::Deserialize;
 
+use crate::layout::decoders::{DECODERS_DIR, MANIFEST_EXTENSION};
 use crate::plugin::decoder::error::DecoderError;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -21,29 +23,37 @@ pub struct DecoderManifest {
     pub mime: String,
 }
 
-pub fn load_decoder_manifests(
-    decoders_dir: &str, manifest_extension: &str,
-) -> Result<HashMap<String, DecoderManifest>, DecoderError> {
-    let mut manifests = HashMap::new();
+pub struct DecoderManifests(pub HashMap<String, DecoderManifest>);
 
-    for entry in fs::read_dir(decoders_dir)? {
-        let path = entry?.path();
+impl DecoderManifests {
+    pub fn new() -> Result<Self, DecoderError> {
+        let mut manifests = HashMap::new();
 
-        if path.extension().and_then(|extension| extension.to_str()) != Some(manifest_extension) {
-            continue;
+        let dir = match fs::read_dir(DECODERS_DIR) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(DecoderManifests(manifests)),
+            Err(error) => return Err(error.into()),
+        };
+
+        for entry in dir {
+            let path = entry?.path();
+
+            if path.extension().and_then(|extension| extension.to_str()) != Some(MANIFEST_EXTENSION) {
+                continue;
+            }
+
+            let raw = fs::read_to_string(&path)?;
+            let manifest: DecoderManifest = toml::from_str(&raw)?;
+
+            Mime::from_str(&manifest.mime)?;
+
+            if manifests.contains_key(&manifest.format) {
+                return Err(DecoderError::DuplicateFormat(manifest.format));
+            }
+
+            manifests.insert(manifest.format.clone(), manifest);
         }
 
-        let raw = fs::read_to_string(&path)?;
-        let manifest: DecoderManifest = toml::from_str(&raw)?;
-
-        Mime::from_str(&manifest.mime)?;
-
-        if manifests.contains_key(&manifest.format) {
-            return Err(DecoderError::DuplicateFormat(manifest.format));
-        }
-
-        manifests.insert(manifest.format.clone(), manifest);
+        Ok(DecoderManifests(manifests))
     }
-
-    Ok(manifests)
 }

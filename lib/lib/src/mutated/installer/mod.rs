@@ -8,13 +8,19 @@ use std::os::raw::c_void;
 
 use composefs::tree::FileSystem;
 
+use upac_abi::HookMessageFn;
 use upac_abi::error::ErrorKind;
-use upac_abi::hook::{CancelToken, HookMessageFn, Message, MessageHook};
+use upac_abi::hook::CancelToken;
 use upac_abi::request::CInstallRequest;
 
-use upac_types::{DeclarativeTrigger, PackageTemp};
+use upac_types::TmpPath;
+use upac_types::decoder::DeclarativeTrigger;
+use upac_types::hook::Message;
+use upac_types::package::PackageTemp;
+use upac_types::states::InstallStateId;
+use upac_types::traits::MessageHook;
 
-pub use self::error::InstallError;
+use upac_macro::ContextValue;
 
 use self::checkout::CheckoutStage;
 use self::commit::CommitTransactionStage;
@@ -30,13 +36,14 @@ use crate::database::MemoryDatabase;
 use crate::deploy::retention::RetentionStage;
 use crate::deploy::{Deploy, DeployMode};
 use crate::errors::CommonError;
-use crate::orchestrator::{Context, Orchestrator, SequentialOrchestrator, run_mutating};
+use crate::orchestrator::context::Context;
+use crate::orchestrator::{Orchestrator, SequentialOrchestrator, run_mutating};
 use crate::plugin::boot::BootPlugin;
 use crate::plugin::decoder::unpack::PackageUnpacker;
 use crate::scripts::HookStage;
 use crate::scripts::pipeline::{Operation, PipelineTrigger};
-use upac_types::TmpPath;
-use upac_types::states::InstallStateId;
+
+pub use self::error::InstallError;
 
 mod checkout;
 mod commit;
@@ -48,29 +55,46 @@ mod open;
 mod preparation;
 mod swap;
 
-pub(crate) struct NewPrefixDigest(pub String);
-pub(crate) struct NewConfigDefaults(pub FileSystem<ObjectID>);
-pub(crate) struct Subject(pub String);
-pub(crate) struct CommitMessage(pub Option<String>);
-pub(crate) struct RequestedBootPlugin(pub Option<String>);
-pub(crate) struct AllowConflictFiles(pub bool);
+pub(crate) struct NewState {
+    pub prefix_digest: String,
+    pub config_defaults: FileSystem<ObjectID>,
+}
+
+pub(crate) struct CommitInfo {
+    pub subject: String,
+    pub message: Option<String>,
+    pub allow_conflict_files: bool,
+}
+
+#[derive(ContextValue)]
+pub(crate) struct RequestedBootPlugin(pub String);
 pub(crate) struct ResolvedBootEntry {
     pub plugin: BootPlugin,
     pub entry_name: String,
 }
 
-pub(crate) struct PendingPackagePaths(pub VecDeque<String>);
-pub(crate) struct UnpackerState(pub PackageUnpacker);
-pub(crate) struct PendingPackages(pub VecDeque<(PackageTemp, DeclarativeTrigger)>);
-pub(crate) struct TotalPackages(pub u64);
-pub(crate) struct ImportedTree(pub FileSystem<ObjectID>);
-pub(crate) struct ImportedConfigDefaults(pub FileSystem<ObjectID>);
-pub(crate) struct ImportedDatabase(pub MemoryDatabase);
+pub(crate) struct UnpackState {
+    pub pending_paths: VecDeque<String>,
+    pub unpacker: PackageUnpacker,
+}
+
+pub(crate) struct InstallProgress {
+    pub pending: VecDeque<(PackageTemp, DeclarativeTrigger)>,
+    pub total: u64,
+}
+
+pub(crate) struct ImportedState {
+    pub tree: FileSystem<ObjectID>,
+    pub config_defaults: FileSystem<ObjectID>,
+    pub database: MemoryDatabase,
+}
 
 pub struct InstallData<'a> {
     pub packages: Vec<&'a str>,
-    pub boot_plugin: Option<&'a str>,
+
     pub allow_conflict_files: bool,
+
+    pub boot_plugin: &'a str,
 
     pub tmp_path: &'a str,
 
@@ -89,12 +113,14 @@ impl<'a> TryFrom<&'a CInstallRequest> for InstallData<'a> {
     fn try_from(request: &'a CInstallRequest) -> Result<Self, ErrorKind> {
         unsafe { request.validate()? };
 
-        let cancel_token = unsafe { request.base.cancel_token.as_ref() }.ok_or(ErrorKind::InvalidEntry)?;
+        let cancel_token = unsafe { &*request.base.cancel_token };
 
         Ok(InstallData {
             packages: Vec::try_from(&request.packages)?,
-            boot_plugin: (&request.boot_plugin).try_into()?,
+
             allow_conflict_files: request.allow_conflict_files,
+
+            boot_plugin: (&request.boot_plugin).try_into()?,
 
             tmp_path: (&request.tmp_path).try_into()?,
 
@@ -119,17 +145,21 @@ pub fn run(data: InstallData) -> Result<(), (InstallStateId, InstallError)> {
 
     let mut context = Context::new();
     context.put(deploy);
-    context.put(UnpackerState(unpacker));
-    context.put(PendingPackagePaths(
-        data.packages.iter().map(|path| (*path).to_owned()).collect(),
-    ));
-    context.put(PendingPackages(VecDeque::new()));
-    context.put(TotalPackages(total_packages));
+    context.put(UnpackState {
+        pending_paths: data.packages.iter().map(|path| (*path).to_owned()).collect(),
+        unpacker,
+    });
+    context.put(InstallProgress {
+        pending: VecDeque::new(),
+        total: total_packages,
+    });
     context.put(TmpPath(data.tmp_path.to_owned()));
-    context.put(Subject(data.subject.to_owned()));
-    context.put(CommitMessage(data.message.map(str::to_owned)));
-    context.put(RequestedBootPlugin(data.boot_plugin.map(str::to_owned)));
-    context.put(AllowConflictFiles(data.allow_conflict_files));
+    context.put(CommitInfo {
+        subject: data.subject.to_owned(),
+        message: data.message.map(str::to_owned),
+        allow_conflict_files: data.allow_conflict_files,
+    });
+    context.put(RequestedBootPlugin(data.boot_plugin.to_owned()));
     context.put(Box::new(Message::new(data.hook_message, data.hook_message_context)) as Box<dyn MessageHook>);
 
     let orchestrator = assemble();

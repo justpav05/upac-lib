@@ -3,21 +3,49 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use self::error::ErrorKind;
+use std::ffi::c_void;
 
-pub mod boot;
-pub mod decoder;
+use self::error::ErrorKind;
+use self::hook::{CProgressEvent, HookAck};
+use self::request::{
+    CBootPluginConfirmSuccsesBootRequest, CBootPluginInstallRequest, CBootPluginSetOneShotRequest, CDecodeRequest,
+};
+use self::response::CDecodeResponse;
+
 pub mod error;
 pub mod hook;
 pub mod memory;
 pub mod package;
 pub mod request;
 pub mod response;
-pub mod setup;
 pub mod types;
 
-pub const ABI_VERSION: u32 = 2;
-pub const BOOT_ABI_VERSION: u32 = 1;
+pub const LIB_ABI_VERSION: u32 = 2;
+pub const BOOT_ABI_VERSION: u32 = 2;
+pub const DECODER_ABI_VERSION: u32 = 2;
+
+pub const CONSTRAINT_LESS: u8 = 0b001;
+pub const CONSTRAINT_EQUAL: u8 = 0b010;
+pub const CONSTRAINT_GREATER: u8 = 0b100;
+pub const CONSTRAINT_ANY: u8 = CONSTRAINT_LESS | CONSTRAINT_EQUAL | CONSTRAINT_GREATER;
+
+pub type BootPluginAbiVersionFn = unsafe extern "C" fn() -> u32;
+
+pub type DecodePluginAbiVersionFn = unsafe extern "C" fn() -> u32;
+
+pub type HookMessageFn = unsafe extern "C" fn(event: *const CProgressEvent, ctx: *mut c_void) -> HookAck;
+
+pub type SetOneShotFn =
+    unsafe extern "C" fn(request: *const CBootPluginSetOneShotRequest, err_out: *mut ErrorKind) -> i32;
+
+pub type ConfirmBootFn =
+    unsafe extern "C" fn(request: *const CBootPluginConfirmSuccsesBootRequest, err_out: *mut ErrorKind) -> i32;
+
+pub type InstallFn = unsafe extern "C" fn(request: *const CBootPluginInstallRequest, err_out: *mut ErrorKind) -> i32;
+
+pub type DecodeFn = unsafe extern "C" fn(request: *const CDecodeRequest, response_out: *mut CDecodeResponse) -> i32;
+
+pub type FreeDecodeResponseFn = unsafe extern "C" fn(response: *mut CDecodeResponse);
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,13 +66,6 @@ impl FileDiffKind {
     }
 }
 
-// A package's own metadata can be Added/Removed/Modified — or unchanged while
-// one of its own files changed underneath it (e.g. a hand-edited is_user file),
-// which FileDiffKind's three variants can't represent. Kept separate rather
-// than adding a fourth variant to FileDiffKind, since every file-level
-// consumer (DiffPrefixFileEntry/DiffConfigFileEntry/DiffUntrackedFileEntry) is
-// already a complete, correct 3-way split — a package-only concept doesn't
-// belong there.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageDiffKind {
@@ -66,11 +87,6 @@ impl PackageDiffKind {
     }
 }
 
-// Distinguishes which tree a DiffPrefixFileEntry/DiffUntrackedFileEntry came
-// from when both /usr and /etc changes are folded into one list (the combined
-// diff command). Standalone diff_prefix/diff_config don't need it to
-// disambiguate (the command itself already implies the axis), but reuse the
-// same entry types and set it to a fixed value.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffFileSource {
@@ -88,10 +104,6 @@ impl DiffFileSource {
     }
 }
 
-// Filesystem chosen for the deployment partition (needs fs-verity support, see
-// doc chapter 3 §(4)) or any extra mount upac-setup formats/mounts. Appending
-// a new variant later (e.g. bcachefs) is a plain additive change here — every
-// consumer already goes through from_u8, so nothing needs pre-reserving.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsKind {

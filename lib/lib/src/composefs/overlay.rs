@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use composefs::repository::{ImportContext, Repository};
 use composefs::tree::{FileSystem, Inode};
 
-use crate::composefs::error::RepoError;
-use crate::composefs::file::{FileHandle, stat_from_metadata};
-use crate::composefs::repository::ObjectID;
+use super::error::RepoError;
+use super::file::{FileHandle, stat_from_metadata};
+use super::repository::ObjectID;
+
 use crate::layout::deployment::OVERLAY_OPAQUE_XATTR;
 
 pub fn apply_overlay_upper(

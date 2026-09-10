@@ -9,11 +9,11 @@ use twox_hash::xxhash3_64::Hasher as XxHasher;
 
 use uuid::Uuid;
 
-use upac_types::PackageMeta;
 use upac_types::codec::{RedbCodable, write_len_prefixed, write_opt_str};
+use upac_types::package::PackageMeta;
 
 use super::error::DatabaseError;
-use super::{MemoryDatabase, PACKAGES_HASH_TABLE, PACKAGES_UUID_TABLE, ReadableSource};
+use super::{MemoryDatabase, PACKAGES_HASH_TABLE, PACKAGES_UUID_TABLE, ReadTransactionExt, ReadableSource};
 
 use crate::layout::database::PACKAGES_META_TYPE_NAME;
 
@@ -52,21 +52,27 @@ pub trait MetaStoreMut: MetaStore {
 impl<T: ReadableSource> MetaStore for T {
     fn find_package_uuid(&self, name: &str, arch: &str, arch_sub: Option<&str>) -> Result<Option<Uuid>, DatabaseError> {
         let transaction = self.source().begin_read()?;
-        let by_name = transaction.open_table(PACKAGES_HASH_TABLE)?;
+        let Some(by_name) = transaction.open_table_or_none(PACKAGES_HASH_TABLE)? else {
+            return Ok(None);
+        };
 
         Self::lookup_uuid(&by_name, name, arch, arch_sub)
     }
 
     fn get_package_meta(&self, uuid: Uuid) -> Result<Option<PackageMeta>, DatabaseError> {
         let transaction = self.source().begin_read()?;
-        let packages = transaction.open_table(PACKAGES_UUID_TABLE)?;
+        let Some(packages) = transaction.open_table_or_none(PACKAGES_UUID_TABLE)? else {
+            return Ok(None);
+        };
 
         Ok(packages.get(uuid)?.map(|guard| guard.value().0))
     }
 
     fn list_packages_metas(&self) -> Result<Vec<PackageMeta>, DatabaseError> {
         let transaction = self.source().begin_read()?;
-        let packages = transaction.open_table(PACKAGES_UUID_TABLE)?;
+        let Some(packages) = transaction.open_table_or_none(PACKAGES_UUID_TABLE)? else {
+            return Ok(Vec::new());
+        };
         let mut out = Vec::new();
 
         for entry in packages.iter()? {

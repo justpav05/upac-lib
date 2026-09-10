@@ -3,9 +3,12 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use upac_abi::decoder::{CONSTRAINT_ANY, CONSTRAINT_EQUAL, CONSTRAINT_GREATER, CONSTRAINT_LESS, DecodeError};
+use upac_abi::{CONSTRAINT_ANY, CONSTRAINT_EQUAL, CONSTRAINT_GREATER, CONSTRAINT_LESS};
+
 use upac_decoder_alpm::pkginfo::PkgInfo;
-use upac_types::decoder::DecodeMeta;
+
+use upac_types::error::DecodeError;
+use upac_types::traits::DecodeMeta;
 
 const CHECKSUM: [u8; 32] = [7; 32];
 

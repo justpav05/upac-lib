@@ -8,27 +8,44 @@
 # own build.rs reads this same file and generates its own private layout::boot module; nothing
 # here is a Cargo dependency between plugins, just a shared data file.
 #
-# efi_sysfs_path is the fixed Linux kernel sysfs mount point for UEFI firmware (never
-# distro/deployment-configurable, unlike the ESP mount point). efivarfs_path is the fixed
-# subdirectory where the kernel exposes individual EFI variables as files (`efivar`'s own crate
-# never surfaces this path, so plugins that need to clear the immutable attribute on an existing
-# variable file — kernel efivarfs sets it after first write, and `efivar` never clears it back off
-# before overwriting — have to reconstruct the exact same path themselves). sd_boot_loader_guid is
-# systemd's vendor GUID for its own boot-loader-interface EFI variables (LoaderInfo,
-# LoaderEntryOneShot, LoaderEntryDefault), per systemd's BOOT_LOADER_INTERFACE.md. boot_next_var/
-# boot_order_var are UEFI global-namespace variables, no vendor GUID needed — boot_order_var is
-# only needed to clear its immutable attribute before `VarManager::set_boot_order` touches it
-# (that method writes the variable internally, so the uki plugin can't intercept the write() call
-# itself the way it can for boot_next_var).
+# efivarfs_path is the fixed subdirectory where the kernel exposes individual EFI variables as
+# files (`efivar`'s own crate never surfaces this path, so plugins that need to clear the
+# immutable attribute on an existing variable file — kernel efivarfs sets it after first write,
+# and `efivar` never clears it back off before overwriting — have to reconstruct the exact same
+# path themselves). sd_boot_loader_guid is systemd's vendor GUID for its own boot-loader-interface
+# EFI variables (LoaderEntryOneShot, LoaderEntryDefault), per systemd's BOOT_LOADER_INTERFACE.md.
+# boot_next_var/boot_order_var are UEFI global-namespace variables, no vendor GUID needed —
+# boot_order_var is only needed to clear its immutable attribute before
+# `VarManager::set_boot_order` touches it (that method writes the variable internally, so the uki
+# plugin can't intercept the write() call itself the way it can for boot_next_var).
 [boot]
-efi_sysfs_path = "/sys/firmware/efi"
 efivarfs_path = "/sys/firmware/efi/efivars"
 sd_boot_loader_guid = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
 boot_next_var = "BootNext"
 boot_order_var = "BootOrder"
-loader_info_var = "LoaderInfo"
 loader_entry_one_shot_var = "LoaderEntryOneShot"
 loader_entry_default_var = "LoaderEntryDefault"
+
+# efi_linux_dir is the fixed UEFI-style (backslash) directory composefs-boot's own
+# `write_t2_simple` always writes UKI images under (`EFI/Linux/`, hardcoded upstream, not
+# configurable) — used to build the file-path device-path segment when genesis registers a
+# UEFI Boot#### entry for a UKI slot, so the entry's path always matches where the image
+# actually lands. efi_linux_real_path is the same directory spelled as a real, mounted-
+# filesystem-relative path (forward slashes, joined via `Path::join`) — used by
+# `Uki::confirm_boot` to find `to.efi`/`from.efi` on the real, mounted ESP; the two can't share
+# a definition (see `lib/setup/lib.toml`'s own `genesis.efi_linux_dir` for the same split,
+# there for the same reason: different crate, different path flavor needed).
+#
+# to_slot/from_slot must stay in sync with `upac-lib`'s own `lib.toml`
+# (`boot.upac_uki_to_slot`/`upac_uki_from_slot`) — two separate crates, can't share a single
+# Rust constant, so each carries its own literal copy. `Uki::confirm_boot` only performs the
+# to/from file swap when the confirmed `entry_name` is `to_slot` specifically (confirming a
+# fallback boot into `from_slot` means `to_slot` may be broken — nothing should be promoted).
+[uki]
+efi_linux_dir = "\\EFI\\Linux\\"
+efi_linux_real_path = "EFI/Linux"
+to_slot = "upac-to"
+from_slot = "upac-from"
 
 # grub has no EFI-variable-based one-shot mechanism — it's file-based (grubenv), driven through
 # grub's own grub-reboot/grub-set-default tools rather than a hand-rolled binary-format writer.
@@ -36,13 +53,28 @@ loader_entry_default_var = "LoaderEntryDefault"
 # ship grub-reboot/grub-set-default writing /boot/grub/grubenv, while Fedora/RHEL keep the
 # "grub-*" names reserved for legacy GRUB Legacy and ship grub2-reboot/grub2-set-default writing
 # /boot/grub2/grubenv instead. *_primary/*_fallback are tried in that order.
+#
+# install_bin_primary/install_bin_fallback: same Debian/Arch-vs-Fedora naming split as the
+# reboot/set-default tools above, for the one-time `grub-install` genesis runs against a freshly
+# partitioned ESP. install_target is grub's own `--target` platform name (this project is
+# UEFI/x86_64-only throughout, matching systemd_boot/refind's own *_x64 binary names below).
+# install_bootloader_id is grub's `--bootloader-id`, used only to name the install's own
+# NVRAM-independent EFI/BOOT/BOOTX64.EFI fallback copy (see backend.rs's `--removable --no-nvram`
+# — genesis relies on the same UEFI firmware fallback path uki/systemd-boot/refind's binaries
+# already occupy, not a Boot#### entry, so a fresh disk boots without any NVRAM setup).
 [grub]
-grubenv_primary = "/boot/grub/grubenv"
-grubenv_fallback = "/boot/grub2/grubenv"
 reboot_bin_primary = "grub-reboot"
 reboot_bin_fallback = "grub2-reboot"
+
 set_default_bin_primary = "grub-set-default"
 set_default_bin_fallback = "grub2-set-default"
+
+install_bin_primary = "grub-install"
+install_bin_fallback = "grub2-install"
+
+install_target = "x86_64-efi"
+
+install_bootloader_id = "upac"
 
 # rEFInd has no separate one-shot/persistent pair of variables like systemd-boot's
 # LoaderEntryOneShot/LoaderEntryDefault — it has exactly one, PreviousBoot, which it writes itself

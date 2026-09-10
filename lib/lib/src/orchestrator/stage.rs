@@ -6,9 +6,10 @@
 use std::any::{Any, TypeId};
 
 use upac_abi::error::ErrorKind;
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+use upac_types::hook::ProgressEventBuilder;
 
-use crate::orchestrator::Context;
+use crate::orchestrator::context::Context;
 
 #[derive(Clone, Copy)]
 pub enum StageResult {

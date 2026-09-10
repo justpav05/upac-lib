@@ -15,12 +15,20 @@ use composefs::tree::FileSystem;
 
 use nix::fcntl::AT_FDCWD;
 
-use crate::composefs::error::RepoError;
+use super::error::RepoError;
 
 pub type ObjectID = Sha256HashValue;
 
 pub fn init(path: &Path) -> Result<(Repository<ObjectID>, bool), RepoError> {
     Ok(Repository::init_path(AT_FDCWD, path, RepositoryConfig::default())?)
+}
+
+pub fn init_insecure(path: &Path) -> Result<(Repository<ObjectID>, bool), RepoError> {
+    Ok(Repository::init_path(
+        AT_FDCWD,
+        path,
+        RepositoryConfig::default().set_insecure(),
+    )?)
 }
 
 pub(crate) fn open(path: &Path) -> Result<Repository<ObjectID>, RepoError> {

@@ -4,12 +4,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{read_dir, read_to_string};
 use std::io::ErrorKind;
 
 use serde::Deserialize;
 
-use crate::plugin::boot::error::BootPluginError;
+use super::error::BootPluginError;
+
+use crate::layout::boot_plugins::{BOOT_PLUGINS_DIR, MANIFEST_EXTENSION};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootPluginManifest {
@@ -17,33 +19,35 @@ pub struct BootPluginManifest {
     pub library: String,
 }
 
-pub fn load_boot_plugin_manifests(
-    boot_plugins_dir: &str, manifest_extension: &str,
-) -> Result<HashMap<String, BootPluginManifest>, BootPluginError> {
-    let mut manifests = HashMap::new();
+pub struct BootPluginManifests(pub HashMap<String, BootPluginManifest>);
 
-    let dir = match fs::read_dir(boot_plugins_dir) {
-        Ok(dir) => dir,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(manifests),
-        Err(error) => return Err(error.into()),
-    };
+impl BootPluginManifests {
+    pub fn new() -> Result<Self, BootPluginError> {
+        let mut manifests = HashMap::new();
 
-    for entry in dir {
-        let path = entry?.path();
+        let dir = match read_dir(BOOT_PLUGINS_DIR) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(BootPluginManifests(manifests)),
+            Err(error) => return Err(error.into()),
+        };
 
-        if path.extension().and_then(|extension| extension.to_str()) != Some(manifest_extension) {
-            continue;
+        for entry in dir {
+            let path = entry?.path();
+
+            if path.extension().and_then(|extension| extension.to_str()) != Some(MANIFEST_EXTENSION) {
+                continue;
+            }
+
+            let raw = read_to_string(&path)?;
+            let manifest: BootPluginManifest = toml::from_str(&raw)?;
+
+            if manifests.contains_key(&manifest.name) {
+                return Err(BootPluginError::DuplicateName(manifest.name));
+            }
+
+            manifests.insert(manifest.name.clone(), manifest);
         }
 
-        let raw = fs::read_to_string(&path)?;
-        let manifest: BootPluginManifest = toml::from_str(&raw)?;
-
-        if manifests.contains_key(&manifest.name) {
-            return Err(BootPluginError::DuplicateName(manifest.name));
-        }
-
-        manifests.insert(manifest.name.clone(), manifest);
+        Ok(BootPluginManifests(manifests))
     }
-
-    Ok(manifests)
 }

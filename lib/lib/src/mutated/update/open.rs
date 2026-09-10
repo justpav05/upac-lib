@@ -7,18 +7,19 @@ use composefs::generic_tree::Stat;
 use composefs::repository::ImportContext;
 use composefs::tree::FileSystem;
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{ImportedState, UpdateError};
 
 use crate::composefs::file::FileHandle;
 use crate::database::{InMemory, MemoryDatabase};
 use crate::deploy::Deploy;
 use crate::deploy::digest::current_prefix_digest;
 use crate::layout::database::DATABASE_PATH;
-use crate::mutated::update::{
-    ImportedConfigDefaults, ImportedDatabase, ImportedRemovedConfigPaths, ImportedTree, UpdateError,
-};
+use crate::orchestrator::context::{Context, ctx_get};
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get};
 
 pub struct OpenTransactionStage;
 
@@ -35,10 +36,12 @@ impl Stage<UpdateError> for OpenTransactionStage {
         let database_bytes = FileHandle::new(DATABASE_PATH).read_file(&repository, &tree)?;
         let database = MemoryDatabase::open_in_memory(database_bytes)?;
 
-        context.put(ImportedTree(tree));
-        context.put(ImportedConfigDefaults(FileSystem::new(Stat::uninitialized())));
-        context.put(ImportedDatabase(database));
-        context.put(ImportedRemovedConfigPaths(Vec::new()));
+        context.put(ImportedState {
+            tree,
+            config_defaults: FileSystem::new(Stat::uninitialized()),
+            database,
+            removed_config_paths: Vec::new(),
+        });
         context.put(ImportContext::default());
 
         Ok((progress, StageResult::Advance, Box::new(NoRollback)))

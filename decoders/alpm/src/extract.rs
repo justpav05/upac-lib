@@ -11,11 +11,12 @@ use tar::Archive;
 use xz2::read::XzDecoder;
 use zstd::stream::read::Decoder as ZstdDecoder;
 
-use upac_abi::decoder::DecodeError;
 use upac_abi::hook::CancelToken;
-use upac_types::decoder::read_to_string;
 
-use crate::alpm::{BUILDINFO_ENTRY, CHANGELOG_ENTRY, INSTALL_ENTRY, MTREE_ENTRY, PKGINFO_ENTRY};
+use upac_types::decoder::read_to_string;
+use upac_types::error::DecodeError;
+
+use super::alpm::{BUILDINFO_ENTRY, CHANGELOG_ENTRY, INSTALL_ENTRY, MTREE_ENTRY, PKGINFO_ENTRY};
 
 const JUNK_ENTRIES: [&str; 3] = [BUILDINFO_ENTRY, MTREE_ENTRY, CHANGELOG_ENTRY];
 

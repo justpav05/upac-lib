@@ -3,24 +3,25 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later WITH LGPL-3.0-linking-exception
 
-use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
-use std::io::Error as IoError;
+use std::any::TypeId;
 use std::sync::Arc;
 
 use tokio::runtime::Runtime;
 use tokio::task::JoinSet;
 
-use upac_abi::hook::{CancelToken, HookAck, MessageHook, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+use upac_types::hook::ProgressEventBuilder;
 
 use crate::errors::CommonError;
 use crate::lock::Lock;
+use crate::orchestrator::context::Context;
 use crate::orchestrator::cursor::Cursor;
 use crate::orchestrator::error::OrchestratorError;
-use crate::orchestrator::stage::{ConcurrentStage, RollbackGuard, Stage, StageResult};
+use crate::orchestrator::stage::{ConcurrentStage, Stage, StageResult};
 
 mod cursor;
 
+pub mod context;
 pub mod error;
 pub mod stage;
 
@@ -69,90 +70,7 @@ macro_rules! run_unmutated {
 }
 pub(crate) use run_unmutated;
 
-macro_rules! ctx_get {
-    ($context:expr, $ty:ty) => {
-        $context
-            .get::<$ty>()
-            .ok_or($crate::errors::CommonError::MissingResult)?
-    };
-}
-pub(crate) use ctx_get;
-
-macro_rules! ctx_take {
-    ($context:expr, $ty:ty) => {
-        $context
-            .take::<$ty>()
-            .ok_or($crate::errors::CommonError::MissingResult)?
-    };
-}
-pub(crate) use ctx_take;
-
 pub type StagePipelineError = TypeId;
-
-pub struct Context {
-    slots: HashMap<TypeId, Box<dyn Any>>,
-    rollback: Vec<Box<dyn RollbackGuard>>,
-}
-
-impl Context {
-    pub fn new() -> Self {
-        Self {
-            slots: HashMap::new(),
-            rollback: Vec::new(),
-        }
-    }
-
-    pub fn put<T: Any>(&mut self, value: T) {
-        self.slots.insert(TypeId::of::<T>(), Box::new(value));
-    }
-
-    pub fn get<T: Any>(&self) -> Option<&T> {
-        self.slots
-            .get(&TypeId::of::<T>())
-            .and_then(|slot| slot.downcast_ref::<T>())
-    }
-
-    pub fn take<T: Any>(&mut self) -> Option<T> {
-        self.slots
-            .remove(&TypeId::of::<T>())
-            .and_then(|slot| slot.downcast::<T>().ok())
-            .map(|boxed| *boxed)
-    }
-
-    pub fn runtime(&mut self) -> Result<Arc<Runtime>, IoError> {
-        if let Some(runtime) = self.get::<Arc<Runtime>>() {
-            return Ok(Arc::clone(runtime));
-        }
-
-        let runtime = Arc::new(Runtime::new()?);
-        self.put(Arc::clone(&runtime));
-
-        Ok(runtime)
-    }
-
-    pub fn send_progress(&self, progress: &ProgressEventBuilder) {
-        if let Some(hook) = self.get::<Box<dyn MessageHook>>() {
-            let event = progress.build();
-            while hook.send(&event) == HookAck::Retry {}
-        }
-    }
-
-    fn type_ids(&self) -> HashSet<TypeId> {
-        self.slots.keys().copied().collect()
-    }
-
-    fn unwind(&mut self) {
-        while let Some(mut guard) = self.rollback.pop() {
-            let _ = guard.rollback();
-        }
-    }
-}
-
-impl Default for Context {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 pub trait Orchestrator<E>: Sized {
     fn run_exclusive(self, context: &mut Context, cancel: &CancelToken) -> Result<(), OrchestratorError<E>>;

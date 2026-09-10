@@ -5,22 +5,32 @@
 
 use std::os::raw::c_void;
 
+use upac_abi::HookMessageFn;
 use upac_abi::error::ErrorKind;
-use upac_abi::hook::{CancelToken, HookMessageFn, Message, MessageHook};
+use upac_abi::hook::CancelToken;
 use upac_abi::request::CPinRequest;
+use upac_types::hook::Message;
+use upac_types::traits::MessageHook;
 
-pub use self::error::PinError;
+use upac_types::states::PinStateId;
+
+use upac_macro::ContextValue;
 
 use self::stage::SetPinnedStage;
 
 use crate::deploy::{Deploy, DeployMode};
-use crate::orchestrator::{Context, Orchestrator, SequentialOrchestrator, run_mutating};
-use upac_types::states::PinStateId;
+use crate::orchestrator::context::Context;
+use crate::orchestrator::{Orchestrator, SequentialOrchestrator, run_mutating};
+
+pub use self::error::PinError;
 
 mod error;
 mod stage;
 
+#[derive(ContextValue)]
 pub(crate) struct RequestedPrefixDigest(pub String);
+
+#[derive(ContextValue)]
 pub(crate) struct RequestedPinned(pub bool);
 
 pub struct PinData<'a> {
@@ -39,7 +49,7 @@ impl<'a> TryFrom<&'a CPinRequest> for PinData<'a> {
     fn try_from(request: &'a CPinRequest) -> Result<Self, ErrorKind> {
         unsafe { request.validate()? };
 
-        let cancel_token = unsafe { request.base.cancel_token.as_ref() }.ok_or(ErrorKind::InvalidEntry)?;
+        let cancel_token = unsafe { &*request.base.cancel_token };
 
         Ok(PinData {
             prefix_digest: (&request.prefix_digest).try_into()?,

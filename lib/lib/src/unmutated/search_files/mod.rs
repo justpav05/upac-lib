@@ -5,18 +5,24 @@
 
 use std::os::raw::c_void;
 
+use upac_abi::HookMessageFn;
 use upac_abi::error::ErrorKind;
-use upac_abi::hook::{CancelToken, HookMessageFn, Message, MessageHook};
+use upac_abi::hook::CancelToken;
 use upac_abi::request::CSearchFilesRequest;
 
-pub use self::error::SearchFilesError;
+use upac_types::entry::SearchFileEntry;
+use upac_types::hook::Message;
+use upac_types::response::SearchFilesResponse;
+use upac_types::states::SearchFilesStateId;
+use upac_types::traits::MessageHook;
 
 use self::searching::SearchingStage;
 
-use crate::orchestrator::{Context, Orchestrator, SequentialOrchestrator, run_unmutated};
+use crate::orchestrator::context::Context;
+use crate::orchestrator::{Orchestrator, SequentialOrchestrator, run_unmutated};
 use crate::search::Search;
-use upac_types::SearchFileEntry;
-use upac_types::states::SearchFilesStateId;
+
+pub use self::error::SearchFilesError;
 
 mod error;
 mod searching;
@@ -37,7 +43,7 @@ impl<'a> TryFrom<&'a CSearchFilesRequest> for SearchFilesData<'a> {
     fn try_from(request: &'a CSearchFilesRequest) -> Result<Self, ErrorKind> {
         unsafe { request.validate()? };
 
-        let cancel_token = unsafe { request.base.cancel_token.as_ref() }.ok_or(ErrorKind::InvalidEntry)?;
+        let cancel_token = unsafe { &*request.base.cancel_token };
 
         Ok(SearchFilesData {
             search: (&request.search).try_into()?,
@@ -51,7 +57,7 @@ impl<'a> TryFrom<&'a CSearchFilesRequest> for SearchFilesData<'a> {
     }
 }
 
-pub fn run(data: SearchFilesData) -> Result<(Vec<SearchFileEntry>,), (SearchFilesStateId, SearchFilesError)> {
+pub fn run(data: SearchFilesData) -> Result<SearchFilesResponse, (SearchFilesStateId, SearchFilesError)> {
     let search = Search::new(data.search, data.is_regex)
         .map_err(|error| (SearchFilesStateId::Setup, SearchFilesError::from(error)))?;
 
@@ -61,12 +67,14 @@ pub fn run(data: SearchFilesData) -> Result<(Vec<SearchFileEntry>,), (SearchFile
 
     let orchestrator = SequentialOrchestrator::new(vec![Box::new(SearchingStage)]);
 
-    run_unmutated!(
+    let (files,) = run_unmutated!(
         orchestrator,
         context,
         data.cancel_token,
         SearchFilesStateId,
         SearchFilesError,
         Vec<SearchFileEntry>
-    )
+    )?;
+
+    Ok(SearchFilesResponse { files })
 }

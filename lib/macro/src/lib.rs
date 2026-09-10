@@ -12,6 +12,7 @@
 //!   CTryToRust     - C-ABI struct -> Rust domain type, fallible (inbound)
 //!   CToRust        - C-ABI struct -> Rust domain type, infallible (inbound)
 //!   CValidate      - unsafe validate() checking struct_size + every field
+//!   ContextValue   - Deref/DerefMut/From<T> for a single-field tuple struct
 //!   FromStageIndex - orchestrator stage index -> enum variant (by position)
 //!   StageKey       - enum variant -> "stage_snake_case" gettext key (by name)
 //!   RedbCodec      - encode_into()/decode_from() for the redb key-value store
@@ -29,6 +30,7 @@ mod c_to_rust;
 mod c_try_to_rust;
 mod c_validate;
 mod common;
+mod context_value;
 mod from_stage_index;
 mod json_codec;
 mod redb_codec;
@@ -63,6 +65,11 @@ pub fn derive_c_to_rust(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(CValidate, attributes(optional, non_empty))]
 pub fn derive_cvalidate(input: TokenStream) -> TokenStream {
     c_validate::expand(input)
+}
+
+#[proc_macro_derive(ContextValue)]
+pub fn derive_context_value(input: TokenStream) -> TokenStream {
+    context_value::expand(input)
 }
 
 #[proc_macro_derive(FromStageIndex)]

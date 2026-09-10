@@ -11,6 +11,10 @@ use upac_abi::error::ErrorKind;
 use crate::errors::{CommonError, common_error_from, lock_error_from};
 use crate::lock::LockError;
 
+#[cfg(test)]
+#[path = "../../../tests/inline/mutated_mime_error.rs"]
+mod tests;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MimeError {
     Common(CommonError),

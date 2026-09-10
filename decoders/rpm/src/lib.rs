@@ -6,7 +6,7 @@
 use std::fs::File;
 use std::str::from_utf8;
 
-use upac_abi::ABI_VERSION;
+use upac_abi::DECODER_ABI_VERSION;
 use upac_abi::decoder::{CDecodeRequest, CDecodeResponse, CDependency, DecodeError};
 use upac_abi::memory::{free_cslice, free_cvec_owning};
 use upac_abi::package::CPackageMeta;
@@ -27,7 +27,7 @@ include!(concat!(env!("OUT_DIR"), "/layout.rs"));
 /// Touches no pointers.
 #[cfg_attr(feature = "cdylib", unsafe(no_mangle))]
 pub unsafe extern "C" fn abi_version() -> u32 {
-    ABI_VERSION
+    DECODER_ABI_VERSION
 }
 
 /// # Safety

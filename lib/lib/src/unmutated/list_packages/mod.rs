@@ -5,17 +5,23 @@
 
 use std::os::raw::c_void;
 
+use upac_abi::HookMessageFn;
 use upac_abi::error::ErrorKind;
-use upac_abi::hook::{CancelToken, HookMessageFn, Message, MessageHook};
+use upac_abi::hook::CancelToken;
 use upac_abi::request::CListPackagesRequest;
 
-pub use self::error::ListPackagesError;
+use upac_types::hook::Message;
+use upac_types::package::PackageMeta;
+use upac_types::response::ListPackagesResponse;
+use upac_types::states::ListPackagesStateId;
+use upac_types::traits::MessageHook;
 
 use self::fetching::FetchingStage;
 
-use crate::orchestrator::{Context, Orchestrator, SequentialOrchestrator, run_unmutated};
-use upac_types::PackageMeta;
-use upac_types::states::ListPackagesStateId;
+use crate::orchestrator::context::Context;
+use crate::orchestrator::{Orchestrator, SequentialOrchestrator, run_unmutated};
+
+pub use self::error::ListPackagesError;
 
 mod error;
 mod fetching;
@@ -33,7 +39,7 @@ impl<'a> TryFrom<&'a CListPackagesRequest> for ListPackagesData<'a> {
     fn try_from(request: &'a CListPackagesRequest) -> Result<Self, ErrorKind> {
         unsafe { request.validate()? };
 
-        let cancel_token = unsafe { request.base.cancel_token.as_ref() }.ok_or(ErrorKind::InvalidEntry)?;
+        let cancel_token = unsafe { &*request.base.cancel_token };
 
         Ok(ListPackagesData {
             hook_message: request.base.on_hook,
@@ -44,18 +50,20 @@ impl<'a> TryFrom<&'a CListPackagesRequest> for ListPackagesData<'a> {
     }
 }
 
-pub fn run(data: ListPackagesData) -> Result<(Vec<PackageMeta>,), (ListPackagesStateId, ListPackagesError)> {
+pub fn run(data: ListPackagesData) -> Result<ListPackagesResponse, (ListPackagesStateId, ListPackagesError)> {
     let mut context = Context::new();
     context.put(Box::new(Message::new(data.hook_message, data.hook_message_context)) as Box<dyn MessageHook>);
 
     let orchestrator = SequentialOrchestrator::new(vec![Box::new(FetchingStage)]);
 
-    run_unmutated!(
+    let (metas,) = run_unmutated!(
         orchestrator,
         context,
         data.cancel_token,
         ListPackagesStateId,
         ListPackagesError,
         Vec<PackageMeta>
-    )
+    )?;
+
+    Ok(ListPackagesResponse { metas })
 }

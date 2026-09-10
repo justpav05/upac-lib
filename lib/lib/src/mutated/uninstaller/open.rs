@@ -5,19 +5,19 @@
 
 use std::collections::VecDeque;
 
-use upac_abi::hook::{CancelToken, ProgressEventBuilder};
+use upac_abi::hook::CancelToken;
+
+use upac_types::hook::ProgressEventBuilder;
+
+use super::{PackageUuidsToRemove, RemoveProgress, UninstallError, WorkingState};
 
 use crate::composefs::file::FileHandle;
 use crate::database::{InMemory, MemoryDatabase};
 use crate::deploy::Deploy;
 use crate::deploy::digest::current_prefix_digest;
 use crate::layout::database::DATABASE_PATH;
-use crate::mutated::uninstaller::{
-    PackageUuidsToRemove, PendingUuids, TotalPackages, UninstallError, WorkingDatabase, WorkingRemovedConfigPaths,
-    WorkingTree,
-};
+use crate::orchestrator::context::{Context, ctx_get, ctx_take};
 use crate::orchestrator::stage::{NoRollback, RollbackGuard, Stage, StageResult};
-use crate::orchestrator::{Context, ctx_get, ctx_take};
 
 pub struct OpenTransactionStage;
 
@@ -36,14 +36,15 @@ impl Stage<UninstallError> for OpenTransactionStage {
         let database_bytes = FileHandle::new(DATABASE_PATH).read_file(&repository, &tree)?;
         let database = MemoryDatabase::open_in_memory(database_bytes)?;
 
-        let total = uuids.0.len() as u64;
+        let total = uuids.len() as u64;
         let pending: VecDeque<_> = uuids.0.into_iter().collect();
 
-        context.put(WorkingTree(tree));
-        context.put(WorkingDatabase(database));
-        context.put(WorkingRemovedConfigPaths(Vec::new()));
-        context.put(PendingUuids(pending));
-        context.put(TotalPackages(total));
+        context.put(WorkingState {
+            tree,
+            database,
+            removed_config_paths: Vec::new(),
+        });
+        context.put(RemoveProgress { total, pending });
 
         Ok((progress, StageResult::Advance, Box::new(NoRollback)))
     }
